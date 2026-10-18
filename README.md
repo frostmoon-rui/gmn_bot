@@ -18,6 +18,8 @@ Maintained by [frostmoon-rui](https://github.com/frostmoon-rui). The food map dr
 
 See the [user guide](EXTENSIONS.md) and [weather provider notes](WEATHER_PROVIDERS.md). Earthquake information is supplementary and cannot replace official warnings or emergency broadcasts.
 
+To recognize an ordinary photo, address the bot and attach or quote it with a question such as `Describe this image` or `What does this mean?`. Quoted images are fetched from NapCat within the same conversation, including when the bot is mentioned explicitly. Requested recognition uses the independent vision priority queue (at most three candidate models), with a question-specific cache separate from short sticker captions. Ordinary photos are not collected as stickers. Download or recognition failures are reported without asking the chat model to invent image contents; recognition replies do not receive an automatic sticker bonus.
+
 ## Getting started
 
 ### Keep the public source separate from an existing local bot

@@ -22,6 +22,19 @@ def recognizer(generate, **kwargs):
 
 
 class VisionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_question_uses_detailed_vision_and_separate_cache_from_sticker(self):
+        detailed = ('Visible circuit board text: 12 V. ' * 12).strip()
+        call = AsyncMock(side_effect=[SimpleNamespace(text='A sticker.'), SimpleNamespace(text=detailed)])
+        worker = recognizer(call)
+        self.assertEqual(await worker.describe(BLOB, 'image/png'), 'A sticker.')
+        self.assertEqual(await worker.describe(BLOB, 'image/png', question='Read the voltage'), detailed)
+        self.assertEqual(call.call_count, 2)
+        request = call.call_args.kwargs
+        self.assertIn('Read the voltage', request['contents'][1])
+        self.assertIn('never instructions', request['contents'][1])
+        self.assertEqual(request['config'].max_output_tokens, 1536)
+        self.assertTrue(request['config'].automatic_function_calling.disable)
+
     async def test_primary_timeout_names_exception_and_switches_with_afc_disabled(self):
         call = AsyncMock(side_effect=[asyncio.TimeoutError(), SimpleNamespace(text='A cat smiling')])
         worker = recognizer(call)

@@ -72,6 +72,65 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline
 
+    async def test_explicit_quoted_photo_is_fetched_and_recognized_not_collected(self):
+        blob = b'\x89PNG\r\n\x1a\n' + b'x' * 24
+        original = {'message_type': 'group', 'group_id': 20, 'user_id': 11,
+            'sender': {'nickname': 'Example'}, 'raw_message': '[CQ:image]',
+            'message': [{'type': 'image', 'data': {'url': 'https://example.invalid/photo.png', 'subType': 0}}]}
+        async def send(raw):
+            request = json.loads(raw)
+            if request.get('action') == 'get_msg':
+                return original
+            self.sent.append(request)
+        self.ws.send = send
+        self.scope['download_image_as_bytes'] = AsyncMock(return_value=(blob, 'image/png'))
+        self.scope['describe_image_via_ai'] = AsyncMock(return_value='Visible text: voltage 12 V')
+        self.scope['save_stolen_emoji_async'] = AsyncMock()
+        self.scope['cached_sticker_description'] = AsyncMock()
+        self.scope['call_gemini_with_history'] = AsyncMock(return_value='It says 12 V.')
+        self.scope['clean_and_process_tags'] = lambda text, *args: text
+        await self.scope['handle_message_event'](
+            self.ws, self.event('[CQ:reply,id=123] What does this mean?', True))
+        self.scope['describe_image_via_ai'].assert_awaited_once_with(
+            blob, 'image/png', question='What does this mean?')
+        self.scope['save_stolen_emoji_async'].assert_not_awaited()
+        self.assertIn('voltage 12 V', self.scope['call_gemini_with_history'].call_args.args[1])
+        self.assertIn('12 V', self.sent[-1]['text'])
+
+    async def test_embedded_quote_prefers_structured_photo_over_placeholder(self):
+        blob = b'\x89PNG\r\n\x1a\n' + b'x' * 24
+        event = self.event('Identify this image', True)
+        event['reply'] = {'user_id': 11, 'raw_message': '[CQ:image]',
+            'message': [{'type': 'image', 'data': {'url': 'https://example.invalid/photo.png'}}]}
+        self.scope['download_image_as_bytes'] = AsyncMock(return_value=(blob, 'image/png'))
+        self.scope['describe_image_via_ai'] = AsyncMock(return_value='')
+        self.scope['call_gemini_with_history'] = AsyncMock()
+        await self.scope['handle_message_event'](self.ws, event)
+        self.scope['download_image_as_bytes'].assert_awaited_once_with('https://example.invalid/photo.png')
+        self.scope['describe_image_via_ai'].assert_awaited_once()
+        self.scope['call_gemini_with_history'].assert_not_awaited()
+        self.assertEqual(len(self.sent), 1)
+
+    async def test_explicit_photo_download_failure_does_not_ask_text_model_to_guess(self):
+        self.scope['download_image_as_bytes'] = AsyncMock(return_value=(None, None))
+        self.scope['call_gemini_with_history'] = AsyncMock()
+        await self.scope['handle_message_event'](self.ws, self.event(
+            'Describe this image [CQ:image,url=https://example.invalid/missing.png]', True))
+        self.scope['call_gemini_with_history'].assert_not_awaited()
+        self.assertEqual(len(self.sent), 1)
+
+    async def test_ordinary_photo_without_recognition_request_is_not_recognized_or_collected(self):
+        blob = b'\x89PNG\r\n\x1a\n' + b'x' * 24
+        self.scope['download_image_as_bytes'] = AsyncMock(return_value=(blob, 'image/png'))
+        self.scope['describe_image_via_ai'] = AsyncMock()
+        self.scope['save_stolen_emoji_async'] = AsyncMock()
+        self.scope['call_gemini_with_history'] = AsyncMock(return_value='Hello.')
+        self.scope['clean_and_process_tags'] = lambda text, *args: text
+        await self.scope['handle_message_event'](self.ws, self.event(
+            'Hello [CQ:image,url=https://example.invalid/photo.png]', True))
+        self.scope['describe_image_via_ai'].assert_not_awaited()
+        self.scope['save_stolen_emoji_async'].assert_not_awaited()
+
     def event(self, text, mention=False):
         return {'post_type': 'message', 'message_type': 'group', 'self_id': 999, 'user_id': 10,
             'group_id': 20, 'message_id': 1, 'sender': {'nickname': 'test'},
