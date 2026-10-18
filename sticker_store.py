@@ -6,6 +6,7 @@ import io
 import json
 import os
 import random
+import shutil
 import re
 import sqlite3
 import tempfile
@@ -135,6 +136,50 @@ class StickerStore:
                 self.connection.close()
                 self.connection = None
 
+    def cleanup_large_non_gif(self, apply=False, limit=1024 * 1024):
+        """Quarantine oversized non-GIF originals after a consistent SQLite backup."""
+        with self.lock:
+            db = self._db()
+            candidates = []
+            for row in db.execute('SELECT id,path FROM stickers').fetchall():
+                path = self._path(row['path'])
+                if not path.is_file() or path.stat().st_size <= limit:
+                    continue
+                with path.open('rb') as stream:
+                    if stream.read(6) in {b'GIF87a', b'GIF89a'}:
+                        continue
+                candidates.append((row['id'], path))
+            report = {'candidates': len(candidates), 'bytes': sum(p.stat().st_size for _, p in candidates),
+                      'removed': 0, 'backup': None}
+            if not apply or not candidates:
+                return report
+            backup = self.root/'backup'/('sticker_cleanup_'+str(time.time_ns()))
+            backup.mkdir(parents=True, exist_ok=False)
+            recovery = sqlite3.connect(backup/'index.sqlite3')
+            try:
+                db.backup(recovery)
+            finally:
+                recovery.close()
+            # Preserve all originals before making any database changes.
+            for _, path in candidates:
+                target = backup/path.relative_to(self.directory)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                for identifier, _ in candidates:
+                    db.execute('DELETE FROM aliases WHERE sticker_id=?', (identifier,))
+                    db.execute('DELETE FROM stickers WHERE id=?', (identifier,))
+                db.execute('COMMIT')
+            except BaseException:
+                db.execute('ROLLBACK')
+                raise
+            for _, path in candidates:
+                path.unlink()
+            report.update(removed=len(candidates), backup=str(backup.relative_to(self.root)))
+            print('[Sticker cleanup]:', report)
+            return report
+
     def _path(self, relative):
         path = (self.root/relative).resolve()
         if not path.is_relative_to(self.directory):
@@ -178,6 +223,8 @@ class StickerStore:
         return None
 
     def add(self, blob, caption=''):
+        if len(blob) > 1024 * 1024 and blob[:6] not in {b'GIF87a', b'GIF89a'}:
+            raise ValueError('Non-GIF images above 1 MiB are not collectible stickers')
         digest = hashlib.sha256(blob).hexdigest()
         with self.lock:
             db = self._db()

@@ -31,6 +31,30 @@ class StickerTests(unittest.TestCase):
         self.store.close()
         self.temp.cleanup()
 
+    def test_large_non_gif_rejected_and_cleanup_recoverable(self):
+        blob = encoded(Image.new('RGB', (16, 16), 'red'))
+        row = self.store.add(blob)
+        large = blob + b'\0' * (1024 * 1024)
+        with self.assertRaises(ValueError):
+            self.store.add(large)
+        path = self.root/row['path']
+        path.write_bytes(large)  # Simulate a pre-fix oversized stored original.
+        self.assertEqual(self.store.cleanup_large_non_gif()['candidates'], 1)
+        self.assertEqual(len(self.store), 1)
+        report = self.store.cleanup_large_non_gif(apply=True)
+        self.assertEqual(report['removed'], 1)
+        self.assertEqual(len(self.store), 0)
+        self.assertFalse(path.exists())
+        saved = self.root/report['backup']/path.relative_to(self.store.directory)
+        self.assertEqual(saved.read_bytes(), large)
+        self.assertTrue((self.root/report['backup']/'index.sqlite3').exists())
+
+    def test_large_gif_preserved(self):
+        blob = encoded(Image.new('RGB', (16, 16), 'red'), 'GIF') + b'\0' * (1024 * 1024)
+        self.store.add(blob)
+        self.assertEqual(self.store.cleanup_large_non_gif(apply=True)['removed'], 0)
+        self.assertEqual(len(self.store), 1)
+
     def test_unlimited_migration_and_backup(self):
         entries = []
         for number in range(155):

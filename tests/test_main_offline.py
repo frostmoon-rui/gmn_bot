@@ -207,6 +207,10 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
     def test_ordinary_small_png_is_not_a_sticker_but_gif_is(self):
         png = b'\x89PNG\r\n\x1a\n' + b'\x00' * 8 + (100).to_bytes(4, 'big') * 2
         self.assertFalse(self.scope['is_sticker_image']({'file': 'photo.png'}, 'image/png', png))
+        self.assertFalse(self.scope['is_sticker_image']({'url': 'https://example.com/sticker/photo.gif'}, 'image/gif', png))
+        self.assertFalse(self.scope['is_sticker_image']({'subType': 2}, 'image/png', png))
+        self.assertTrue(self.scope['is_sticker_image']({'subType': 1}, 'image/png', png))
+        self.assertFalse(self.scope['is_sticker_image']({'subType': 1}, 'image/png', png + b'\0' * (1024 * 1024)))
         self.assertTrue(self.scope['is_sticker_image']({}, 'image/gif', b'GIF89a' + b'\x00'*20))
         self.assertFalse(self.scope['image_mime'](b'<html>error</html>'))
 

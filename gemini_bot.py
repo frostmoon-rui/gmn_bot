@@ -1142,24 +1142,14 @@ def extract_image_segments(raw_msg: str) -> list[dict]:
 
 def is_sticker_image(segment: dict, mime_type: str = "", image_bytes: bytes = None) -> bool:
     """Determine whether an image is a collectible sticker; ordinary photos are excluded."""
+    is_gif = bool(image_bytes and image_bytes[:6] in {b"GIF87a", b"GIF89a"})
+    if is_gif:
+        return True
+    if image_bytes and len(image_bytes) > 1024 * 1024:
+        return False
     subtype = str(segment.get("subType", segment.get("sub_type", ""))).lower()
-    if subtype in {"1", "2", "sticker", "emoji"}:
-        return True
-
-    if mime_type.lower().split(";", 1)[0].strip() == "image/gif":
-        return True
-    if image_bytes and image_bytes[:6] in {b"GIF87a", b"GIF89a"}:
-        return True
-
-    searchable = " ".join([
-        str(segment.get("file", "")),
-        str(segment.get("url", "")),
-        str(segment.get("name", ""))
-    ]).lower()
-    # Preserve animated GIFs directly; other formats require an explicit sticker marker.
-    if ".gif" in searchable:
-        return True
-    return any(keyword in searchable for keyword in ("emoji", "sticker", "\u8868\u60c5", "bqb"))  # OneBot legacy sticker metadata
+    # Names, CDN paths, MIME declarations and subtype 2 are not sticker evidence.
+    return subtype in {"1", "sticker", "emoji"}
 
 
 
@@ -1763,15 +1753,8 @@ async def background_periodic_monitor(ws_getter):
                 await asyncio.to_thread(init_chat_models)
                 await asyncio.to_thread(init_gpt_models)
                 print('[Model refresh]: Updating lists only; availability follows successful ordinary conversation requests')
-            # Query each location once, preserving sources and collection timestamps.
-            locations = dict.fromkeys(r.get('location') for r in regions_data.values() if r.get('location'))
-            for location in locations:
-                weather = await fetch_weather_info(location)
-                if weather:
-                    for record in regions_data.values():
-                        if record.get('location') == location:
-                            record['latest_weather'] = weather
-            await save_json_data_async(REGIONS_FILE, regions_data)
+            # Weather is fetched only by a query or a due, configured delivery.
+            print('[Weather]: No background region sweep; updates are on demand')
             # Earthquakes use a separate task to avoid duplicate notifications during weather checks.
             print('[Background check]: Finished')
         except Exception as error:
@@ -2654,7 +2637,7 @@ async def main():
     features = Features(sys.modules[__name__])
     extensions = Extensions(sys.modules[__name__])
     videos = VideoSummaries(sys.modules[__name__])
-    extensions.spawn(extensions.migrate_locations())
+    # Resolve locations lazily when their weather or map information is requested.
     extensions.spawn(extensions.nightly())
     extensions.spawn(features.reminder_loop())
     await asyncio.to_thread(init_chat_models)

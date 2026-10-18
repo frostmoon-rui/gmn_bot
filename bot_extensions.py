@@ -74,6 +74,7 @@ class Extensions:
         self.geocache = {}
         self.unsupported_weather = set()
         self.weather_cache = {}
+        self.weather_locks = {}
         self.user_jobs = set()
         self.source_records = {}
         self.auto_search_times = {}
@@ -204,6 +205,12 @@ class Extensions:
         print('[Location normalized]: Province-only records use capital references; country-only records need a city')
 
     async def google_weather(self, location):
+        """Share the existing ten-minute cache and serialize requests for one region."""
+        lock = self.weather_locks.setdefault(location, asyncio.Lock())
+        async with lock:
+            return await self._weather_for_location(location)
+
+    async def _weather_for_location(self, location):
         """Retain the legacy method name while collecting configured sources in parallel and merging fields."""
         cached = self.weather_cache.get(location)
         if cached and asyncio.get_running_loop().time()-cached[0] < 600 and cached[1].get('_cache_day') == datetime.now(SHANGHAI).date().isoformat():
