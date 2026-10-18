@@ -20,6 +20,14 @@ See the [user guide](EXTENSIONS.md) and [weather provider notes](WEATHER_PROVIDE
 
 ## Getting started
 
+### Keep the public source separate from an existing local bot
+
+This public checkout uses English commands and replies. It is not a backup of private bot data or a localized runtime. Updating it does not restore personal weather bindings, profiles, notebook entries, or stickers.
+
+When preserving a Chinese or multilingual installation, keep two independent directories: the local runtime (including its private data) and a clean Git checkout for public development. Do not unpack a source ZIP over the runtime without reviewing language behavior and making a recoverable backup first. A source-only ZIP does not include private JSON or SQLite files. Never upload a runtime backup to GitHub, and never replace newer records with an older backup merely to change the interface language.
+
+Run `python -m unittest discover -s tests -q` in each directory after changes. Do not run both configured bot copies simultaneously against the same QQ account or data directory.
+
 Use Python 3.10 or later (3.12 recommended) and a configured NapCat / OneBot v11 forward WebSocket connection. Follow platform rules and obtain members' consent for stored information and automatic replies.
 
 ~~~powershell
