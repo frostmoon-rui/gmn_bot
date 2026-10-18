@@ -1,0 +1,11 @@
+{
+  "sync_interval_seconds": 86400,
+  "sources": [
+    {
+      "id": "cachetide",
+      "name": "CacheTide food map",
+      "url": "https://cachetide.top/food-map/index.json",
+      "enabled": true
+    }
+  ]
+}

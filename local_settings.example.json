@@ -1,0 +1,14 @@
+{
+  "GEMINI_API_KEY": "",
+  "OPENAI_API_KEY": "",
+  "ANTHROPIC_API_KEY": "",
+  "DEEPSEEK_API_KEY": "",
+  "MIMO_API_KEY": "",
+  "GOOGLE_MAPS_API_KEY": "",
+  "AMAP_API_KEY": "",
+  "AMAP_JS_KEY": "",
+  "AMAP_JS_SECURITY_CODE": "",
+  "MASTER_QQ": 0,
+  "HUSBAND_QQ": 0,
+  "DEFAULT_BLACKLIST": []
+}

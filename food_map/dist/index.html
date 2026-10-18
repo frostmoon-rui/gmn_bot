@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f3693c"><title>Cat Food Atlas · A taste of everywhere</title><meta name="description" content="A growing map of favorite places to eat, curated with Lucky Cat and friends."><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body>
+<header class="topbar"><a href="/" class="brand" aria-label="Cat Food Atlas home"><span class="brandmark">F</span><div>Cat Food Atlas<small>A TASTE OF EVERYWHERE</small></div></a><nav><span class="active">Explore</span><a href="https://cachetide.top" target="_blank" rel="noopener noreferrer">CacheTide's blog ↗</a><button id="aboutButton" class="quiet">How to contribute</button></nav><span class="localBadge">Curated with Lucky Cat</span></header>
+<main>
+<aside class="sidebar">
+<div class="intro"><span class="eyebrow">ONE CITY, ONE GOOD BITE</span><h1>Good food.<br> Good company<span>.</span></h1><p>Save a little corner cafe, a warm dinner,<br>and the places worth sharing.</p></div>
+<section aria-label="Filter places" class="filters"><label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search a city, a place, or a dish" aria-label="Search cities, places, or dishes"></label><div class="selectRow"><label>Where <select id="city" aria-label="Filter by city"><option value="">All cities</option></select></label><button id="fitButton" class="quiet">Show all ↗</button></div><div id="categories" class="categories" aria-label="Filter by category"></div></section>
+<div class="resultsHead"><h2>Places to try <span id="resultCount">0</span></h2><span>Shared finds, not rankings</span></div>
+<div id="results" class="results" aria-live="polite"><p class="empty">Opening the food atlas…</p></div>
+<footer class="sidebarFooter"><span class="dot"></span> Curated by friends · Reviewed recommendations<br><small>Details can change. Check opening hours before visiting.</small></footer>
+</aside>
+<section class="mapSection" aria-label="Interactive food map of China"><div id="map"></div><div class="mapHeading"><span class="eyebrow">THE FOOD ATLAS</span><strong>A big world. A good meal.</strong><span id="mapStats">Start with one real place</span></div><div id="mapStatus" class="mapStatus" role="status">Loading Amap…</div><button id="reloadButton" class="reload">↻ Refresh list</button><div class="mapNote">Every pin is a place someone wanted to share.<br><small>GCJ-02 · Amap</small></div></section>
+</main>
+<dialog id="about"><button id="closeAbout" class="dialogClose" aria-label="Close contribution guide">×</button><span class="eyebrow">ADD YOUR FAVORITE PLACE</span><h2>Your next good find<br>belongs here too.</h2><p>Mention Lucky Cat in a QQ group, or message the bot privately:</p><code>submit food:city|full venue name|full address|category|reason</code><p>Categories include Street food, Noodles, Desserts, Meals, Coffee, and BBQ. Append <code>|HTTPS source URL</code> to credit an original recommendation.</p><p>Submissions are reviewed before publication. Share public business addresses only: no private homes, QQ numbers, contact details, or personal information without permission.</p><p>This is not a commercial ranking or an official branch of CacheTide's blog. Sources are credited; reviews and personal travel histories are not copied.</p><a href="https://cachetide.top" target="_blank" rel="noopener noreferrer" class="blogLink">Visit CacheTide's A Little Inn by the Clouds ↗</a></dialog>
+<noscript>Enable JavaScript to use the interactive map. Places are reviewed before publication.</noscript>
+</body></html>
