@@ -65,3 +65,11 @@ The documented [CacheTide repository configuration](https://github.com/CacheTide
 Our compatible export is `/food-map/index.json`. It includes only approved local submissions, excludes QQ/private information, and does not send the 26 imported CacheTide venues back to their source. Imported reference venues remain visible on our site, while the export may legitimately contain an empty `spots` list until local submissions are added.
 
 External sources in `food_map/sources.json` must be administrator-configured public HTTPS JSON endpoints. Background synchronization runs at startup, then every 24 hours by default, deduplicating by city, name, and coordinates. Failures do not block the local directory. No JavaScript from another repository needs to be installed or executed.
+
+### Local Clash Fake-IP transport
+
+A public hostname may resolve to Clash's `198.18.0.0/15` Fake-IP range. Food synchronization now uses the configured loopback HTTP proxy to tunnel the original HTTPS hostname, never dials a fake address directly, and retains certificate validation and redirect refusal. Real private, loopback, metadata and other reserved source addresses remain blocked.
+
+System HTTP/HTTPS proxy settings are detected automatically. If necessary, set `FOOD_SOURCE_PROXY` in private local settings to your actual Clash HTTP/mixed listener, for example `http://127.0.0.1:7897`. Missing or null means automatic detection; an empty string forces direct access. Only credential-free loopback HTTP proxies are supported. The bot does not change Clash, DNS, firewall or router settings.
+
+`fake-ip-needs-local-proxy` identifies fake DNS without a usable proxy; `invalid-local-proxy` identifies unsupported proxy settings. Other failures show safe codes or HTTP status instead of raw exception text, credentials or response bodies. Existing cache survives a failure and the daily interval is unchanged. The `http://127.0.0.1:8788` startup message describes the independent local map, not an error or replacement of https://frostmoonrui.com.

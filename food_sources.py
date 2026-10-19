@@ -1,16 +1,12 @@
 """Read valaxy-addon-food-map public JSON from explicitly configured HTTPS sources."""
 import hashlib
-import ipaddress
-import json
-import socket
 import threading
 import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from bot_runtime import JsonStore
 from amap_service import coordinates
 from food_map import source_url
+from food_source_transport import fetch_public_json, source_error_reason
 
 
 def parse_source(document, source):
@@ -45,24 +41,6 @@ def export_document(rows):
         spots.append({'id': row['id'], 'name': row['name'], 'city': row['city'], 'category': row['category'],
             'address': row['address'], 'lng': lon, 'lat': lat, 'coordinateSystem': 'GCJ-02', 'articleUrl': row['source_url']})
     return {'schemaVersion': 1, 'coordinateSystem': 'GCJ-02', 'spots': spots}
-
-
-def fetch_public_json(url):
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None, 443):
-        raise ValueError('Food sources must use public HTTPS addresses')
-    addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
-    if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
-        raise ValueError('LAN, loopback, reserved and cloud metadata addresses are not read')
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    request = urllib.request.Request(url, headers={'User-Agent': 'GmnFoodMap/1.0', 'Accept': 'application/json'})
-    with urllib.request.build_opener(NoRedirect()).open(request, timeout=8) as response:
-        raw = response.read(2*1024*1024+1)
-    if len(raw) > 2*1024*1024:
-        raise ValueError('External food JSON exceeds 2 MiB')
-    return json.loads(raw)
 
 
 class FoodSources:
@@ -120,9 +98,9 @@ class FoodSources:
                 enabled.append(source['id'])
                 try:
                     self.source_cache[source['id']] = parse_source(self.fetch(source['url']), source)
-                    print('[External food source]:', source['id'], 'public JSON validated')
+                    print('[External food source]:', source['id'], 'public JSON validated; entries:', len(self.source_cache[source['id']]))
                 except Exception as error:
-                    print('[External food source unavailable]:', str(source.get('id', 'unknown')), type(error).__name__)
+                    print('[External food source unavailable]:', str(source.get('id', 'unknown')), source_error_reason(error), '; existing cache retained; retry at the configured interval')
             with self.lock:
                 self.source_cache = {key: value for key, value in self.source_cache.items() if key in enabled}
                 self.cache = [row for values in self.source_cache.values() for row in values]
