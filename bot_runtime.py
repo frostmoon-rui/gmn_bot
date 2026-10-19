@@ -63,7 +63,7 @@ class JsonStore:
 
 
 class OneBotSocket:
-    def __init__(self, raw, message_ids, timeout=12, message_cache=None):
+    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None):
         self.raw = raw
         self.message_ids = message_ids
         self.timeout = timeout
@@ -71,11 +71,14 @@ class OneBotSocket:
         self.closed = False
         self.message_cache = message_cache
         self.self_id = None
+        self.image_policy = image_policy
 
     async def send(self, payload):
         if self.closed:
             raise ConnectionError('NapCat connection is closed')
         data = json.loads(payload)
+        if self.image_policy is not None and not await self.image_policy.before_send(data):
+            return {'suppressed': True}
         echo = 'gmn_' + uuid.uuid4().hex
         data['echo'] = echo
         future = asyncio.get_running_loop().create_future()
@@ -104,6 +107,11 @@ class OneBotSocket:
             result = data.get('data') or {}
             message_id = result.get('message_id') if isinstance(result, dict) else None
             if message_id and request.get('action') in {'send_group_msg', 'send_private_msg'}:
+                if self.image_policy is not None:
+                    try:
+                        self.image_policy.record_receipt(request, result, self.self_id)
+                    except Exception as error:
+                        print('[Image receipt indexing failed]:', type(error).__name__)
                 params = request['params']
                 session = 'group_' + str(params['group_id']) if 'group_id' in params else 'private_' + str(params['user_id'])
                 records = self.message_ids.setdefault(session, [])

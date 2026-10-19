@@ -123,12 +123,23 @@ class StickerStore:
                 CREATE TABLE IF NOT EXISTS pending_legacy (source TEXT, position INTEGER, url TEXT, reason TEXT,
                     PRIMARY KEY(source,position));
             ''')
+            if 'blocked' not in {row[1] for row in connection.execute('PRAGMA table_info(stickers)')}:
+                connection.execute('ALTER TABLE stickers ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0')
+            connection.executescript("""
+                CREATE TABLE IF NOT EXISTS blocked_images (
+                    sha TEXT PRIMARY KEY, pixel TEXT, dhash TEXT, width INTEGER, height INTEGER,
+                    frames INTEGER, thumb BLOB, created REAL);
+                CREATE TABLE IF NOT EXISTS blocked_aliases (sha TEXT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS sent_images (
+                    scope TEXT, message_id TEXT, bot_id TEXT, digests TEXT, created REAL,
+                    PRIMARY KEY(scope,message_id,bot_id));
+            """)
             self.connection = connection
         return self.connection
 
     def __len__(self):
         with self.lock:
-            return self._db().execute('SELECT COUNT(*) FROM stickers').fetchone()[0]
+            return self._db().execute('SELECT COUNT(*) FROM stickers WHERE blocked=0').fetchone()[0]
 
     def close(self):
         with self.lock:
@@ -204,7 +215,7 @@ class StickerStore:
     def _find_similar(self, db, data):
         if data['frames'] != 1 or not data['dhash']:
             return None
-        rows = db.execute('''SELECT * FROM stickers WHERE frames=1 AND
+        rows = db.execute('''SELECT * FROM stickers WHERE blocked=0 AND frames=1 AND
             (band0=? OR band1=? OR band2=? OR band3=?) ORDER BY last_seen DESC LIMIT 1000''', data['bands'])
         for row in rows:
             if not row['dhash'] or not row['height']:
@@ -228,6 +239,8 @@ class StickerStore:
         digest = hashlib.sha256(blob).hexdigest()
         with self.lock:
             db = self._db()
+            if db.execute('SELECT 1 FROM blocked_aliases WHERE sha=?', (digest,)).fetchone():
+                return {'id': None, 'status': 'blocked', 'path': None}
             existing = db.execute('SELECT s.* FROM aliases a JOIN stickers s ON s.id=a.sticker_id WHERE a.sha=?', (digest,)).fetchone()
             if existing and self._path(existing['path']).is_file():
                 db.execute("UPDATE stickers SET seen_count=seen_count+1,last_seen=?,caption=CASE WHEN caption='' THEN ? ELSE caption END WHERE id=?",
@@ -239,6 +252,10 @@ class StickerStore:
             db = self._db()
             db.execute('BEGIN IMMEDIATE')
             try:
+                if self._blocked_match(db, data):
+                    db.execute('INSERT OR IGNORE INTO blocked_aliases VALUES (?)', (digest,))
+                    db.execute('COMMIT')
+                    return {'id': None, 'status': 'blocked', 'path': None}
                 row = db.execute('SELECT s.* FROM aliases a JOIN stickers s ON s.id=a.sticker_id WHERE a.sha=?', (digest,)).fetchone()
                 status = 'exact'
                 if row is None and data['pixel']:
@@ -296,14 +313,106 @@ class StickerStore:
                         print('[Sticker deduplication]: Old copy could not be removed yet; index updated')
             return {'id': identifier, 'status': status, 'path': relative}
 
+
+    def _blocked_match(self, db, data):
+        if db.execute('SELECT 1 FROM blocked_aliases WHERE sha=?', (data['sha'],)).fetchone():
+            return True
+        if data['pixel'] and db.execute('SELECT 1 FROM blocked_images WHERE pixel=?', (data['pixel'],)).fetchone():
+            return True
+        if data['frames'] != 1 or not data['dhash']:
+            return False
+        for row in db.execute('SELECT * FROM blocked_images WHERE frames=1 AND dhash IS NOT NULL'):
+            if not row['height'] or abs((data['width']/data['height'])/(row['width']/row['height'])-1) > .01:
+                continue
+            if (int(data['dhash'], 16)^int(row['dhash'], 16)).bit_count() > 2 or not row['thumb']:
+                continue
+            with Image.open(io.BytesIO(row['thumb'])) as thumb:
+                if nearly_identical(data['thumb'], thumb):
+                    return True
+        return False
+
+    def is_blocked(self, blob):
+        digest = hashlib.sha256(blob).hexdigest()
+        with self.lock:
+            db = self._db()
+            if db.execute('SELECT 1 FROM blocked_aliases WHERE sha=?', (digest,)).fetchone():
+                return True
+            known = db.execute('SELECT s.blocked FROM aliases a JOIN stickers s ON s.id=a.sticker_id WHERE a.sha=?', (digest,)).fetchone()
+            if known:
+                return bool(known['blocked'])
+            if not db.execute('SELECT 1 FROM blocked_images LIMIT 1').fetchone():
+                return False
+        data = analyse(blob)
+        with self.lock:
+            return self._blocked_match(self._db(), data)
+
+    def block_image(self, blob):
+        """Persist exact/pixel/near fingerprints; retain originals for local recovery."""
+        data = analyse(blob)
+        thumb = None
+        if data['thumb'] is not None:
+            output = io.BytesIO()
+            data['thumb'].save(output, format='PNG')
+            thumb = output.getvalue()
+        with self.lock:
+            db = self._db()
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                db.execute('INSERT OR REPLACE INTO blocked_images VALUES (?,?,?,?,?,?,?,?)',
+                           (data['sha'], data['pixel'], data['dhash'], data['width'], data['height'], data['frames'], thumb, time.time()))
+                db.execute('INSERT OR IGNORE INTO blocked_aliases VALUES (?)', (data['sha'],))
+                rows = db.execute('SELECT s.* FROM stickers s LEFT JOIN aliases a ON a.sticker_id=s.id WHERE a.sha=? OR s.sha=? OR (s.pixel IS NOT NULL AND s.pixel=?)',
+                                  (data['sha'], data['sha'], data['pixel'])).fetchall()
+                similar = self._find_similar(db, data)
+                if similar:
+                    rows.append(similar)
+                identifiers = {row['id'] for row in rows}
+                for identifier in identifiers:
+                    db.execute('UPDATE stickers SET blocked=1 WHERE id=?', (identifier,))
+                    db.execute('INSERT OR IGNORE INTO blocked_aliases SELECT sha FROM aliases WHERE sticker_id=?', (identifier,))
+                    db.execute('INSERT OR IGNORE INTO blocked_aliases SELECT sha FROM stickers WHERE id=?', (identifier,))
+                db.execute('COMMIT')
+            except BaseException:
+                db.execute('ROLLBACK')
+                raise
+            return {'blocked': True, 'disabled': len(identifiers), 'sha': data['sha']}
+
+    def block_digest(self, digest):
+        if not re.fullmatch('[a-f0-9]{64}', digest):
+            raise ValueError('Invalid image digest')
+        with self.lock:
+            row = self._db().execute('SELECT s.path FROM aliases a JOIN stickers s ON s.id=a.sticker_id WHERE a.sha=?', (digest,)).fetchone()
+            blob = self._path(row['path']).read_bytes() if row and self._path(row['path']).is_file() else None
+        if blob:
+            return self.block_image(blob)
+        with self.lock:
+            self._db().execute('INSERT OR IGNORE INTO blocked_aliases VALUES (?)', (digest,))
+        return {'blocked': True, 'disabled': 0, 'sha': digest}
+
+    def record_sent(self, scope, message_id, bot_id, digests):
+        values = sorted({value for value in digests if re.fullmatch('[a-f0-9]{64}', value)})
+        if not values or not bot_id:
+            return
+        with self.lock:
+            db = self._db()
+            db.execute('INSERT OR REPLACE INTO sent_images VALUES (?,?,?,?,?)',
+                       (scope, str(message_id), str(bot_id), json.dumps(values), time.time()))
+            db.execute('DELETE FROM sent_images WHERE rowid IN (SELECT rowid FROM sent_images ORDER BY created DESC LIMIT -1 OFFSET 10000)')
+
+    def sent_digests(self, scope, message_id, bot_id):
+        with self.lock:
+            row = self._db().execute('SELECT digests FROM sent_images WHERE scope=? AND message_id=? AND bot_id=?',
+                                    (scope, str(message_id), str(bot_id))).fetchone()
+            return json.loads(row['digests']) if row else []
+
     def random_bytes(self):
         with self.lock:
             db = self._db()
-            maximum = db.execute('SELECT MAX(id) FROM stickers').fetchone()[0]
+            maximum = db.execute('SELECT MAX(id) FROM stickers WHERE blocked=0').fetchone()[0]
             if maximum is None:
                 return None
             for attempt in range(15):
-                row = db.execute('SELECT id,path FROM stickers WHERE id>=? ORDER BY id LIMIT 1', (random.randint(1, maximum),)).fetchone()
+                row = db.execute('SELECT id,path FROM stickers WHERE blocked=0 AND id>=? ORDER BY id LIMIT 1', (random.randint(1, maximum),)).fetchone()
                 if not row:
                     continue
                 if row['id'] in self.recent and attempt < 10:
@@ -328,7 +437,7 @@ class StickerStore:
         entries = json.loads(raw.decode('utf-8-sig'))
         if isinstance(entries, dict) and entries.get('version') == 2 and entries.get('storage') == 'sqlite':
             expected = entries.get('migration', {}).get('total', 0)
-            if expected and not report['total']:
+            if expected and not self._db().execute('SELECT COUNT(*) FROM stickers').fetchone()[0]:
                 raise ValueError('Index is empty but migration manifest is not; restore from legacy_backup and never overwrite backups')
             with self.lock:
                 report['pending'] = self._db().execute('SELECT COUNT(*) FROM pending_legacy').fetchone()[0]

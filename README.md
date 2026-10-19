@@ -20,6 +20,8 @@ See the [user guide](EXTENSIONS.md) and [weather provider notes](WEATHER_PROVIDE
 
 To recognize an ordinary photo, address the bot and attach or quote it with a question such as `Describe this image` or `What does this mean?`. Quoted images are fetched from NapCat within the same conversation, including when the bot is mentioned explicitly. Requested recognition uses the independent vision priority queue (at most three candidate models), with a question-specific cache separate from short sticker captions. Ordinary photos are not collected as stickers. Download or recognition failures are reported without asking the chat model to invent image contents; recognition replies do not receive an automatic sticker bonus.
 
+Reply to a bot-sent image, mention the bot and send exactly `delete` to retract it and persistently block the image from future collection or replies. Any member can correct an image; no user is blacklisted. See [image correction and recall limits](STICKER_CORRECTION.md).
+
 ## Getting started
 
 ### Keep the public source separate from an existing local bot

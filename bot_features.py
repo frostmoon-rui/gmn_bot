@@ -15,6 +15,7 @@ HELP = {'website': 'Website screenshots (mention me in groups)\nwebsite screensh
             'Mention me in groups; speak directly in private. Use cat help to open this guide.\n'
             'Chat: ask a question | generate image:description\n'
             'Video: reply to a card and mention me with summarize video, or summarize video:URL\n'
+            'Sticker correction: reply to my image and mention me with delete; retract and image-blocklist it.\n'
             'Weather: set location:city | weather today | weather tomorrow\n'
             'Care: comfort me | keep me company | grounding exercise | mental health support | '
             'first aid:situation\n'

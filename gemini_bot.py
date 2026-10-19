@@ -28,6 +28,7 @@ from video_summary import VideoSummaries
 from reply_style import parse_search_request, english_provider_text
 from vision_recognition import VisionRecognizer
 from sticker_store import StickerStore, sticker_reply_probability
+from sticker_moderation import StickerModeration
 from admin_registry import AdminRegistry
 from weather_history import tidy_weather_reply
 from food_map_server import start_food_map
@@ -1200,6 +1201,8 @@ def image_mime(blob):
     return ''
 
 
+sticker_moderation = StickerModeration(sticker_store, download_image_as_bytes)
+
 sticker_scan_gate = asyncio.Semaphore(2)
 sticker_descriptions = {}
 sticker_pending = set()
@@ -1224,6 +1227,9 @@ async def collect_passive_stickers(segments, ws, group):
 
 
 async def cached_sticker_description(blob, mime):
+    if await asyncio.to_thread(sticker_store.is_blocked, blob):
+        print('[Image blocklist]: Skipped automatic image recognition')
+        return ''
     digest = hashlib.sha256(blob).hexdigest()
     if digest in sticker_descriptions:
         return sticker_descriptions[digest]
@@ -1251,7 +1257,7 @@ async def save_stolen_emoji_async(raw_url: str, ws, group_id: int,
     try:
         caption = sticker_descriptions.get(hashlib.sha256(blob).hexdigest(), "")
         result = await asyncio.to_thread(sticker_store.add, blob, caption)
-        labels = {"new": "added", "exact": "identical file merged", "pixels": "identical image merged",
+        labels = {"blocked": "Blocklisted image skipped", "new": "added", "exact": "identical file merged", "pixels": "identical image merged",
                   "similar": "similar copy merged", "upgraded": "merged, retaining the clearer version"}
         count = await asyncio.to_thread(len, sticker_store)
         print(f"[Sticker collection]: {labels[result['status']]}; total {count}, with no collection limit")
@@ -1905,6 +1911,8 @@ async def handle_message_event(ws, data):
         # Receipts already register our messages; never register them in the wrong private session.
         return
 
+    if 'sticker_moderation' in globals() and await sticker_moderation.handle(ws, data):
+        return
     if user_id in BLACKLIST_QQ:
         return
     if msg_type not in {'group', 'private'}:
@@ -2678,7 +2686,7 @@ async def main():
         try:
             print(f"Connecting to NapCat ({WS_URL})...")
             async with websockets.connect(WS_URL, max_size=16 * 1024 * 1024, ping_interval=20, ping_timeout=30) as raw_ws:
-                ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache)
+                ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache, image_policy=globals().get('sticker_moderation'))
                 active_ws = ws
                 print(">>> Cat butler started!")
                 async for raw_data in raw_ws:
@@ -2703,6 +2711,9 @@ async def main():
                     if event_deduplicator.is_duplicate(data):
                         continue
                     session = ('group_' + str(data.get('group_id'))) if data.get('group_id') else ('private_' + str(data.get('user_id')))
+                    if data.get('post_type') == 'message' and 'sticker_moderation' in globals() and sticker_moderation.matches(data):
+                        extensions.spawn(sticker_moderation.handle(ws, data))
+                        continue
                     if data.get('post_type') == 'message' and quick_reply(ws, data):
                         continue
                     accepted = dispatcher.submit(session, lambda data=data: handle_message_event(ws, data))
