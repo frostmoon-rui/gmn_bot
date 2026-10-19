@@ -1,5 +1,20 @@
 # Public website screenshots
 
+## Quick guide
+
+Open the in-chat guide with `help website` after mentioning the bot in a group, or send it directly in private. The general guide now lists the website commands too.
+
+| Page identifier | Public page |
+| --- | --- |
+| `home` | Homepage |
+| `about` | About |
+| `friends` | Companion links and application entry |
+| `resources` | Recommended resources |
+| `food` | Public food map |
+| `projects` | Projects |
+
+`recommended links` and `friend application` return the corresponding page screenshot and URL. They do not submit a form, approve a friend link or modify the website. Apply yourself through the public webpage; reviewed approval is required before listing. The owner studio and unlisted room are not screenshot targets. The public English bot defaults to `en dark` when language and theme are omitted; private localized adapters may use different defaults.
+
 This optional integration opens fixed public routes at `https://frostmoonrui.com` in a fresh, sandboxed Chromium context. It runs only after an explicit mention in a group, or an explicit private-chat command. It never signs in to the owner studio, reuses a personal browser profile, exposes the bot host, or sends scheduled announcements.
 
 Install into the same Python environment used by the bot:

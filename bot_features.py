@@ -10,18 +10,28 @@ from datetime import datetime, timedelta, timezone
 from bot_care import crisis_intent
 
 TZ = timezone(timedelta(hours=8))
-HELP = {'website': 'Website screenshots (mention me in groups)\nwebsite screenshot:home / about / friends / resources / food / projects\nExample: website screenshot:friends en light\nOne request per 30 seconds. Optional browser support must be installed first.',
+HELP = {'website': 'Website interaction (mention me in groups; send directly in private)\n'
+            'https://frostmoonrui.com\n'
+            'website screenshot:home / about / friends / resources / food / projects\n'
+            'Example: website screenshot:friends ja light\n'
+            'Languages: zh / en / ru / ja. Themes: dark / light. Defaults: en dark.\n'
+            'recommended links / friend application open the matching page screenshot and link.\n'
+            'Submit applications yourself on the website; approval is required before publication.\n'
+            'Live, on-demand captures reply only to this chat and never enter the sticker library.\n'
+            'One request per user every 30 seconds. Optional browser support must be installed.\n'
+            'Fixed public pages only; no studio, unlisted room, automatic edits or publication.',
         'general': '🐾 Lucky Cat · Quick guide\n'
             'Mention me in groups; speak directly in private. Use cat help to open this guide.\n'
             'Chat: ask a question | generate image:description\n'
             'Video: reply to a card and mention me with summarize video, or summarize video:URL\n'
             'Sticker correction: reply to my image and mention me with delete; retract and image-blocklist it.\n'
             'Weather: set location:city | weather today | weather tomorrow\n'
+            'Website: website screenshot:home | recommended links | friend application (help website)\n'
             'Care: comfort me | keep me company | grounding exercise | mental health support | '
             'first aid:situation\n'
             'Tools: remind me 10 minutes rest | my reminders | cancel reminder ID\n'
             'Preferences: call me Rain | do not disturb on/off | clear context\n'
-            'More: help search / video / maps / food map / identity / admin | bot status',
+            'More: help search / video / maps / food map / website / identity / admin | bot status',
  'video': '🎬 Video information summary\n'
           'Reply to a shared card and mention me with summarize video, or use summarize video:URL. '
           'You can also ask about your most recent card from the last 30 minutes.\n'

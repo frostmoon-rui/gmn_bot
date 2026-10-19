@@ -1,5 +1,19 @@
 # Lucky Cat user guide
 
+## Website interaction
+
+Use `help website` for the in-chat guide. Mention the bot in groups; private-chat commands can be sent directly.
+
+- `website screenshot:home` opens the public homepage at https://frostmoonrui.com and returns its current screenshot and URL.
+- Pages: `home`, `about`, `friends`, `resources`, `food`, `projects`.
+- Full syntax: `website screenshot:page language theme`. Example: `website screenshot:friends ja light`.
+- Languages: `zh`, `en`, `ru`, `ja`; themes: `dark`, `light`. Public source defaults to `en dark`.
+- `recommended links` and `friend application` are screenshot shortcuts, not form submission or publishing commands. Open the returned link to apply yourself; public listing requires approval.
+
+Captures run only on request, with one capture at a time and a 30-second per-user cooldown. Results return only to the requesting chat and never enter the sticker library. The integration uses an isolated browser session, does not enter the owner studio or unlisted room, and cannot browse arbitrary URLs, fill forms, click controls or publish edits. The local food-map address `http://127.0.0.1:8788` is a separate host-only service.
+
+Install optional browser support in the same Python environment as the bot; see [website screenshot setup](WEBSITE_SCREENSHOTS.md). Missing dependencies or unavailable pages produce a short failure, never a stale image presented as current.
+
 Mention the bot in groups; enter commands directly in private chat. Use `cat help` to open concise help. Merely mentioning the word "manual" in conversation does not open it.
 
 ## Everyday commands
