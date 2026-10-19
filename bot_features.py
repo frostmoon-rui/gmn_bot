@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 from bot_care import crisis_intent
 
 TZ = timezone(timedelta(hours=8))
-HELP = {'general': '🐾 Lucky Cat · Quick guide\n'
+HELP = {'website': 'Website screenshots (mention me in groups)\nwebsite screenshot:home / about / friends / resources / food / projects\nExample: website screenshot:friends en light\nOne request per 30 seconds. Optional browser support must be installed first.',
+        'general': '🐾 Lucky Cat · Quick guide\n'
             'Mention me in groups; speak directly in private. Use cat help to open this guide.\n'
             'Chat: ask a question | generate image:description\n'
             'Video: reply to a card and mention me with summarize video, or summarize video:URL\n'

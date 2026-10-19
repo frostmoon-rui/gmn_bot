@@ -104,6 +104,10 @@ The repository contains application source, frontend files, tests, and example c
 
 Before public deployment, configure HTTPS, rate limits, Amap domain allowlists, access controls, and provider billing. The web service exposes fixed routes; never serve the entire bot directory as a static root. Model names and capabilities depend on your account; listed models are not guaranteed to be available.
 
+## Public website integration
+
+Use `website screenshot:friends en dark`, `recommended links`, or `friend application` (mention the bot in groups). Capture is on demand, uses a fresh sandboxed browser context and replies only to the requesting chat. No admin session, private queue or local bot data is shared. See [optional screenshot setup](WEBSITE_SCREENSHOTS.md). The website's public route/resource manifest is at `https://frostmoonrui.com/data/bot-site.json`; private review operations stay in the website owner console.
+
 ## Acknowledgments
 
 - [CacheTide](https://github.com/CacheTide/cachetide.github.io): blog design references and public food map locations. Original content belongs to its authors.

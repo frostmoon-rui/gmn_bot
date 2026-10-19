@@ -20,6 +20,7 @@ from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
 from earthquake_feed import EarthquakeFeed
+from website_snapshots import capture as capture_website, SnapshotError, PAGES as WEBSITE_PAGES
 from weather_history import WeatherHistory, weather_instructions, tidy_weather_reply
 from weather_providers import WeatherAggregator, open_meteo, request_json as request_weather_json, day_string
 
@@ -80,6 +81,8 @@ class Extensions:
         self.auto_search_times = {}
         self.amap = AmapMaps(Path(__file__).resolve().parent)
         self.amap_gate = asyncio.Semaphore(2)
+        self.website_gate = asyncio.Semaphore(1)
+        self.website_times = {}
         root = Path(__file__).resolve().parent
         self.admins = getattr(bot, 'admins', None) or AdminRegistry(root, getattr(bot, 'MASTER_QQ', int(setting('MASTER_QQ', 0))))
         self.food = FoodCommands(root, self.amap.client)
@@ -366,6 +369,20 @@ class Extensions:
         return '\nAdditional weather data: '+json.dumps(data, ensure_ascii=False)+weather_instructions(data, important)
 
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
+        website = re.fullmatch(r'website screenshot(?:\s*:\s*(\S+))?(?:\s+(zh|en|ru|ja))?(?:\s+(dark|light))?', text, re.I)
+        if (website or text in {'recommended links', 'friend application'}) and (mentioned or kind == 'private'):
+            page = (website[1] or 'home').lower() if website else ('resources' if text == 'recommended links' else 'friends')
+            if page not in WEBSITE_PAGES:
+                return 'Screenshot pages: home / about / friends / resources / food / projects. Example: website screenshot:friends en dark'
+            now = asyncio.get_running_loop().time()
+            self.website_times = {key: value for key, value in self.website_times.items() if now-value < 30}
+            if now-self.website_times.get(user, -30) < 30:
+                return 'Please wait 30 seconds between website screenshots.'
+            language, theme = ((website[2] or 'en', website[3] or 'dark') if website else ('en', 'dark'))
+            if not self.start_user_job(user, 'website screenshot', self.website_job(ws, kind, group, user, page, language, theme)):
+                return 'Your website screenshot is already running. Please wait.'
+            self.website_times[user] = now
+            return 'Opening the public website for a live background screenshot, without owner sessions or private records.'
         if (mentioned or kind == 'private') and text in {'food map', 'CacheTide blog'}:
             if text == 'CacheTide blog':
                 return 'CacheTide’s blog, Inn by the Clouds: https://cachetide.top'
@@ -718,6 +735,25 @@ class Extensions:
         except Exception as error:
             print('[Map query failed]:', str(error).replace(self.key, '[KEY]'))
             await self.send(ws, kind, group, user, 'The map service is temporarily unavailable; details are recorded locally.')
+
+    async def website_job(self, ws, kind, group, user, page, language, theme):
+        if self.website_gate.locked():
+            await self.send(ws, kind, group, user, 'Website capture is busy. Please try again later.')
+            return
+        async with self.website_gate:
+            try:
+                result = await asyncio.to_thread(capture_website, page, language, theme,
+                                                 setting('WEBSITE_BROWSER_PATH', '').strip())
+                segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
+                segments.extend([{'type': 'text', 'data': {'text': 'Live website screenshot: '+result['url']}},
+                                 {'type': 'image', 'data': {'file': 'base64://'+base64.b64encode(result['image']).decode('ascii')}}])
+                await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
+                    'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
+                               'message': segments}}, ensure_ascii=False))
+                print('[Website screenshot] Completed for the requesting chat only; not added as a sticker.')
+            except SnapshotError as error:
+                print('[Website screenshot failed]', str(error))
+                await self.send(ws, kind, group, user, 'Website capture failed. Check the browser components and HTTPS connection; details are in the local terminal.')
 
     async def amap_job(self, ws, kind, group, user, operation, query):
         async with self.amap_gate:
