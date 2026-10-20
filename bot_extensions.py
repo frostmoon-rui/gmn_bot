@@ -500,7 +500,8 @@ class Extensions:
             self.search_users.add(user)
             model = 'mimo-v2.6-pro' if match[1] == 'ask assistant' else 'mimo-v2.6-flash'
             self.spawn(self.search_job(ws, kind, group, user, match[2], model))
-            return 'Research is running in the background; a short conclusion will follow.'
+            return ('Research is running in the background; MiMo 2.6 Pro will give a detailed answer even if retrieval finds no pages.'
+                    if model == 'mimo-v2.6-pro' else 'Research is running in the background; a short conclusion will follow.')
         return None
 
     def remember_sources(self, kind, group, user, urls):
@@ -576,10 +577,30 @@ class Extensions:
         async def run():
             print('[Research]: Independent Python process started Google and Wikipedia retrieval')
             now = datetime.now(SHANGHAI).isoformat()
-            result = await self.python_search(query, mode, topic)
+            try:
+                result = await self.python_search(query, mode, topic)
+            except Exception as error:
+                if model != 'mimo-v2.6-pro':
+                    raise
+                print('[Pro research fallback]:', type(error).__name__, '; continuing with Pro without claiming web verification')
+                result = {'pages': [], 'warnings': []}
             pages = result.get('pages', [])
             for warning in result.get('warnings', []):
                 print('[Python research notice]:', warning)
+            if model == 'mimo-v2.6-pro':
+                from mimo_explanations import explain
+                print('[Detailed Pro answer]: MiMo 2.6 Pro; retrieved pages:', len(pages))
+                self.remember_sources(kind, group, user, [p['url'] for p in pages if p.get('url')])
+                try:
+                    report = await explain(self.b, query, result, now, 'English')
+                except Exception as error:
+                    print('[Detailed Pro answer failed]:', self.b.describe_api_error(error))
+                    await self.send(ws, kind, group, user, 'MiMo 2.6 Pro timed out or failed to answer; missing search material did not block the request. Please try later.')
+                    return
+                await self.send(ws, kind, group, user, report)
+                if hasattr(self.b, 'remember_search_result'):
+                    await self.b.remember_search_result(kind, group, user, query, report)
+                return
             if not pages:
                 await self.send(ws, kind, group, user, 'No reliable material was found yet. I will not guess; please try later.')
                 return
