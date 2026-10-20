@@ -41,7 +41,7 @@ class PlanTests(unittest.TestCase):
 class ResearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_gemini_is_stateless_and_has_no_browsing_tools(self):
         generate = AsyncMock(return_value=SimpleNamespace(text=json.dumps({'queries': [task()]})))
-        bot = SimpleNamespace(AVAILABLE_CHAT_MODELS=['gemini-test-flash'],
+        bot = SimpleNamespace(AVAILABLE_RESEARCH_MODELS=['gemini-4-argon'],
                               client=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate))),
                               gemini_content_config=Mock(side_effect=lambda **kwargs: kwargs))
         self.assertEqual(await gemini_plan(bot, 'Question'), [task()])
@@ -52,7 +52,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_model_plan_tries_next_model(self):
         generate = AsyncMock(side_effect=[SimpleNamespace(text='invalid'),
                                           SimpleNamespace(text=json.dumps({'queries': [task()]}))])
-        bot = SimpleNamespace(AVAILABLE_CHAT_MODELS=['bad', 'good'],
+        bot = SimpleNamespace(AVAILABLE_RESEARCH_MODELS=['gemini-4-argon', 'gemini-3.1-pro-preview'],
                               client=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate))),
                               gemini_content_config=lambda **kwargs: kwargs)
         self.assertEqual(await gemini_plan(bot, 'Question'), [task()])

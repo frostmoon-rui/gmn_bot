@@ -16,6 +16,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
 from reply_style import compact_reply, concise_source, english_provider_text
+from gemini_research import RESEARCH_MODE
 from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
@@ -498,10 +499,10 @@ class Extensions:
             if len(match[2]) > 2000:
                 return 'Keep the research question within 2000 characters.'
             self.search_users.add(user)
-            model = 'mimo-v2.6-pro' if match[1] == 'ask assistant' else 'mimo-v2.6-flash'
+            model = RESEARCH_MODE if match[1] == 'ask assistant' else 'mimo-v2.6-flash'
             self.spawn(self.search_job(ws, kind, group, user, match[2], model))
             return ('The assistant is researching in the background; an answer will follow.'
-                    if model == 'mimo-v2.6-pro' else 'Research is running in the background; a short conclusion will follow.')
+                    if model == RESEARCH_MODE else 'Research is running in the background; a short conclusion will follow.')
         return None
 
     def remember_sources(self, kind, group, user, urls):
@@ -578,28 +579,28 @@ class Extensions:
             print('[Research]: Independent Python process started Google and Wikipedia retrieval')
             now = datetime.now(SHANGHAI).isoformat()
             try:
-                if model == 'mimo-v2.6-pro':
+                if model == RESEARCH_MODE:
                     from deep_research import research
                     result = await research(self.b, self.python_search, query)
                 else:
                     result = await self.python_search(query, mode, topic)
             except Exception as error:
-                if model != 'mimo-v2.6-pro':
+                if model != RESEARCH_MODE:
                     raise
-                print('[Pro research fallback]:', type(error).__name__, '; continuing with Pro without claiming web verification')
+                print('[Pro research fallback]:', type(error).__name__, '; continuing with Gemini Pro/Argon')
                 result = {'pages': [], 'warnings': []}
             pages = result.get('pages', [])
             for warning in result.get('warnings', []):
                 print('[Python research notice]:', warning)
-            if model == 'mimo-v2.6-pro':
+            if model == RESEARCH_MODE:
                 from mimo_explanations import explain, reply_chunks
-                print('[Detailed Pro answer]: MiMo 2.6 Pro; retrieved pages:', len(pages))
+                print('[Detailed research answer]: Gemini Pro/Argon; retrieved pages:', len(pages))
                 self.remember_sources(kind, group, user, [p['url'] for p in pages if p.get('url')])
                 try:
                     report = await explain(self.b, query, result, now, 'English')
                 except Exception as error:
                     print('[Detailed Pro answer failed]:', self.b.describe_api_error(error))
-                    await self.send(ws, kind, group, user, 'MiMo 2.6 Pro timed out or failed to answer; missing search material did not block the request. Please try later.')
+                    await self.send(ws, kind, group, user, 'The Gemini research models are temporarily unavailable. Please try later.')
                     return
                 for chunk in reply_chunks(report):
                     await self.send(ws, kind, group, user, chunk)
@@ -636,7 +637,7 @@ class Extensions:
             if hasattr(self.b, 'remember_search_result'):
                 await self.b.remember_search_result(kind, group, user, query, report)
         try:
-            if model == 'mimo-v2.6-pro':
+            if model == RESEARCH_MODE:
                 await run()
             else:
                 await asyncio.wait_for(run(), timeout=300)

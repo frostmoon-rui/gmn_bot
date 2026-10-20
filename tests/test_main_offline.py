@@ -367,7 +367,7 @@ class EnglishExtensionTests(unittest.IsolatedAsyncioTestCase):
         ext.search_users = set()
         ext.search_job = AsyncMock()
         ext.spawn = lambda coroutine: coroutine.close()
-        for command, model in (('ask assistant', 'mimo-v2.6-pro'), ('search', 'mimo-v2.6-flash')):
+        for command, model in (('ask assistant', 'gemini-research'), ('search', 'mimo-v2.6-flash')):
             ext.search_users.clear()
             reply = await ext.command(command+':Explain capacitance', None, 'private', 0, 10, False, True)
             self.assertIn('background', reply)

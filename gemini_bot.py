@@ -26,6 +26,7 @@ from bot_care import care_reply
 from bot_runtime import JsonStore, OneBotSocket, SessionDispatcher, EventDeduplicator
 from video_summary import VideoSummaries
 from reply_style import parse_search_request, english_provider_text
+from gemini_research import is_research_model, rank_research_models, research_model_score
 from vision_recognition import VisionRecognizer
 from sticker_store import StickerStore, sticker_reply_probability
 from sticker_moderation import StickerModeration
@@ -233,6 +234,7 @@ if TARGET_PROXY:
 client = genai.Client(api_key=GEMINI_API_KEY)
 AVAILABLE_CHAT_MODELS = []
 AVAILABLE_ORGANIZER_MODELS = []
+AVAILABLE_RESEARCH_MODELS = []
 chat_histories = defaultdict(list)
 gpt_chat_histories = defaultdict(list)
 claude_chat_histories = defaultdict(list)
@@ -532,7 +534,7 @@ def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
 
 # ==================== 6. Select conversation models ====================
 def init_chat_models():
-    global AVAILABLE_CHAT_MODELS, AVAILABLE_ORGANIZER_MODELS
+    global AVAILABLE_CHAT_MODELS, AVAILABLE_ORGANIZER_MODELS, AVAILABLE_RESEARCH_MODELS
     print("\n[Discovering fast conversation models...]")
     EXCLUDE = [
         "image", "tts", "audio", "transcribe", "live", "robotics",
@@ -541,9 +543,13 @@ def init_chat_models():
     try:
         valid = []
         valid_pro = []
+        valid_research = []
         for m in client.models.list():
             name = m.name.replace("models/", "")
             lowered = name.lower()
+            actions = getattr(m, 'supported_actions', None)
+            if is_research_model(name) and (not actions or 'generateContent' in actions):
+                valid_research.append(name)
             if any(k in lowered for k in EXCLUDE): continue
             if not lowered.startswith("gemini-"): continue
             if "pro" in lowered:
@@ -568,19 +574,8 @@ def init_chat_models():
 
         AVAILABLE_CHAT_MODELS = sorted(valid, key=score, reverse=True)
 
-        def pro_score(name: str):
-            model_name = name.lower()
-            # Prefer newer Pro versions, retaining preview aliases where they may be the newest available.
-            version_match = re.search(r"gemini-(\d+)\.(\d+)", model_name)
-            version_score = (
-                int(version_match.group(1)) * 1000 + int(version_match.group(2)) * 10
-                if version_match else 0
-            )
-            stable_bonus = 100 if model_name.endswith("-latest") else 0
-            preview_penalty = -5 if "preview" in model_name else 0
-            return version_score + stable_bonus + preview_penalty
-
-        AVAILABLE_ORGANIZER_MODELS = sorted(set(valid_pro), key=pro_score, reverse=True)
+        AVAILABLE_ORGANIZER_MODELS = sorted(set(valid_pro), key=research_model_score, reverse=True)
+        AVAILABLE_RESEARCH_MODELS = rank_research_models(valid_research)
     except Exception:
         AVAILABLE_CHAT_MODELS = [
             "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -589,8 +584,10 @@ def init_chat_models():
             "gemini-2.0-flash-lite"
         ]
         AVAILABLE_ORGANIZER_MODELS = ["gemini-3.1-pro-preview"]
+        AVAILABLE_RESEARCH_MODELS = ["gemini-4-argon", "gemini-3.1-pro-preview"]
     print(f">>> Fast conversation queue: {AVAILABLE_CHAT_MODELS}\n")
     print(f">>> Notebook Pro organization queue: {AVAILABLE_ORGANIZER_MODELS}\n")
+    print(f">>> Research candidates (validated when called): {AVAILABLE_RESEARCH_MODELS}\n")
 
 def promote_runtime_model(provider: str, model_name: str):
     """Promote successful models at runtime without removing any fallback models."""

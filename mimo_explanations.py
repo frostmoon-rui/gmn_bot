@@ -1,11 +1,11 @@
-"""Detailed explicit Pro answers with optional, untrusted research context."""
-import asyncio
+"""Detailed research answers; retain the legacy module name for compatibility."""
 import json
 import re
 
 from reply_style import compact_reply
+from gemini_research import RESEARCH_MODE, generate_research
 
-MODEL = 'mimo-v2.6-pro'
+MODEL = RESEARCH_MODE
 
 
 def explanation_prompt(query, result, now, reply_language='English'):
@@ -39,10 +39,10 @@ def explanation_reply(text):
 
 async def explain(bot, query, result, now, reply_language='English'):
     prompt = explanation_prompt(query, result, now, reply_language)
-    report = await asyncio.wait_for(bot.call_mimo_direct_question(prompt, MODEL), timeout=660)
+    report = await generate_research(bot, prompt)
     answer = explanation_reply(report)
     if not answer:
-        raise ValueError('MiMo Pro returned an empty explanation')
+        raise ValueError('Gemini returned an empty research explanation')
     return answer
 
 

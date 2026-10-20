@@ -43,11 +43,11 @@ HELP = {'website': 'Website interaction (mention me in groups; send directly in 
           'trigger a reply.',
  'search': '🔎 Search (allowlisted users)\n'
            'search:question → Python retrieval + MiMo 2.6 Flash summary\n'
-           'ask assistant:question → Python retrieval + MiMo 2.6 Pro summary\n'
+           'ask assistant:question → Gemini Pro/Argon planning + Python retrieval + detailed Gemini answer\n'
            'The conversation model decides when ordinary questions need current evidence or an '
            'encyclopedia lookup. Wiki is queried as needed.\n'
-           'Replies default to 2–4 sentences. Use view sources for references. Background jobs '
-           'allow up to 5 minutes; models summarize retrieved material without AI browsing tools.',
+           'Ordinary search gives short replies within 5 minutes; explicit research is detailed with no overall deadline. '
+           'Use view sources for references. Models process retrieved text without AI browsing tools.',
  'maps': '🗺️ Amap (mention me in groups)\n'
          'map:full place | search places:city|keyword\n'
          'search nearby:full place|keyword|radius in meters\n'
