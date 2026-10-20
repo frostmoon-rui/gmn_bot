@@ -68,6 +68,8 @@ External sources in `food_map/sources.json` must be administrator-configured pub
 
 ### Local Clash Fake-IP transport
 
+With an explicit proxy, the connection address is loopback, but the HTTPS tunnel target and HTTP Host must remain the validated origin authority. A previous version omitted Host and urllib's preprocessing sent the proxy authority instead, causing Cloudflare 403 responses. The request now pins the original Host before selecting the proxy. No node rotation, browser impersonation or relaxed validation is needed for this defect.
+
 A public hostname may resolve to Clash's `198.18.0.0/15` Fake-IP range. Food synchronization now uses the configured loopback HTTP proxy to tunnel the original HTTPS hostname, never dials a fake address directly, and retains certificate validation and redirect refusal. Real private, loopback, metadata and other reserved source addresses remain blocked.
 
 System HTTP/HTTPS proxy settings are detected automatically. If necessary, set `FOOD_SOURCE_PROXY` in private local settings to your actual Clash HTTP/mixed listener, for example `http://127.0.0.1:7897`. Missing or null means automatic detection; an empty string forces direct access. Only credential-free loopback HTTP proxies are supported. The bot does not change Clash, DNS, firewall or router settings.

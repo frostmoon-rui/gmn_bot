@@ -5,6 +5,8 @@ import socket
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
+import urllib.response
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -35,7 +37,32 @@ class FoodTransportTests(unittest.TestCase):
         self.assertEqual(request.host, '127.0.0.1:7897')
         self.assertEqual(request._tunnel_host, 'example.org')
         self.assertEqual(request.type, 'https')
+        self.assertEqual(request.get_header('Host'), 'example.org')
         self.assertEqual(opener.open.call_args.kwargs['timeout'], 8)
+
+    def test_actual_urllib_preprocessing_keeps_origin_host_after_proxy_selection(self):
+        seen = []
+        class InspectHTTPS(urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                seen.append(request)
+                response = urllib.response.addinfourl(io.BytesIO(b'{"spots":[]}'), {}, request.full_url, 200)
+                response.msg = 'OK'
+                return response
+        original_builder = urllib.request.build_opener
+        def build(*handlers):
+            return original_builder(*handlers, InspectHTTPS())
+        with patch('food_source_transport.socket.getaddrinfo', return_value=[(2, 1, 6, '', ('198.18.0.46', 443))]), \
+                patch('food_source_transport.urllib.request.build_opener', side_effect=build):
+            for url, expected_host in ((URL, 'example.org'),
+                                       ('https://example.org:443/food-map/index.json?version=1', 'example.org:443')):
+                fetch_public_json(url, proxy='http://127.0.0.1:7897')
+                request = seen[-1]
+                self.assertEqual(request.get_header('Host'), expected_host)
+                self.assertEqual(request._tunnel_host, expected_host)
+                self.assertEqual(request.host, '127.0.0.1:7897')
+                self.assertEqual(request.selector, urllib.parse.urlsplit(url).path +
+                                 ('?' + urllib.parse.urlsplit(url).query if urllib.parse.urlsplit(url).query else ''))
+        self.assertEqual(len(seen), 2)
 
     def test_fake_ip_without_proxy_is_not_dialed_directly(self):
         with self.assertRaisesRegex(FoodSourceError, 'fake-ip-needs-local-proxy'):

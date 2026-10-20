@@ -70,7 +70,10 @@ def fetch_public_json(url, proxy=None):
 
     # Explicit proxies prevent hidden environment routing and NO_PROXY bypasses.
     # Tunnel the HTTPS hostname, never the fake address; retain normal TLS validation.
-    request = urllib.request.Request(url, headers={'User-Agent': 'GmnFoodMap/1.0', 'Accept': 'application/json'})
+    # Pin the origin Host before set_proxy changes Request.host to the proxy.
+    # Otherwise urllib's preprocessing sends the loopback proxy as the HTTP Host.
+    request = urllib.request.Request(url, headers={'User-Agent': 'GmnFoodMap/1.0',
+                                                  'Accept': 'application/json', 'Host': parsed.netloc})
     if selected:
         request.set_proxy(urllib.parse.urlsplit(selected).netloc, 'http')
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
