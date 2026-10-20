@@ -165,3 +165,11 @@ The old anonymous HF BLIP fallback is disabled; it is not repeatedly retried, an
 Legacy `schedule.json` lacks reliable recipients, so its data is retained but fixed-group announcements are disabled; recreate reminders with explicit recipients. The old `update_announcement.json` is disabled. A historical pre-review main-program backup is `backup/before_project_review_gemini_bot.py`.
 
 Care references were recorded as checked on 2026-10-17: [China NHC 12356 notice](https://www.nhc.gov.cn/yzygj/c100068/202412/49a1a65386cd4be582d4702fd0926ee8.shtml), [NIMH crisis support](https://www.nimh.nih.gov/health/publications/5-action-steps-to-help-someone-having-thoughts-of-suicide), [NHS burns](https://www.nhs.uk/conditions/burns-and-scalds/), and [NHS poisoning](https://www.nhs.uk/conditions/poisoning/). The 12356 psychological support hotline has locally varying hours. For immediate emergencies in mainland China, call 120; elsewhere, use the local emergency number. The bot cannot diagnose, prescribe, or replace on-site rescue.
+
+## Video retrieval and proxy handling
+
+Video metadata reads detect the configured system loopback HTTP proxy, including Clash Fake-IP DNS. Set `VIDEO_SOURCE_PROXY` in private local settings to override it; missing/null uses system detection, and an empty string requests direct access. Only credential-free loopback HTTP proxies are supported. Each short-link hop is validated, with at most five redirects sharing one read time budget. The request preserves the origin Host and HTTPS tunnel target. Private addresses, HTTPS downgrades, login cookies and authentication bypasses are not allowed.
+
+When the Bilibili API is unavailable, public page `videoData` can supply title, description, author and duration. Only JSON is parsed; no page script is executed. References to captcha support in scripts do not discard otherwise published structured video metadata; real challenge pages without video data remain failures. Comments are never invented or treated as proof of video scenes.
+
+The NapCat log label `[card message]` does not contain a reconstructable video URL. If a particular card still cannot be summarized, provide its original public share link and the safe collection-failure label, not login information or an entire chat archive. Replies remain scoped to the quoted message and current chat.

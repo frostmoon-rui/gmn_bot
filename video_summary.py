@@ -14,6 +14,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from reply_style import compact_reply
+from video_transport import read_video_page, validate_video_target, VideoTransportError
 
 PLATFORMS = ('bilibili.com', 'b23.tv', 'youtube.com', 'youtu.be', 'douyin.com',
              'iesdouyin.com', 'kuaishou.com', 'gifshow.com', 'weixin.qq.com', 'v.qq.com',
@@ -47,6 +48,8 @@ def domain_is(url, domain):
 
 
 def error_label(error):
+    if isinstance(error, VideoTransportError):
+        return str(error)
     if isinstance(error, urllib.error.HTTPError):
         return 'HTTP ' + str(error.code)
     if isinstance(error, urllib.error.URLError):
@@ -174,6 +177,8 @@ def webpage_metadata(raw):
                 continue
             if isinstance(node, dict):
                 if 'VideoObject' in str(node.get('@type', '')):
+                    if isinstance(node.get('name'), str) and node['name'].strip():
+                        result['_structured_video'] = True
                     for target, key in (('title', 'name'), ('description', 'description'), ('published', 'uploadDate'), ('duration', 'duration')):
                         if node.get(key):
                             result[target] = clean_text(node[key], 10000 if target == 'description' else 500)
@@ -186,12 +191,31 @@ def webpage_metadata(raw):
                 stack.extend((value, depth+1) for value in list(node.values())[:100] if isinstance(value, (dict, list)))
             elif isinstance(node, list):
                 stack.extend((value, depth+1) for value in node[:100])
+    # Parse public Bilibili page state as JSON only, never execute its JavaScript.
+    state_match = re.search(r'(?:window\.)?__INITIAL_STATE__\s*=\s*', raw)
+    if state_match:
+        try:
+            state, _ = json.JSONDecoder().raw_decode(raw[state_match.end():])
+            data = state.get('videoData') if isinstance(state, dict) else None
+            if isinstance(data, dict) and isinstance(data.get('title'), str) and data['title'].strip():
+                result['_structured_video'] = True
+                for target, key in (('title', 'title'), ('description', 'desc')):
+                    if data.get(key):
+                        result[target] = clean_text(data[key], 10000 if target == 'description' else 500)
+                if isinstance(data.get('owner'), dict):
+                    result['author'] = clean_text(data['owner'].get('name'), 200)
+                result['duration_seconds'] = data.get('duration')
+                result['published_timestamp'] = data.get('pubdate')
+        except (ValueError, TypeError):
+            pass
     # YouTube public player metadata; no paid endpoint calls or invented comments.
     match = re.search(r'(?:var\s+)?ytInitialPlayerResponse\s*=\s*', raw)
     if match:
         try:
             player, _ = json.JSONDecoder().raw_decode(raw[match.end():])
             details = player.get('videoDetails', {})
+            if details.get('title'):
+                result['_structured_video'] = True
             for target, key in (('title', 'title'), ('description', 'shortDescription'), ('author', 'author'), ('duration_seconds', 'lengthSeconds')):
                 if details.get(key):
                     result[target] = clean_text(details[key], 10000)
@@ -205,35 +229,11 @@ class PublicVideoFetcher:
         self.timeout = timeout
 
     @staticmethod
-    def validate_target(url):
-        if not clean_url(url):
-            raise ValueError('Link is not a readable public HTTP(S) page')
-        parsed = urllib.parse.urlsplit(url)
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80))
-        if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
-            raise ValueError('Only public internet video pages are supported')
+    def validate_target(url, proxy=''):
+        validate_video_target(url, proxy)
 
     def read(self, url, limit=2000000):
-        fetcher = self
-        class Redirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                fetcher.validate_target(newurl)
-                if urllib.parse.urlsplit(req.full_url).scheme == 'https' and urllib.parse.urlsplit(newurl).scheme != 'https':
-                    raise ValueError('HTTPS downgrade links are not followed')
-                return super().redirect_request(req, fp, code, msg, headers, newurl)
-        self.validate_target(url)
-        opener = urllib.request.build_opener(Redirect())
-        request = urllib.request.Request(url, headers={'User-Agent': 'GmnVideoBot/1.0 (public metadata)',
-            'Accept-Language': 'en-US,en;q=0.9', 'Accept': 'text/html,application/json'})
-        with opener.open(request, timeout=self.timeout) as response:
-            content_type = response.headers.get('Content-Type', '').lower()
-            if not any(kind in content_type for kind in ('text/html', 'application/json', 'text/json', 'application/ld+json')):
-                raise ValueError('Link is a video file or non-page resource; content cannot be inferred from a file alone')
-            body = response.read(limit+1)
-            if len(body) > limit:
-                raise ValueError('Page exceeds the collection limit')
-            encoding = response.headers.get_content_charset() or 'utf-8'
-            return response.geturl(), body.decode(encoding, errors='replace')
+        return read_video_page(url, timeout=self.timeout, limit=limit)
 
     def api_json(self, url):
         _, raw = self.read(url, 1000000)
@@ -278,9 +278,11 @@ class PublicVideoFetcher:
             # Resolve short links through public redirects, validating every target.
             final, raw = self.read(url)
             result['url'] = final
-            if any(word in raw.lower() for word in ('captcha', '\u4eba\u673a\u9a8c\u8bc1', '\u8bbf\u95ee\u8fc7\u4e8e\u9891\u7e41')):  # upstream challenge labels
+            metadata = webpage_metadata(raw)
+            structured = metadata.pop('_structured_video', False)
+            if not structured and any(word in raw.lower() for word in ('captcha', '\u4eba\u673a\u9a8c\u8bc1', '\u8bbf\u95ee\u8fc7\u4e8e\u9891\u7e41')):  # upstream challenge labels
                 raise RuntimeError('Page requires verification or is rate-limited')
-            result.update(webpage_metadata(raw))
+            result.update(metadata)
             if domain_is(final, 'bilibili.com'):
                 try:
                     data = self.bilibili(final)

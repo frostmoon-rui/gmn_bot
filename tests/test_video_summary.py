@@ -131,6 +131,23 @@ class VideoFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(self.ws.send.call_args.args[0])['action'], 'get_msg')
         self.assertEqual(self.jobs, [])
 
+    async def test_cached_explicit_quote_wins_over_a_newer_card(self):
+        self.service.observe(event([{'type': 'json', 'data': {'data': card('https://b23.tv/Quoted')}}], identifier=321))
+        self.service.observe(event([{'type': 'json', 'data': {'data': card('https://b23.tv/Newer')}}], identifier=322))
+        selected = []
+        def collect(candidate):
+            selected.append(candidate['url'])
+            return {'url': candidate['url'], 'title': 'Published title', 'description': 'Published description', 'comments': [], 'warnings': []}
+        self.service.fetcher.collect = collect
+        quoted = event([{'type': 'reply', 'data': {'id': '321'}},
+                        {'type': 'at', 'data': {'qq': '999'}},
+                        {'type': 'text', 'data': {'text': 'summarize video'}}])
+        await self.service.command(quoted, 'summarize video', True, self.ws)
+        await asyncio.gather(*self.jobs)
+        self.assertEqual(selected, ['https://b23.tv/Quoted'])
+        self.ws.send.assert_not_called()
+        self.ai.assert_awaited_once()
+
     async def test_raw_qq_video_not_sent_to_model(self):
         original = event([{'type': 'video', 'data': {'url': 'https://example.com/raw.mp4', 'file': 'id'}}])
         await self.service.command(original, 'summarize video', True, self.ws)
