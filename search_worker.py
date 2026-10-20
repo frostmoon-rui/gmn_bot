@@ -9,6 +9,7 @@ import urllib.request
 import urllib.error
 import time
 from html.parser import HTMLParser
+from wikipedia_diagnostics import wikipedia_languages, wiki_error_label, WikipediaFetchError
 
 
 OPENAI_TOPIC = re.compile(r'(?<![a-z0-9_])(?:chatgpt|gpt)(?![a-z_])|(?<![a-z0-9_])openai(?![a-z0-9_])', re.I)
@@ -112,16 +113,26 @@ def _wikipedia_api(query, language, topic=None):
 
 
 def wikipedia(query, language, topic=None):
+    api_failure = 'no matching article'
     try:
         pages = _wikipedia_api(query, language, topic)
         if pages:
             return pages
-    except Exception:
-        pass
+    except Exception as error:
+        api_failure = wiki_error_label(error)
+        if isinstance(error, urllib.error.HTTPError) and error.code == 429:
+            raise WikipediaFetchError('API HTTP 429; paused requests for this language') from None
     from research_transport import crawl_public_page
     title = topic or search_topic(query)
     url = f'https://{language}.wikipedia.org/wiki/' + urllib.parse.quote(title.replace(' ', '_'), safe='')
-    text = crawl_public_page(url)
+    try:
+        text = crawl_public_page(url)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return []
+        raise WikipediaFetchError('article ' + wiki_error_label(error) + '; API ' + api_failure) from None
+    except Exception as error:
+        raise WikipediaFetchError('article ' + wiki_error_label(error) + '; API ' + api_failure) from None
     if not text.strip() or 'Wikipedia does not have an article with this exact name' in text:
         return []
     return [{'url': url, 'title': title, 'text': text, 'source': 'Wikipedia background page'}]
@@ -160,12 +171,16 @@ def collect(query, mode='web', topic=''):
         # The model selects encyclopedia intent and topic. Fetch relevant articles first; sufficient results skip search engines.
         wiki_pages = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            jobs = [pool.submit(wikipedia, query, language, topic or None) for language in ('en', 'zh')]
-            for job in jobs:
+            jobs = [(pool.submit(wikipedia, query, language, topic or None), language)
+                    for language in wikipedia_languages(query, topic)]
+            for job, language in jobs:
                 try:
-                    wiki_pages.extend(job.result())
+                    values = job.result()
+                    wiki_pages.extend(values)
+                    if not values:
+                        warnings.append('Wikipedia [' + language + ']: no matching article')
                 except Exception as error:
-                    warnings.append('Wikipedia: ' + type(error).__name__)
+                    warnings.append('Wikipedia [' + language + ']: ' + wiki_error_label(error))
         if wiki_pages:
             pages = prepare_pages(wiki_pages)
             if pages:
@@ -191,16 +206,19 @@ def collect(query, mode='web', topic=''):
             warnings.append('Google: ' + str(error))
         jobs = [(pool.submit(alternative_search, search_query), 'Fallback web search')]
         if mode != 'wiki':
-            jobs += [(pool.submit(wikipedia, query, language, topic or None), 'Wikipedia') for language in ('zh', 'en')]
+            jobs += [(pool.submit(wikipedia, query, language, topic or None), 'Wikipedia [' + language + ']')
+                     for language in wikipedia_languages(query, topic)]
         for task, source in jobs:
             try:
                 values = task.result()
-                if source == 'Wikipedia':
+                if source.startswith('Wikipedia ['):
                     pages.extend(values)
+                    if not values:
+                        warnings.append(source + ': no matching article')
                 else:
                     urls.extend(url for url in values if url not in urls)
             except Exception as error:
-                warnings.append(source + ': ' + str(error))
+                warnings.append(source + ': ' + (wiki_error_label(error) if source.startswith('Wikipedia [') else str(error)))
         # Reuse public-address validation and bounded page retrieval without loading the live bot.
         from research_transport import crawl_public_page
         def fetch(url):
