@@ -235,6 +235,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 AVAILABLE_CHAT_MODELS = []
 AVAILABLE_ORGANIZER_MODELS = []
 AVAILABLE_RESEARCH_MODELS = []
+RESEARCH_PAID_ENABLED = True
 chat_histories = defaultdict(list)
 gpt_chat_histories = defaultdict(list)
 claude_chat_histories = defaultdict(list)
@@ -548,7 +549,7 @@ def init_chat_models():
             name = m.name.replace("models/", "")
             lowered = name.lower()
             actions = getattr(m, 'supported_actions', None)
-            if is_research_model(name) and (not actions or 'generateContent' in actions):
+            if (is_research_model(name) or name == 'gemini-3.8-flash') and (not actions or 'generateContent' in actions):
                 valid_research.append(name)
             if any(k in lowered for k in EXCLUDE): continue
             if not lowered.startswith("gemini-"): continue
@@ -575,7 +576,7 @@ def init_chat_models():
         AVAILABLE_CHAT_MODELS = sorted(valid, key=score, reverse=True)
 
         AVAILABLE_ORGANIZER_MODELS = sorted(set(valid_pro), key=research_model_score, reverse=True)
-        AVAILABLE_RESEARCH_MODELS = rank_research_models(valid_research)
+        AVAILABLE_RESEARCH_MODELS = [name for name in ('gemini-4-argon', 'gemini-3.8-flash') if name in valid_research]
     except Exception:
         AVAILABLE_CHAT_MODELS = [
             "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -584,7 +585,7 @@ def init_chat_models():
             "gemini-2.0-flash-lite"
         ]
         AVAILABLE_ORGANIZER_MODELS = ["gemini-3.1-pro-preview"]
-        AVAILABLE_RESEARCH_MODELS = ["gemini-4-argon", "gemini-3.1-pro-preview"]
+        AVAILABLE_RESEARCH_MODELS = ["gemini-4-argon", "gemini-3.8-flash"]
     print(f">>> Fast conversation queue: {AVAILABLE_CHAT_MODELS}\n")
     print(f">>> Notebook Pro organization queue: {AVAILABLE_ORGANIZER_MODELS}\n")
     print(f">>> Research candidates (validated when called): {AVAILABLE_RESEARCH_MODELS}\n")

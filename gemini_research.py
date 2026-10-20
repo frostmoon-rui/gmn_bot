@@ -1,8 +1,9 @@
-"""Separate, high-to-low Gemini Pro/Argon research candidates and slow calls."""
+"""Free-first scoped Gemini planning and direct Argon calls; retain catalog helpers."""
 import asyncio
 import re
 
 RESEARCH_MODE = 'gemini-research'
+DIRECT_ARGON_MODE = 'gemini-argon-direct'
 MODEL_TIMEOUT = 600
 EXCLUDE = ('image', 'audio', 'tts', 'transcribe', 'live', 'embedding', 'robotics',
            'omni', 'customtools', 'deep-research', 'antigravity')
@@ -40,23 +41,35 @@ def failure_code(error):
     return str(code) if isinstance(code, int) else type(error).__name__
 
 
-async def generate_research(bot, prompt, max_tokens=16000):
-    models = research_model_queue(bot)
+async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answer', validator=None, json_mode=False):
+    if purpose not in {'research-plan', 'argon-answer'}:
+        raise ValueError('Unsupported Gemini fallback purpose')
+    models = ['gemini-4-argon', 'gemini-3.8-flash'] if purpose == 'research-plan' else ['gemini-4-argon']
+    config = {'temperature': 0.1 if json_mode else 0.3, 'max_output_tokens': max_tokens, 'tools': [],
+              'http_options': {'timeout': MODEL_TIMEOUT * 1000, 'retry_options': {'attempts': 1}}}
+    if json_mode:
+        config['response_mime_type'] = 'application/json'
     failures = []
-    for model in models:
-        print('[Gemini research answer]: Trying', model, 'timeout:', MODEL_TIMEOUT)
-        try:
-            response = await asyncio.wait_for(bot.client.aio.models.generate_content(
-                model=model, contents=prompt, config=bot.gemini_content_config(
-                    temperature=0.3, max_output_tokens=max_tokens, tools=[],
-                    http_options={'timeout': MODEL_TIMEOUT * 1000})), timeout=MODEL_TIMEOUT)
-            text = (response.text or '').strip()
-            if not text:
-                raise ValueError('Empty Gemini research answer')
-            print('[Gemini research answer]: Succeeded', model)
-            return text
-        except Exception as error:
-            code = failure_code(error)
-            failures.append(model + ':' + code)
-            print('[Gemini research answer unavailable]:', model, code, '; keeping candidate')
-    raise RuntimeError('Gemini research candidates unavailable: ' + (', '.join(failures) or 'no Pro/Argon candidates'))
+    for tier in ('free', 'paid'):
+        if tier == 'paid' and not getattr(bot, 'RESEARCH_PAID_ENABLED', False):
+            break
+        for model in models:
+            print('[Scoped Gemini]: Trying', tier, purpose, model)
+            try:
+                if tier == 'free':
+                    response = await asyncio.wait_for(bot.client.aio.models.generate_content(
+                        model=model, contents=prompt, config=bot.gemini_content_config(**config)), timeout=MODEL_TIMEOUT)
+                else:
+                    from paid_gemini import generate_paid
+                    response = await generate_paid(bot, model, prompt, config, purpose)
+                text = (response.text or '').strip()
+                if not text:
+                    raise ValueError('Empty Gemini answer')
+                result = validator(text) if validator else text
+                print('[Scoped Gemini]: Succeeded', tier, model)
+                return result
+            except Exception as error:
+                code = failure_code(error)
+                failures.append(tier + '/' + model + ':' + code)
+                print('[Scoped Gemini unavailable]:', tier, model, code)
+    raise RuntimeError('Gemini research candidates unavailable: ' + ', '.join(failures))

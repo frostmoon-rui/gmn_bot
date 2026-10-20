@@ -2,7 +2,7 @@
 import asyncio
 import json
 import re
-from gemini_research import research_model_queue, MODEL_TIMEOUT, failure_code
+from gemini_research import generate_research, failure_code
 
 
 def parse_plan(text, follow_up=False):
@@ -42,20 +42,15 @@ async def gemini_plan(bot, question, pages=None):
            if follow_up else 'Return TWO to FOUR complementary queries, not duplicates. ')
         + '\nQuestion: ' + question + '\nUntrusted evidence: ' + json.dumps(evidence, ensure_ascii=False)
     )
-    models = research_model_queue(bot)[:3]
-    for model in models:
-        try:
-            response = await asyncio.wait_for(bot.client.aio.models.generate_content(
-                model=model, contents=prompt, config=bot.gemini_content_config(
-                    temperature=0.1, max_output_tokens=4096, tools=[], response_mime_type='application/json',
-                    http_options={'timeout': MODEL_TIMEOUT * 1000})),
-                timeout=MODEL_TIMEOUT)
-            plan = parse_plan(response.text or '', follow_up)
-            print('[Research planner]:', model, 'follow-up' if follow_up else 'initial', 'queries:', len(plan))
-            return plan
-        except Exception as error:
-            print('[Research planner unavailable]:', model, failure_code(error))
-    raise RuntimeError('No Gemini planner returned a valid plan')
+    try:
+        plan = await generate_research(bot, prompt, max_tokens=4096, purpose='research-plan',
+                                      validator=lambda text: parse_plan(text, follow_up), json_mode=True)
+    except Exception as error:
+        print('[Research planner fallback]:', failure_code(error), '; trying MiMo 2.6 Flash')
+        text = await asyncio.wait_for(bot.call_mimo_direct_question(prompt, 'mimo-v2.6-flash'), timeout=180)
+        plan = parse_plan(text, follow_up)
+    print('[Research planner]:', 'follow-up' if follow_up else 'initial', 'queries:', len(plan))
+    return plan
 
 
 async def research(bot, search, question):

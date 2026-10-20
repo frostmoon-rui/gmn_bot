@@ -42,7 +42,7 @@ class RankingTests(unittest.TestCase):
                      're': __import__('re')}
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), namespace)
         namespace['init_chat_models']()
-        self.assertEqual(namespace['AVAILABLE_RESEARCH_MODELS'], ['gemini-4-argon', 'gemini-3.1-pro-preview'])
+        self.assertEqual(namespace['AVAILABLE_RESEARCH_MODELS'], ['gemini-4-argon', 'gemini-3.8-flash'])
         self.assertEqual(namespace['AVAILABLE_CHAT_MODELS'], ['gemini-3.8-flash'])
 
 
@@ -70,16 +70,16 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
             code = 429
         bot = self.bot([QuotaError(), SimpleNamespace(text='Pro answer')])
         before = research_model_queue(bot)
-        self.assertEqual(await generate_research(bot, 'Question'), 'Pro answer')
+        self.assertEqual(await generate_research(bot, 'Question', purpose='research-plan'), 'Pro answer')
         self.assertEqual(before, research_model_queue(bot))
         self.assertEqual([call.kwargs['model'] for call in bot.client.aio.models.generate_content.call_args_list],
-                         ['gemini-4-argon', 'gemini-3.1-pro-preview'])
+                         ['gemini-4-argon', 'gemini-3.8-flash'])
 
     async def test_empty_and_timeout_answers_try_next_candidate_once(self):
         for error in (TimeoutError(), None):
             first = SimpleNamespace(text='') if error is None else error
             bot = self.bot([first, SimpleNamespace(text='Answer')])
-            self.assertEqual(await generate_research(bot, 'Question'), 'Answer')
+            self.assertEqual(await generate_research(bot, 'Question', purpose='research-plan'), 'Answer')
             self.assertEqual(bot.client.aio.models.generate_content.await_count, 2)
 
     async def test_all_failed_candidates_remain_available_for_future_requests(self):

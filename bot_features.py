@@ -43,7 +43,8 @@ HELP = {'website': 'Website interaction (mention me in groups; send directly in 
           'trigger a reply.',
  'search': '🔎 Search (allowlisted users)\n'
            'search:question → Python retrieval + MiMo 2.6 Flash summary\n'
-           'ask assistant:question → Gemini Pro/Argon planning + Python retrieval + detailed Gemini answer\n'
+           'ask assistant:question → Gemini planning + Python retrieval + MiMo 2.6 Pro synthesis\n'
+           'gemini4argon answer:question → Argon only; mention me in groups\n'
            'The conversation model decides when ordinary questions need current evidence or an '
            'encyclopedia lookup. Wiki is queried as needed.\n'
            'Ordinary search gives short replies within 5 minutes; explicit research is detailed with no overall deadline. '

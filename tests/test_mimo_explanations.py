@@ -15,9 +15,12 @@ class ExplanationTests(unittest.IsolatedAsyncioTestCase):
             remember_search_result=AsyncMock(), describe_api_error=str)
         self.generate = AsyncMock(return_value=('Concepts can be represented without words. ' * 12)
                                   + '\n\nImages and actions provide examples. ' * 4)
-        generator_patch = patch('mimo_explanations.generate_research', self.generate)
+        generator_patch = patch('mimo_explanations.synthesize', self.generate)
         generator_patch.start()
         self.addCleanup(generator_patch.stop)
+        planner_patch = patch('deep_research.gemini_plan', side_effect=RuntimeError('planner unavailable'))
+        planner_patch.start()
+        self.addCleanup(planner_patch.stop)
         self.ext = Extensions.__new__(Extensions)
         self.ext.b = self.bot
         self.ext.search_users = {10}

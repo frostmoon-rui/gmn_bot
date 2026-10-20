@@ -16,7 +16,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
 from reply_style import compact_reply, concise_source, english_provider_text
-from gemini_research import RESEARCH_MODE
+from gemini_research import RESEARCH_MODE, generate_research
 from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
@@ -486,9 +486,10 @@ class Extensions:
             return 'Important allowlist updated.'
         if text == 'view important allowlist':
             return json.dumps(self.important, ensure_ascii=False) if master else 'Only the original admin can view this.'
-        match = re.fullmatch(r'(web search|search report|search|ask assistant)\s*[:：]\s*(.+)', text, re.S)
+        match = re.fullmatch(r'(web search|search report|search|ask assistant|gemini4argon answer)\s*[:：]\s*(.+)', text, re.S | re.I)
         if match:
-            if match[1] == 'search' and kind == 'group' and not mentioned:
+            direct_argon = match[1].lower() == 'gemini4argon answer'
+            if (match[1] == 'search' or direct_argon) and kind == 'group' and not mentioned:
                 return None
             if not whitelist:
                 return 'Research reports are available only to allowlisted users.'
@@ -499,11 +500,34 @@ class Extensions:
             if len(match[2]) > 2000:
                 return 'Keep the research question within 2000 characters.'
             self.search_users.add(user)
+            if direct_argon:
+                self.spawn(self.argon_job(ws, kind, group, user, match[2]))
+                return 'Argon is thinking in the background; an answer will follow.'
             model = RESEARCH_MODE if match[1] == 'ask assistant' else 'mimo-v2.6-flash'
             self.spawn(self.search_job(ws, kind, group, user, match[2], model))
             return ('The assistant is researching in the background; an answer will follow.'
                     if model == RESEARCH_MODE else 'Research is running in the background; a short conclusion will follow.')
         return None
+
+    async def argon_job(self, ws, kind, group, user, query):
+        from mimo_explanations import explanation_prompt, explanation_reply, reply_chunks
+        try:
+            prompt = explanation_prompt(query, {'pages': []}, datetime.now(SHANGHAI).isoformat(),
+                                        'English')
+            answer = await generate_research(self.b, prompt, max_tokens=8192, purpose='argon-answer')
+            report = explanation_reply(answer)
+            if not report:
+                raise ValueError('Empty Argon answer')
+            self.remember_sources(kind, group, user, [])
+            for chunk in reply_chunks(report):
+                await self.send(ws, kind, group, user, chunk)
+            if hasattr(self.b, 'remember_search_result'):
+                await self.b.remember_search_result(kind, group, user, query, report)
+        except Exception as error:
+            print('[Direct Argon answer failed]:', type(error).__name__)
+            await self.send(ws, kind, group, user, 'Argon is temporarily unavailable. Please try later.')
+        finally:
+            self.search_users.discard(user)
 
     def remember_sources(self, kind, group, user, urls):
         urls = list(dict.fromkeys(value for url in urls if (value := concise_source(url))))
@@ -587,20 +611,20 @@ class Extensions:
             except Exception as error:
                 if model != RESEARCH_MODE:
                     raise
-                print('[Pro research fallback]:', type(error).__name__, '; continuing with Gemini Pro/Argon')
+                print('[Pro research fallback]:', type(error).__name__, '; continuing with MiMo 2.6 Pro')
                 result = {'pages': [], 'warnings': []}
             pages = result.get('pages', [])
             for warning in result.get('warnings', []):
                 print('[Python research notice]:', warning)
             if model == RESEARCH_MODE:
                 from mimo_explanations import explain, reply_chunks
-                print('[Detailed research answer]: Gemini Pro/Argon; retrieved pages:', len(pages))
+                print('[Detailed research answer]: MiMo 2.6 Pro; retrieved pages:', len(pages))
                 self.remember_sources(kind, group, user, [p['url'] for p in pages if p.get('url')])
                 try:
                     report = await explain(self.b, query, result, now, 'English')
                 except Exception as error:
                     print('[Detailed Pro answer failed]:', self.b.describe_api_error(error))
-                    await self.send(ws, kind, group, user, 'The Gemini research models are temporarily unavailable. Please try later.')
+                    await self.send(ws, kind, group, user, 'The assistant could not complete the answer. Please try later.')
                     return
                 for chunk in reply_chunks(report):
                     await self.send(ws, kind, group, user, chunk)
