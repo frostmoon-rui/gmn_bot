@@ -78,11 +78,8 @@ class Links(HTMLParser):
 
 
 def read(url, limit=900000):
-    request = urllib.request.Request(url, headers={
-        'User-Agent': 'GmnResearchBot/1.0 (personal research; Python urllib)',
-        'Accept-Language': 'en,en-US;q=0.9'})
-    with urllib.request.urlopen(request, timeout=18) as response:
-        return response.read(limit).decode('utf-8', errors='replace')
+    from research_transport import read_public_page
+    return read_public_page(url, limit)
 
 
 def google(query, recent=False):
@@ -97,7 +94,7 @@ def google(query, recent=False):
     return parser.links[:18]
 
 
-def wikipedia(query, language, topic=None):
+def _wikipedia_api(query, language, topic=None):
     topic = topic or search_topic(query)
     root = f'https://{language}.wikipedia.org/w/api.php?'
     found = json.loads(read(root + urllib.parse.urlencode({'action': 'query', 'list': 'search',
@@ -112,6 +109,22 @@ def wikipedia(query, language, topic=None):
             pages.append({'url': item.get('fullurl', ''), 'title': item.get('title', ''),
                 'text': item.get('extract', ''), 'source': 'Wikipedia (background article; verify recency)'})
     return pages
+
+
+def wikipedia(query, language, topic=None):
+    try:
+        pages = _wikipedia_api(query, language, topic)
+        if pages:
+            return pages
+    except Exception:
+        pass
+    from research_transport import crawl_public_page
+    title = topic or search_topic(query)
+    url = f'https://{language}.wikipedia.org/wiki/' + urllib.parse.quote(title.replace(' ', '_'), safe='')
+    text = crawl_public_page(url)
+    if not text.strip() or 'Wikipedia does not have an article with this exact name' in text:
+        return []
+    return [{'url': url, 'title': title, 'text': text, 'source': 'Wikipedia background page'}]
 
 
 def search_topic(query):
@@ -147,7 +160,7 @@ def collect(query, mode='web', topic=''):
         # The model selects encyclopedia intent and topic. Fetch relevant articles first; sufficient results skip search engines.
         wiki_pages = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            jobs = [pool.submit(wikipedia, query, language, topic or None) for language in ('zh', 'en')]
+            jobs = [pool.submit(wikipedia, query, language, topic or None) for language in ('en', 'zh')]
             for job in jobs:
                 try:
                     wiki_pages.extend(job.result())
@@ -165,9 +178,11 @@ def collect(query, mode='web', topic=''):
         # Serialize Google requests and stop this round on rate limits; never bypass CAPTCHA.
         search_query = ('site:openai.com OR site:developers.openai.com ' + query) if seeds else query
         try:
-            urls.extend(url for url in google(search_query, True) if url not in urls)
-            time.sleep(2)
-            urls.extend(url for url in google(search_query, False) if url not in urls)
+            recent = mode == 'latest' or is_recent_query(query)
+            urls.extend(url for url in google(search_query, recent) if url not in urls)
+            if recent:
+                time.sleep(2)
+                urls.extend(url for url in google(search_query, False) if url not in urls)
         except urllib.error.HTTPError as error:
             warnings.append(f'Google HTTP {error.code}: stopped Google requests this round; using fallback search and direct official pages')
             # Respect rate limits, back off and use an independent fallback instead of hammering Google.
@@ -187,10 +202,10 @@ def collect(query, mode='web', topic=''):
             except Exception as error:
                 warnings.append(source + ': ' + str(error))
         # Reuse public-address validation and bounded page retrieval without loading the live bot.
-        from bot_extensions import Extensions
+        from research_transport import crawl_public_page
         def fetch(url):
             try:
-                text = Extensions.crawl(None, url)
+                text = crawl_public_page(url)
                 if text.strip():
                     return {'url': url, 'text': text, 'source': 'Direct official page' if url in seeds else 'Search page',
                         'dates_found': sorted(set(re.findall(r'20\d{2}[-/]\d{1,2}[-/]\d{1,2}', text)))[:30]}

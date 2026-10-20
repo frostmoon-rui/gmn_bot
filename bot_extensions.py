@@ -500,7 +500,7 @@ class Extensions:
             self.search_users.add(user)
             model = 'mimo-v2.6-pro' if match[1] == 'ask assistant' else 'mimo-v2.6-flash'
             self.spawn(self.search_job(ws, kind, group, user, match[2], model))
-            return ('Research is running in the background; MiMo 2.6 Pro will give a detailed answer even if retrieval finds no pages.'
+            return ('The assistant is researching in the background; an answer will follow.'
                     if model == 'mimo-v2.6-pro' else 'Research is running in the background; a short conclusion will follow.')
         return None
 
@@ -544,7 +544,7 @@ class Extensions:
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             output, errors = await asyncio.wait_for(process.communicate(
-                json.dumps({'query': query, 'mode': mode, 'topic': topic}, ensure_ascii=False).encode('utf-8')), timeout=160)
+                json.dumps({'query': query, 'mode': mode, 'topic': topic}, ensure_ascii=False).encode('utf-8')), timeout=360)
             if process.returncode:
                 raise RuntimeError('Python research process failed: ' + errors.decode('utf-8', errors='replace')[-2000:])
             return json.loads(output)
@@ -578,7 +578,11 @@ class Extensions:
             print('[Research]: Independent Python process started Google and Wikipedia retrieval')
             now = datetime.now(SHANGHAI).isoformat()
             try:
-                result = await self.python_search(query, mode, topic)
+                if model == 'mimo-v2.6-pro':
+                    from deep_research import research
+                    result = await research(self.b, self.python_search, query)
+                else:
+                    result = await self.python_search(query, mode, topic)
             except Exception as error:
                 if model != 'mimo-v2.6-pro':
                     raise
@@ -588,7 +592,7 @@ class Extensions:
             for warning in result.get('warnings', []):
                 print('[Python research notice]:', warning)
             if model == 'mimo-v2.6-pro':
-                from mimo_explanations import explain
+                from mimo_explanations import explain, reply_chunks
                 print('[Detailed Pro answer]: MiMo 2.6 Pro; retrieved pages:', len(pages))
                 self.remember_sources(kind, group, user, [p['url'] for p in pages if p.get('url')])
                 try:
@@ -597,7 +601,8 @@ class Extensions:
                     print('[Detailed Pro answer failed]:', self.b.describe_api_error(error))
                     await self.send(ws, kind, group, user, 'MiMo 2.6 Pro timed out or failed to answer; missing search material did not block the request. Please try later.')
                     return
-                await self.send(ws, kind, group, user, report)
+                for chunk in reply_chunks(report):
+                    await self.send(ws, kind, group, user, chunk)
                 if hasattr(self.b, 'remember_search_result'):
                     await self.b.remember_search_result(kind, group, user, query, report)
                 return
@@ -631,7 +636,10 @@ class Extensions:
             if hasattr(self.b, 'remember_search_result'):
                 await self.b.remember_search_result(kind, group, user, query, report)
         try:
-            await asyncio.wait_for(run(), timeout=300)
+            if model == 'mimo-v2.6-pro':
+                await run()
+            else:
+                await asyncio.wait_for(run(), timeout=300)
         except Exception as error:
             detail = self.b.describe_api_error(error)
             print('[Research report failed]:', type(error).__name__, detail)

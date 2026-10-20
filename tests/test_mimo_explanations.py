@@ -1,7 +1,8 @@
 """Explicit Pro requests still answer when research returns no evidence."""
+import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from bot_extensions import Extensions
 from mimo_explanations import MODEL, explanation_prompt, explanation_reply
@@ -76,6 +77,19 @@ class ExplanationTests(unittest.IsolatedAsyncioTestCase):
         self.bot.remember_search_result.assert_not_called()
         self.assertNotIn(10, self.ext.search_users)
 
+    async def test_pro_has_no_five_minute_job_deadline(self):
+        with patch('bot_extensions.asyncio.wait_for', wraps=asyncio.wait_for) as wait:
+            await self.run_pro()
+        self.assertNotIn(300, [call.kwargs.get('timeout') for call in wait.call_args_list])
+
+    async def test_long_pro_report_is_sent_in_complete_chunks(self):
+        self.bot.call_mimo_direct_question.return_value = 'a' * 12000
+        await self.run_pro()
+        parts = [call.args[-1] for call in self.ext.send.call_args_list]
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(part) <= 2800 for part in parts))
+        self.assertEqual(''.join(parts), 'a' * 12000)
+
 
 class ExplanationFormattingTests(unittest.TestCase):
     def test_prompt_distinguishes_knowledge_hypotheses_and_untrusted_pages(self):
@@ -87,4 +101,4 @@ class ExplanationFormattingTests(unittest.TestCase):
     def test_thinking_is_removed_and_output_is_bounded(self):
         answer = explanation_reply('<think>private reasoning</think>First paragraph.\n\nSecond paragraph.')
         self.assertEqual(answer, 'First paragraph.\n\nSecond paragraph.')
-        self.assertLessEqual(len(explanation_reply('x' * 10000)), 6000)
+        self.assertLessEqual(len(explanation_reply('x' * 20000)), 16000)

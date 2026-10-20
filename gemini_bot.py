@@ -1014,7 +1014,7 @@ async def call_mimo_direct_question(question: str, model_name: str = None) -> st
             {"http": TARGET_PROXY, "https": TARGET_PROXY}
         ) if TARGET_PROXY else urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(request, timeout=150) as response:
+        with opener.open(request, timeout=600 if payload['model'] == 'mimo-v2.6-pro' else 150) as response:
             return json.loads(response.read().decode("utf-8"))
 
     response_data = await asyncio.to_thread(_request)
