@@ -39,3 +39,9 @@ Public page identifiers: `home`, `about`, `friends`, `resources`, `food`, `proje
 Only one capture runs at a time. Repeated requests from the same user are limited to one every 30 seconds. No arbitrary URL, private address, owner endpoint, navigation redirect, download, POST or external tracking request is allowed. Necessary Amap subresources are restricted to the existing provider domains. Page content changes are reflected at the next explicit capture; no periodic synchronization or screenshot cache is used. Output is a bounded PNG sent as a OneBot `base64://` image segment to the requesting chat, never added to the sticker collection.
 
 Install the optional dependencies yourself before using the feature. Offline tests mock browser behavior; they do not start the bot, open websites or send QQ messages.
+
+## Connectivity diagnostics
+
+Captures already use the public `https://frostmoonrui.com` website, not the local food-map server. `WEBSITE_PROXY` optionally selects a loopback HTTP proxy. When unset or null, the system HTTPS/HTTP proxy is detected; an empty string explicitly requests a direct connection. Remote proxies, credentials and unsupported proxy formats are rejected.
+
+The local terminal reports the runtime, browser source, proxy mode and failing stage (such as `browser-launch`, `navigation` or `fonts-ready`) with a safe error code. A transient connection reset, closure, change or timeout gets one navigation retry. Certificate checks and the Chromium sandbox remain enabled. If capture fails, the requesting chat receives the corresponding public page link and diagnostic code, never a stale image. Restart the running bot when ready to load updated Python code.

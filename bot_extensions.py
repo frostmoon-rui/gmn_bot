@@ -20,7 +20,7 @@ from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
 from earthquake_feed import EarthquakeFeed
-from website_snapshots import capture as capture_website, SnapshotError, PAGES as WEBSITE_PAGES
+from website_snapshots import capture as capture_website, page_url as website_page_url, SnapshotError, PAGES as WEBSITE_PAGES
 from weather_history import WeatherHistory, weather_instructions, tidy_weather_reply
 from weather_providers import WeatherAggregator, open_meteo, request_json as request_weather_json, day_string
 
@@ -753,7 +753,8 @@ class Extensions:
                 print('[Website screenshot] Completed for the requesting chat only; not added as a sticker.')
             except SnapshotError as error:
                 print('[Website screenshot failed]', str(error))
-                await self.send(ws, kind, group, user, 'Website capture failed. Check the browser components and HTTPS connection; details are in the local terminal.')
+                await self.send(ws, kind, group, user, 'Website screenshot unavailable. Open the public page: ' + website_page_url(page, language)
+                                + '\nDiagnostic: ' + error.stage + '/' + error.code + ' (details are in the local terminal).')
 
     async def amap_job(self, ws, kind, group, user, operation, query):
         async with self.amap_gate:

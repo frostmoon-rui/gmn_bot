@@ -82,6 +82,9 @@ class WebsiteCommandTests(unittest.IsolatedAsyncioTestCase):
 
 class WebsiteBrowserTests(unittest.TestCase):
     def browser_fixture(self, status=200, raw=None):
+        proxy_patch = patch('website_snapshots.screenshot_proxy', return_value='')
+        proxy_patch.start()
+        self.addCleanup(proxy_patch.stop)
         import io
         from PIL import Image
         from unittest.mock import MagicMock
