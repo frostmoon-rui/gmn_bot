@@ -2,6 +2,7 @@
 import io
 import json
 import socket
+import ssl
 import tempfile
 import unittest
 import urllib.error
@@ -31,7 +32,11 @@ class FoodTransportTests(unittest.TestCase):
         return value, opener
 
     def test_clash_fake_ip_uses_https_hostname_tunnel_via_loopback_proxy(self):
-        value, opener = self.read('198.18.0.46', 'http://127.0.0.1:7897')
+        output = io.StringIO()
+        with redirect_stdout(output):
+            value, opener = self.read('198.18.0.46', 'http://127.0.0.1:7897')
+        self.assertIn('[OK]', output.getvalue())
+        self.assertNotIn('Fake-IP detected', output.getvalue())
         self.assertEqual(value, DOCUMENT)
         request = opener.open.call_args.args[0]
         self.assertEqual(request.host, '127.0.0.1:7897')
@@ -117,6 +122,19 @@ class FoodTransportTests(unittest.TestCase):
         for error in (ValueError('secret body'), OSError('secret body'), FoodSourceError('secret body')):
             self.assertNotIn('secret', source_error_reason(error))
         self.assertEqual(source_error_reason(urllib.error.HTTPError(URL, 429, 'private detail', {}, None)), 'http-status-429')
+
+    def test_failed_json_does_not_log_transport_success(self):
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(json.JSONDecodeError):
+            self.read('198.18.0.46', 'http://127.0.0.1:7897', body=b'not-json')
+        self.assertNotIn('[OK]', output.getvalue())
+
+    def test_wrapped_network_failures_have_actionable_safe_codes(self):
+        for reason, expected in ((ssl.SSLError('secret'), 'tls-failed'),
+                                 (TimeoutError('secret'), 'timeout'),
+                                 (ConnectionRefusedError('secret'), 'connection-refused-check-local-proxy'),
+                                 (socket.gaierror('secret'), 'dns-failed')):
+            self.assertEqual(source_error_reason(urllib.error.URLError(reason)), expected)
 
     def test_sync_failure_preserves_last_success_and_records_a_specific_reason(self):
         with tempfile.TemporaryDirectory() as directory:

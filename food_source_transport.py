@@ -77,13 +77,14 @@ def fetch_public_json(url, proxy=None):
     if selected:
         request.set_proxy(urllib.parse.urlsplit(selected).netloc, 'http')
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    if fake:
-        print('[Food source transport]: Fake-IP detected; using the configured local HTTP proxy')
     with opener.open(request, timeout=8) as response:
         raw = response.read(LIMIT + 1)
     if len(raw) > LIMIT:
         raise FoodSourceError('response-too-large')
-    return json.loads(raw)
+    document = json.loads(raw)
+    if fake:
+        print('[Food source transport][OK]: JSON received through the local proxy (Clash DNS compatibility)')
+    return document
 
 
 def source_error_reason(error):
@@ -104,5 +105,14 @@ def source_error_reason(error):
     if isinstance(error, ValueError):
         return 'invalid-feed-schema'
     if isinstance(error, urllib.error.URLError):
+        reason = error.reason
+        if isinstance(reason, ssl.SSLError):
+            return 'tls-failed'
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return 'timeout'
+        if isinstance(reason, ConnectionRefusedError):
+            return 'connection-refused-check-local-proxy'
+        if isinstance(reason, socket.gaierror):
+            return 'dns-failed'
         return 'transport-failed'
     return 'source-unavailable'
