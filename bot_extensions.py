@@ -311,51 +311,19 @@ class Extensions:
         result = self.annotate_weather(result, {'capital_reference': bool(province_capital(location))})
         result = await asyncio.to_thread(self.weather_history.enrich, location, result)
         self.weather_cache[location] = (asyncio.get_running_loop().time(), result)
+        while len(self.weather_cache) > 32:
+            self.weather_cache.pop(next(iter(self.weather_cache)))
         return result
 
     async def google_weather_source(self, normalized, location):
-        base = {'key': self.key, 'location.latitude': normalized['latitude'],
-                'location.longitude': normalized['longitude'], 'languageCode': 'en'}
-        query = urllib.parse.urlencode(dict(base, unitsSystem='METRIC'))
-        root = 'https://weather.googleapis.com/v1/'
-        routes = {'current': 'currentConditions:lookup?'+query, 'days': 'forecast/days:lookup?'+query+'&days=3',
-                  'hours': 'forecast/hours:lookup?'+query+'&hours=48', 'history': 'history/hours:lookup?'+query+'&hours=24',
-                  'alerts': 'publicAlerts:lookup?'+urllib.parse.urlencode(base)}
-        not_found = set()
-        async def one(name, route):
-            try:
-                return name, await asyncio.to_thread(request_weather_json, root+route)
-            except urllib.error.HTTPError as error:
-                if error.code == 404:
-                    not_found.add(name)
-                print('[Google weather component failed]:', name, 'HTTP', error.code)
-                return name, {}
-            except Exception as error:
-                print('[Google weather component failed]:', name, type(error).__name__)
-                return name, {}
-        parts = dict(await asyncio.gather(*(one(name, route) for name, route in routes.items())))
-        current = parts['current']
-        days = parts['days'].get('forecastDays', [])
-        if not current and not days:
-            if normalized.get('country_code') == 'CN' and {'current', 'days'} <= not_found:
-                self.unsupported_weather.add(location)
-            return None
-        day = day_string(days[0].get('displayDate')) if days else None
-        if not day:
-            day = str(current.get('currentTime', ''))[:10]
-        if not day_string(day):
-            return None
-        value = lambda obj: obj.get('degrees', 'unknown')
-        today = days[0] if days else {}
-        return {'source': 'Google Weather', 'local_date': day,
-            'report_time': current.get('currentTime'),
-            'desc': current.get('weatherCondition', {}).get('description', {}).get('text', 'unknown'),
-            'temp': value(current.get('temperature', {})), 'feels_like': value(current.get('feelsLikeTemperature', {})),
-            'min_temp': value(today.get('minTemperature', {})), 'max_temp': value(today.get('maxTemperature', {})),
-            'uv': current.get('uvIndex'), 'wind_kmph': current.get('wind', {}).get('speed', {}).get('value'),
-            'cloudCover': current.get('cloudCover'), 'precipitation': current.get('precipitation'),
-            'days': days, 'hours': parts['hours'].get('forecastHours', []),
-            'history_hours': parts['history'].get('historyHours', []), 'alerts': parts['alerts'] or None}
+        from google_weather_details import fetch_google
+        data, diagnostics, not_found = await fetch_google(normalized, self.key, request_weather_json, 'en')
+        if not hasattr(self, 'weather_endpoint_diagnostics'):
+            self.weather_endpoint_diagnostics = {}
+        self.weather_endpoint_diagnostics[location] = diagnostics
+        if not data and normalized.get('country_code') == 'CN' and {'current', 'days'} <= not_found:
+            self.unsupported_weather.add(location)
+        return data
 
     def annotate_weather(self, data, point):
         if data:
@@ -368,6 +336,21 @@ class Extensions:
 
     def weather_prompt(self, data, important=False):
         return '\nAdditional weather data: '+json.dumps(data, ensure_ascii=False)+weather_instructions(data, important)
+
+    def weather_report(self, data, target='today', important=False):
+        from weather_report import format_weather
+        return format_weather(data, target, translate=english_provider_text)
+
+    async def send_weather(self, ws, kind, group, user, report):
+        from weather_report import chunks
+        for index, chunk in enumerate(chunks(report)):
+            segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' and index == 0 else [])
+            segments.append({'type': 'text', 'data': {'text': self.admins.phrasing(chunk, user)}})
+            await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
+                'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
+                           'message': segments}}, ensure_ascii=False))
+            if index:
+                await asyncio.sleep(0.5)
 
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
         website = re.fullmatch(r'website screenshot(?:\s*:\s*(\S+))?(?:\s+(zh|en|ru|ja))?(?:\s+(dark|light))?', text, re.I)
@@ -693,16 +676,13 @@ class Extensions:
                         if not region.get('location'):
                             continue
                         data = await self.google_weather(region['location'])
-                        if not data or len(data.get('days', [])) < 2:
+                        from weather_report import has_tomorrow
+                        if not data or not has_tomorrow(data):
                             continue
-                        prompt = 'It is 22:30. Offer care and report tomorrow’s important weather, comparing with today. Use English.' + self.weather_prompt(data, True)
-                        prompt += '\nPerson: ' + json.dumps(self.people.get(user, {}), ensure_ascii=False)+self.admins.hint(user)
-                        answer = await self.b.call_gemini_with_history('night_weather_' + user, prompt)
-                        if answer.startswith(('Meow...', 'No model reply', 'This reply timed out', 'GPT cannot', 'Claude cannot', 'DeepSeek cannot')):
-                            continue
+                        answer = self.weather_report(data, target='tomorrow', important=True)
                         group = settings.get('group_id')
                         try:
-                            await self.send(self.b.active_ws, 'group' if group else 'private', group, int(user), tidy_weather_reply(answer))
+                            await self.send_weather(self.b.active_ws, 'group' if group else 'private', group, int(user), answer)
                         except asyncio.TimeoutError:
                             # An unknown receipt may still mean delivery; avoid repeating mentions every 20 seconds.
                             self.weather_state[user] = date
@@ -723,13 +703,12 @@ class Extensions:
                 await self.send(ws, kind, group, user, 'Bind your area first with set location:city.')
                 return
             data = await self.google_weather(region['location'])
-            if not data or len(data.get('days', [])) < 2:
+            from weather_report import has_tomorrow
+            if not data or not has_tomorrow(data):
                 await self.send(ws, kind, group, user, 'Tomorrow’s weather is unavailable; today’s data was not substituted.')
                 return
-            prompt = 'Report tomorrow’s forecast with its local date, a comparison to today, rain timing and practical advice. Use English and never reveal the specific location.'
-            answer = await self.b.call_gemini_with_history('tomorrow_' + str(user), prompt +
-                self.weather_prompt(data, str(user) in self.important)+self.admins.hint(user))
-            await self.send(ws, kind, group, user, tidy_weather_reply(answer))
+            answer = self.weather_report(data, target='tomorrow', important=str(user) in self.important)
+            await self.send_weather(ws, kind, group, user, answer)
         except Exception as error:
             print('[Tomorrow weather failed]:', str(error))
             await self.send(ws, kind, group, user, 'Tomorrow’s weather query failed. Please try later.')
@@ -813,6 +792,10 @@ class Extensions:
     async def amap_job(self, ws, kind, group, user, operation, query):
         async with self.amap_gate:
             try:
+                if operation == 'amap weather':
+                    data = await asyncio.to_thread(self.amap.client.weather, province_capital(query) or query)
+                    await self.send_weather(ws, kind, group, user, self.weather_report(data))
+                    return
                 scope = self.amap.scope(kind, group, user)
                 result = await asyncio.to_thread(self.amap.lookup, operation, query, scope)
                 segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])

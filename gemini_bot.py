@@ -2369,27 +2369,8 @@ async def handle_message_event(ws, data):
         else:
             w_data = await fetch_weather_info(target_loc)
             if w_data:
-                weather_prompt = f"""
-    {nickname} (QQ: {user_id}) is explicitly asking for the weather!
-    Privacy rule: never disclose any province, city, district or county name in group or private replies. Always say "your area".
-    Current data:
-    - Weather: {w_data.get('desc')}
-    - Temperature: low {w_data.get('min_temp')}°C ~ high {w_data.get('max_temp')}°C; feels like {w_data.get('feels_like')}°C
-    - UV: {w_data.get('uv')}
-    - Wind: {w_data.get('wind_kmph')} km/h
-
-    Report the weather in the voice of a gentle, playful adult catboy:
-    1. Report only supported weather and temperatures, with moderate practical advice. Omit unsupported temperature changes, feels-like values, UV and wind; do not say "the page did not specify".
-    2. Use 1–2 [SPLIT] markers for 2–3 message bubbles.
-    """
-                session_id = f"private_{user_id}" if msg_type == "private" else f"group_{group_id}"
-                weather_prompt += extensions.weather_prompt(w_data, str(user_id) in extensions.important)
-                w_reply = await call_gemini_with_history(f'weather_{session_id}_{user_id}', weather_prompt, is_random=False)
-                w_clean = tidy_weather_reply(clean_and_process_tags(w_reply, user_id, nickname))
-                at_h = f"[CQ:at,qq={user_id}] " if msg_type == "group" else ""
-                act = "send_group_msg" if msg_type == "group" else "send_private_msg"
-                prms = {"group_id": group_id, "message": at_h} if msg_type == "group" else {"user_id": user_id}
-                await send_multiline_messages(ws, act, prms, w_clean)
+                w_clean = extensions.weather_report(w_data, important=str(user_id) in extensions.important)
+                await extensions.send_weather(ws, msg_type, group_id, user_id, w_clean)
                 return
 
             await extensions.send(ws, msg_type, group_id, user_id, 'Reliable weather data is temporarily unavailable. Please try again later.')
@@ -2439,28 +2420,8 @@ async def handle_message_event(ws, data):
                 w_data = await fetch_weather_info(loc)
 
                 if w_data:
-                    morning_prompt = f"""
-    {nickname} (QQ: {user_id}) just said good morning!
-    Privacy rule: never disclose province, city, district or county names in group or private replies. Say "your area".
-    Today's current data:
-    - Weather: {w_data.get('desc')}
-    - Temperature range: low {w_data.get('min_temp')}°C ~ high {w_data.get('max_temp')}°C; feels like {w_data.get('feels_like')}°C
-    - UV: {w_data.get('uv')}
-    - Wind: {w_data.get('wind_kmph')} km/h
-
-    Reply with a warm, playful adult catboy greeting and today's weather:
-    1. Example: "Morning, {nickname}! Today's forecast for your area is...[SPLIT]"
-    2. Briefly report supported conditions, temperatures and advice. Compare only with sourced historical data, omit unknown values and do not insist they stay home.
-    3. Use 1–2 [SPLIT] markers for 2–3 natural message bubbles, with warmth and occasional cat actions.
-    """
-                    session_id = f"private_{user_id}" if msg_type == "private" else f"group_{group_id}"
-                    morning_prompt += extensions.weather_prompt(w_data, str(user_id) in extensions.important)
-                    m_reply = await call_gemini_with_history(f'weather_{session_id}_{user_id}', morning_prompt, is_random=False)
-                    m_clean = tidy_weather_reply(clean_and_process_tags(m_reply, user_id, nickname))
-                    at_h = f"[CQ:at,qq={user_id}] " if msg_type == "group" else ""
-                    act = "send_group_msg" if msg_type == "group" else "send_private_msg"
-                    prms = {"group_id": group_id, "message": at_h} if msg_type == "group" else {"user_id": user_id}
-                    await send_multiline_messages(ws, act, prms, m_clean)
+                    m_clean = extensions.weather_report(w_data, target='morning', important=str(user_id) in extensions.important)
+                    await extensions.send_weather(ws, msg_type, group_id, user_id, m_clean)
 
                     # Record and save today's greeting only after successful delivery so failed attempts can retry.
                     last_greets[group_key] = today_str

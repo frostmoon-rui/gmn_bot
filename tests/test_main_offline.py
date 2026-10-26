@@ -67,7 +67,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         async def extension_send(ws, kind, group, user, text):
             await ws.send(json.dumps({'text': text}))
         self.scope['extensions'] = SimpleNamespace(command=AsyncMock(return_value=None), observe=AsyncMock(),
-            send=extension_send, people={}, important={}, earthquake_monitor=AsyncMock())
+            send=extension_send, send_weather=extension_send, people={}, important={}, earthquake_monitor=AsyncMock())
         async def multiline(ws, action, params, text):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline

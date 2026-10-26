@@ -25,7 +25,7 @@ HELP = {'website': 'Website interaction (mention me in groups; send directly in 
             'Chat: ask a question | generate image:description\n'
             'Video: reply to a card and mention me with summarize video, or summarize video:URL\n'
             'Sticker correction: reply to my image and mention me with delete; retract and image-blocklist it.\n'
-            'Weather: set location:city | weather today | weather tomorrow\n'
+            'Weather: set location:city | weather today | weather tomorrow (detailed by default)\n'
             'Website: website screenshot:home | recommended links | friend application (help website)\n'
             'Care: comfort me | keep me company | grounding exercise | mental health support | '
             'first aid:situation\n'

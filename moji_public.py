@@ -101,21 +101,29 @@ def parse_weather(raw):
     parser.feed(raw)
     text = ' '.join(parser.parts)
     days = []
-    for label in ('\u4eca\u5929', '\u660e\u5929'):
+    for label in ('今天', '明天', '后天'):
         match = re.search(label + r'\s+([^°]{1,100}?)\s*(-?\d+)\s*°(?:C|℃)?\s*/\s*(-?\d+)\s*°', text)
         if not match:
-            raise ValueError('Page lacks explicit temperatures for today/tomorrow; parsing stopped')
+            if label == '后天':
+                continue
+            raise ValueError('Page lacks explicit today/tomorrow temperatures')
         low, high = sorted((int(match[2]), int(match[3])))
         days.append({'label': label, 'condition': match[1].strip(),
             'minTemperature': {'degrees': low}, 'maxTemperature': {'degrees': high}})
     # Preserve missing values; a daily low is not the current feels-like temperature.
-    current = re.search(r'(-?\d+)\s*(?:°[Cc]?|℃)?\s+([^\d]{1,15}?)\s*\u4eca\u5929\s*(\d{1,2}:\d{2})\s*\u66f4\u65b0', text)
-    return localize_provider_data({'source': 'Moji public weather page', 'desc': current[2].strip() if current else days[0]['condition'],
+    current = re.search(r'(-?\d+)\s*(?:°[Cc]?|℃)?\s+([^\d]{1,15}?)\s*今天\s*(\d{1,2}:\d{2})\s*更新', text)
+    humidity = re.search(r'湿度\s*(\d{1,3})\s*%', text)
+    wind = re.search(r'([东西南北]{1,3}风)\s*([\d~～至-]+)\s*级', text)
+    result = localize_provider_data({'source': 'Moji public weather page', 'desc': current[2].strip() if current else days[0]['condition'],
         'temp': int(current[1]) if current else 'unknown', 'feels_like': 'unknown',
         'min_temp': days[0]['minTemperature']['degrees'], 'max_temp': days[0]['maxTemperature']['degrees'],
         'days': days, 'uv': 'unknown', 'wind_kmph': 'unknown', 'alerts': None,
+        'humidity': int(humidity[1]) if humidity else None,
+        'wind_direction': wind[1] if wind else None, 'wind_force': wind[2] if wind else None,
         'page_update_time': current[3] if current else 'unknown',
-        'hazard_note': 'Do not invent precipitation probability, feels-like temperature, typhoon or lightning data absent from the page. Interpret today/tomorrow relative to the fetch time.'})
+        'hazard_note': 'Never invent precipitation, feels-like temperature, typhoon or lightning fields absent from the page.'})
+    result['raw_response'] = {'page_text': text}
+    return result
 
 
 class MojiPublic:
@@ -168,6 +176,8 @@ class MojiPublic:
             if local_day() != day:
                 raise RuntimeError('Fetch crossed local midnight; request the current forecast again')
             result['retrieved_at'] = time.time()
+            result['fetched_at'] = datetime.now(CHINA_TZ).isoformat()
+            result['data_kind'] = 'Public page; update label may contain only a time'
             result['forecast_date'] = day
             result['utc_offset_seconds'] = 28800
             for index, forecast in enumerate(result['days']):

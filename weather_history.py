@@ -77,8 +77,8 @@ class WeatherHistory:
 
 
 def weather_instructions(data, important=False):
-    return ('\nWeather wording: use only supported temperatures, conditions, rain and wind, with 2–3 short, gentle sentences in English. '
-        'Omit missing UV, wind or yesterday data without discussing missing page fields. '
+    return ('\nWeather wording: give an extremely detailed English report covering all available current, daily, hourly, historical and alert fields, not a short summary. Write full sentences in English. '
+        'List missing fields together without inventing values or repeating missing-data boilerplate. '
         'Rain does not establish low UV; wind-force levels are not km/h. Do not claim severe cold or cooling without evidence. '
         'During daytime, compare only with temperature_comparison or clearly sourced data from yesterday. At night, compare tomorrow’s and today’s forecasts with explicit local dates. '
         'temperature_comparison is a historical snapshot; Open-Meteo past-day values are model estimates, not station observations. '

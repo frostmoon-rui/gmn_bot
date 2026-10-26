@@ -163,8 +163,9 @@ class AmapClient:
             raise AmapError('Amap weather requires a domestic city administrative code.')
         if point.get('level') == '\u7701' and point['adcode'] not in {'110000', '120000', '310000', '500000'}:
             raise AmapError('Supply the provincial capital, not the whole province.')
-        current = self.request('/v3/weather/weatherInfo', {'city': point['adcode'], 'extensions': 'base'}, ttl=600).get('lives', [])
-        forecast = self.request('/v3/weather/weatherInfo', {'city': point['adcode'], 'extensions': 'all'}, ttl=1800).get('forecasts', [])
+        raw_current = self.request('/v3/weather/weatherInfo', {'city': point['adcode'], 'extensions': 'base'}, ttl=600)
+        raw_forecast = self.request('/v3/weather/weatherInfo', {'city': point['adcode'], 'extensions': 'all'}, ttl=1800)
+        current, forecast = raw_current.get('lives', []), raw_forecast.get('forecasts', [])
         if not current or not forecast:
             raise AmapError('Amap has no complete weather data for this area.')
         live, report = current[0], forecast[0]
@@ -172,12 +173,12 @@ class AmapClient:
                  'maxTemperature': {'degrees': day.get('daytemp', 'unknown')},
                  'day_weather': day.get('dayweather'), 'night_weather': day.get('nightweather'),
                  'day_wind': day.get('daywind'), 'night_wind': day.get('nightwind'),
-                 'wind_force': day.get('daypower')} for day in report.get('casts', [])]
+                 'wind_force': day.get('daypower'), 'night_wind_force': day.get('nightpower')} for day in report.get('casts', [])]
         today = datetime.now(TZ).date().isoformat()
         matching = [d for d in days if d['date'] == today]
         if not matching:
             raise AmapError('Amap forecast date has expired; using a fallback source.')
-        return localize_provider_data({'source': 'Amap weather', 'desc': text(live.get('weather')), 'temp': text(live.get('temperature')),
+        result = localize_provider_data({'source': 'Amap weather', 'desc': text(live.get('weather')), 'temp': text(live.get('temperature')),
                 'feels_like': 'unknown', 'humidity': text(live.get('humidity')), 'uv': 'unknown', 'wind_kmph': 'unknown',
                 'wind_direction': text(live.get('winddirection')), 'wind_force': text(live.get('windpower')),
                 'min_temp': matching[0]['minTemperature']['degrees'], 'max_temp': matching[0]['maxTemperature']['degrees'],
@@ -185,6 +186,8 @@ class AmapClient:
                 'report_time': text(live.get('reporttime')), 'forecast_report_time': text(report.get('reporttime')),
                 'hours': [], 'history_hours': [], 'alerts': None,
                 'hazard_note': 'This Amap endpoint does not provide observed weather from yesterday, precipitation probability, feels-like temperature, cloud maps, individual lightning strikes or typhoon warnings. Missing values are not zero.'})
+        result['raw_response'] = {'current': raw_current, 'forecast': raw_forecast}
+        return result
 
 
 class AmapMaps:

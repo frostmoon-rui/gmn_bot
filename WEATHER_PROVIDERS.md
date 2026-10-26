@@ -1,5 +1,18 @@
 # Complementary weather sources
 
+## Detailed forecasts and complete diagnostics
+
+Explicit weather, morning greetings, tomorrow forecasts, the existing 22:30 important-user report and Amap weather commands now use deterministic detailed formatting instead of short model summaries. Reports include available temperature/feels-like/dew point, humidity, wind/gusts/force, pressure, visibility, precipitation, UV, seven-day forecasts, 48 forecast hours, 24 history hours, source provenance, conflicts and each responding alert source. Unknowns are not zero; model history is not station observations; cloud cover is not satellite imagery or measured lightning. Bound places, coordinates, alert areas and raw payloads never go to QQ. Long text is split with only the first group message mentioning the requester. No AI generation or paid Gemini key is needed for weather formatting.
+
+Google endpoints retain partial results and follow bounded pagination for days, hours, history and alerts. Alert-only responses survive forecast failures. All provider payloads and unknown daily fields are retained for local audits. Dates and timestamps use IANA zones; Windows needs the included `tzdata` dependency. Existing on-demand fetching, ten-minute caches and provider backoff remain; complete-response caches are capped at 32 areas.
+
+Run `python tools/check_weather_multi.py --live --all --output weather_diagnostics/latest.json` for explicit live checks of public Shanghai/Tokyo samples. This does not start the bot, inspect personal bindings or send QQ messages. The complete sanitized JSON includes raw responses, normalized providers, endpoint statuses, merged values and a detailed report; `--full` also prints it. Secrets are masked and exports are excluded from Git. Missing MSN/Moji API bridge configuration is reported honestly as unconfigured.
+
+On 2026-10-26, Shanghai returned Amap, Moji and Open-Meteo data; Google current/days/hours/history responded while alerts returned 404. Tokyo returned Open-Meteo data and a Google alert response, while Google's weather fields returned 404. These are sample observations, not permanent coverage guarantees.
+
+References: [Google hourly pagination](https://developers.google.com/maps/documentation/weather/reference/rest/v1/forecast.hours/lookup), [daily pagination](https://developers.google.com/maps/documentation/weather/daily-forecast), [public alerts](https://developers.google.com/maps/documentation/weather/reference/rest/v1/publicAlerts/lookup), [Open-Meteo variables](https://open-meteo.com/en/docs).
+
+
 Weather collection runs in parallel and fills individual missing fields instead of stopping at the first successful provider. The legacy `google_weather()` entry point delegates to the aggregator in `weather_providers.py`.
 
 ## Providers
@@ -12,7 +25,7 @@ Weather collection runs in parallel and fills individual missing fields instead 
 
 Valid Amap/Google fields take priority; other sources fill gaps. Results include `sources`, `field_sources`, `provider_status`, `source_reports`, and `disagreements`, exposing each field's provider, update time, and observation/model status to the summarizer. Only matching local dates are merged. Unknown values, invalid ranges, and NaN are rejected; valid zero values such as UV 0 or 0% precipitation probability are retained. Conflicting numbers are not averaged, wind-force levels are not converted into definite speeds, and modeled history is not presented as station observations.
 
-Each provider has a 35-second budget. Concurrent requests for the same location share collection, successful results are cached for 10 minutes, and failed providers back off for 5 minutes.
+Each provider has a 65-second budget for paginated detail. Concurrent requests for the same location share collection, successful results are cached for 10 minutes, and failed providers back off for 5 minutes.
 
 ## Authorized MSN and Moji adapters
 
