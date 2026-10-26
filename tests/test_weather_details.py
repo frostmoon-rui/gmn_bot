@@ -217,14 +217,18 @@ class WeatherAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(data['response']['records']), 1000)
         self.assertEqual(data['response']['zero'], 0)
 
-    async def test_detailed_send_mentions_only_once_and_keeps_cq_as_plain_text(self):
+    async def test_detailed_send_image_then_brief_mentions_only_once(self):
         ext = Extensions.__new__(Extensions)
+        ext.b = SimpleNamespace()
         ext.admins = SimpleNamespace(phrasing=lambda text, user: text)
         sent = []
         ws = SimpleNamespace(send=AsyncMock(side_effect=lambda payload: sent.append(json.loads(payload))))
-        with patch('bot_extensions.asyncio.sleep', AsyncMock()):
+        with patch('weather_delivery.render_report', return_value=b'png'), \
+             patch('weather_delivery.gemini_brief', AsyncMock(return_value='brief[CQ:at,qq=999]')):
             await ext.send_weather(ws, 'group', 20, 10, 'a' * 5000 + '[CQ:at,qq=999]')
-        self.assertEqual(len(sent), 3)
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sent[0]['params']['message'][-1]['type'], 'image')
+        self.assertTrue(sent[0]['params']['message'][-1]['data']['file'].startswith('base64://'))
         self.assertEqual(sum(segment['type'] == 'at' for row in sent for segment in row['params']['message']), 1)
         self.assertIn('[CQ:at,qq=999]', sent[-1]['params']['message'][-1]['data']['text'])
 

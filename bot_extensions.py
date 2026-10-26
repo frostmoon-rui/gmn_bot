@@ -342,15 +342,24 @@ class Extensions:
         return format_weather(data, target, translate=english_provider_text)
 
     async def send_weather(self, ws, kind, group, user, report):
-        from weather_report import chunks
-        for index, chunk in enumerate(chunks(report)):
-            segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' and index == 0 else [])
-            segments.append({'type': 'text', 'data': {'text': self.admins.phrasing(chunk, user)}})
+        from weather_delivery import render_report, gemini_brief, fallback_brief
+        async def deliver(segment, mention=False):
+            segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' and mention else [])
+            segments.append(segment)
             await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
                 'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
                            'message': segments}}, ensure_ascii=False))
-            if index:
-                await asyncio.sleep(0.5)
+        try:
+            image = await asyncio.to_thread(render_report, report)
+        except Exception as error:
+            print('[Weather image unavailable]:', type(error).__name__)
+            await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(fallback_brief(report), user)}}, True)
+            return
+        await deliver({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}}, True)
+        print('[Weather image]: Full report sent as one PNG')
+        language = getattr(getattr(self.b, 'features', None), 'language', 'en')
+        brief = await gemini_brief(self.b, report, language)
+        await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(brief, user)}})
 
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
         website = re.fullmatch(r'website screenshot(?:\s*:\s*(\S+))?(?:\s+(zh|en|ru|ja))?(?:\s+(dark|light))?', text, re.I)
