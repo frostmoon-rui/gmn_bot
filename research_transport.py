@@ -59,7 +59,8 @@ def read_public_page(url, limit=900000):
 
 def crawl_public_page(url):
     raw = read_public_page(url, 2000000)
-    if any(marker in raw.lower() for marker in ('g-recaptcha', 'unusual traffic', 'cf-chl-widget')):
+    if any(marker in raw.lower() for marker in ('g-recaptcha', 'unusual traffic', 'cf-chl-widget',
+            '百度安全验证', 'anomaly-modal', 'verify you are human')):
         raise ValueError('Public page requires verification')
     raw = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', '', raw, flags=re.S | re.I)
     return html.unescape(re.sub('<[^>]+>', ' ', raw))[:40000]

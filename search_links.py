@@ -3,8 +3,10 @@ import base64
 import urllib.parse
 
 
-def decode_result_link(href):
+def decode_result_link(href, *, upgrade_http=False):
     try:
+        if href.startswith('//'):
+            href = 'https:' + href
         parsed=urllib.parse.urlsplit(href)
         host=(parsed.hostname or '').lower()
         query=urllib.parse.parse_qs(parsed.query)
@@ -18,6 +20,9 @@ def decode_result_link(href):
                 value=value[2:]
                 href=base64.urlsafe_b64decode(value+'='*(-len(value)%4)).decode('utf-8')
         target=urllib.parse.urlsplit(href)
+        if upgrade_http and target.scheme == 'http' and target.hostname and not target.username and target.port in (None,80):
+            target = target._replace(scheme='https', netloc=target.netloc.removesuffix(':80'))
+            href = urllib.parse.urlunsplit(target)
         if target.scheme=='https' and target.hostname and not target.username:
             return href
     except (ValueError,UnicodeError):

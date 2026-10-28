@@ -1,6 +1,7 @@
 """Offline irrelevant-SERP and off-topic-body regression tests."""
 import unittest
 import urllib.parse
+import urllib.error
 from unittest.mock import patch
 from search_quality import OrganicResults, relevant, keyword_query
 from search_worker import alternative_search, collect
@@ -60,3 +61,54 @@ class SearchQualityTests(unittest.TestCase):
         self.assertEqual(result,['https://notice.example/a'])
         self.assertEqual(read.call_count,4)
         self.assertEqual(result.diagnostics[-1]['query'],'宁夏 供暖')
+
+    def test_google_role_heading_lite_links_and_https_upgrade(self):
+        for markup in (
+            '<a href="/url?q=http://notice.example/a"><div role="heading">宁夏供热安排</div></a>',
+            '<a class="result-link" href="//notice.example/a">宁夏供热安排</a>'):
+            parser=OrganicResults('https://www.google.com')
+            parser.feed(markup)
+            self.assertEqual(parser.results(QUESTION),['https://notice.example/a'])
+
+    def test_split_chinese_nodes_and_publication_year_are_not_mandatory(self):
+        parser=OrganicResults()
+        parser.feed('<h3><a href="https://notice.example/a">宁夏<span>供</span><b>热</b>安排</a></h3>')
+        self.assertEqual(parser.results('宁夏 供暖时间 2026'),['https://notice.example/a'])
+        self.assertEqual(keyword_query('宁夏 供暖时间 2026'),'宁夏 供暖')
+
+    def test_rejections_report_title_and_missing_terms_without_page_dump(self):
+        parser=OrganicResults()
+        parser.feed('<h2><a href="https://people.example/a">Ramesh Mali</a></h2>')
+        diag=parser.results(QUESTION).diagnostics[0]
+        self.assertEqual(diag['rejected_samples'][0]['title'],'Ramesh Mali')
+        self.assertIn('宁夏',diag['rejected_samples'][0]['missing'])
+        self.assertEqual(diag['anchors'],1)
+
+    def test_challenge_response_is_paused_without_repeating_that_engine(self):
+        challenge='<div class="anomaly-modal">Challenge</div>'
+        good='<h3><a href="/link?url=opaque">宁夏供热安排</a></h3>'
+        with patch('search_worker.read',side_effect=[challenge,'',good]) as read:
+            result=alternative_search('宁夏 供暖时间 2026')
+        self.assertEqual(result,['https://www.baidu.com/link?url=opaque'])
+        self.assertEqual(result.diagnostics[0]['state'],'verification-required')
+        self.assertEqual(read.call_count,3)
+
+    def test_empty_and_failed_engines_keep_their_diagnostics(self):
+        error=urllib.error.HTTPError('https://www.bing.com/search',429,'limited',{},None)
+        with patch('search_worker.read',side_effect=['',error]):
+            result=alternative_search('specific subject')
+        self.assertEqual(result,[])
+        self.assertEqual(result.diagnostics[-1]['state'],'request-failed')
+
+    def test_fallback_admission_budget_prevents_more_requests(self):
+        with patch('search_worker.read',return_value='') as read, \
+             patch('search_worker.time.monotonic',side_effect=[0,0,100,100,100,100,100]):
+            result=alternative_search('宁夏 供暖时间 2026')
+        self.assertEqual(result,[])
+        self.assertEqual(read.call_count,1)
+
+    def test_public_verification_page_is_not_evidence(self):
+        from research_transport import crawl_public_page
+        with patch('research_transport.read_public_page',return_value='<title>百度安全验证</title>宁夏供暖'):
+            with self.assertRaisesRegex(ValueError,'verification'):
+                crawl_public_page('https://notice.example/a')

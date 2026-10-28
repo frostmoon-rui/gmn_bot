@@ -92,7 +92,7 @@ def google(query, recent=False):
     raw = read('https://www.google.com/search?' + urllib.parse.urlencode(params))
     if 'unusual traffic' in raw.lower() or '/sorry/' in raw or 'g-recaptcha' in raw:
         raise RuntimeError('Google requires verification; retry later. No CAPTCHA bypass was attempted.')
-    parser = OrganicResults()
+    parser = OrganicResults('https://www.google.com')
     parser.feed(raw)
     return parser.results(query)
 
@@ -163,30 +163,38 @@ def official_seeds(query):
 
 
 def alternative_search(query):
-    failures=[]
     diagnostics=[]
     paused=set()
+    deadline=time.monotonic()+75
+    chinese=bool(re.search(r'[\u3400-\u9fff]',query))
+    endpoints=['https://html.duckduckgo.com/html/?','https://www.bing.com/search?']
+    if chinese:
+        endpoints.append('https://www.baidu.com/s?')
     for attempt in dict.fromkeys((query, keyword_query(query))):
-        for endpoint in ('https://html.duckduckgo.com/html/?','https://www.bing.com/search?'):
+        for endpoint in endpoints:
             host=urllib.parse.urlsplit(endpoint).hostname
-            if host in paused:
+            if host in paused or time.monotonic() >= deadline:
                 continue
             try:
-                params={'q':attempt}
-                if re.search(r'[\u3400-\u9fff]',query):
-                    params.update({'mkt':'zh-CN','setlang':'zh-hans'} if 'bing.com' in host else {'kl':'cn-zh'})
-                parser=OrganicResults()
+                params={'wd' if 'baidu.com' in host else 'q':attempt}
+                if chinese:
+                    if 'bing.com' in host:
+                        params.update({'mkt':'zh-CN','setlang':'zh-hans'})
+                    elif 'duckduckgo.com' in host:
+                        params['kl']='cn-zh'
+                parser=OrganicResults(endpoint)
                 parser.feed(read(endpoint+urllib.parse.urlencode(params)))
                 result=parser.results(query)
                 diagnostics.extend(dict(row, engine=host, query=attempt) for row in result.diagnostics)
+                if parser.page_state != 'parsed':
+                    paused.add(host)
                 if result:
                     return SearchResults(result.entries,diagnostics)
             except Exception as error:
-                failures.append(wiki_error_label(error))
+                diagnostics.append({'engine':host,'query':attempt,'state':'request-failed','error':wiki_error_label(error)})
                 if isinstance(error,urllib.error.HTTPError) and error.code in {403,429,999}:
                     paused.add(host)
-    if failures:
-        raise RuntimeError('fallback-search-unavailable: '+', '.join(failures))
+    # Keep per-engine diagnostics even when every channel fails.
     return SearchResults(diagnostics=diagnostics)
 
 
