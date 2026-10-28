@@ -38,6 +38,9 @@ video {url: explicit video URL or empty for quoted video}; image {prompt};
 help {}; status {}; earthquake {}; food_map {}; sources {}; sticker {};
 reminder {when: explicit reminder time, content}; reminders {}; cancel_reminder {id}.
 Extract the requested location regardless of word order or language. Do not replace an explicit place with the saved home area.
+For time-sensitive local services such as heating schedules, use latest search with the explicit jurisdiction and year.
+Prefer local government and utility notices, preserve local-language place names, and do not require Wikipedia articles.
+Distinguish standing seasonal rules from this year's adjustments; do not substitute one city's schedule for a whole province.
 A whole country requires a capital reference or a clarifying city, never a claim to cover its entire territory.
 Do not change location bindings, identities, permissions or other people's records through these tools.
 Do not invent URLs, routes, reminder times or account identifiers. Ask for clarification if essential input is missing.

@@ -403,7 +403,7 @@ Interpret "today", "yesterday", "just now" and "tomorrow" relative to that time.
 
 Location privacy (highest priority):
 - In group and private replies, never disclose a member's specific province, city, district or county. Always call it "your area", for example "Today's forecast for your area..." or "It is cooler in your area today, meow."
-- If someone explicitly reveals a new home or travel location, append [REGION_UPDATE: speaker's numeric QQ ID | actual city name] at the end.
+Change location bindings only through explicit set location commands; weather, heating and travel questions do not update them.
 - Store the actual city, never the placeholder "your area". Use the placeholder only in visible replies.
 
 Language:
@@ -436,8 +436,7 @@ Hidden background tags (place at the very end and never expose them):
 1. Note/reminder request: [SCHEDULE_ADD: nickname | date | event]
 2. Completed note: [SCHEDULE_DONE: event summary]
 3. Feeling update: [FEELING_UPDATE: nickname | your attitude]
-4. Location update: [REGION_UPDATE: numeric QQ ID | actual city]
-5. Core memory: [RECORD: distilled core fact]
+4. Core memory: [RECORD: distilled core fact]
 """
 
 
@@ -475,33 +474,9 @@ def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
             save_json_data(PORTRAITS_FILE, portraits_data)
             print(f"\n[Portrait updated]: {target_k} -> Appearance: {visual_k} | Impression: {eval_k}")
 
-    # 2. Location update: reject placeholders rather than storing them as actual places.
-    for r_m in re.finditer(r"\[REGION_UPDATE:\s*([^\]]+)\]", tag_text):
-        parts = [p.strip() for p in r_m.group(1).split("|")]
-        if len(parts) >= 2:
-            r_user, r_loc = parts[0], parts[1]
-            if r_loc.casefold() in ["your area", "unknown", "local", "nearby", "\u6240\u5728\u5730\u533a", "\u672a\u77e5", "\u672c\u5730", "\u9644\u8fd1", ""] or len(r_loc) < 2:
-                continue
-            target_uid = None
-            if r_user.isdigit():
-                target_uid = r_user
-            elif r_user in [nickname, "I", "myself"]:
-                target_uid = str(user_id)
-            elif r_user in ["original admin", "admin"]:
-                target_uid = str(MASTER_QQ)
-            elif r_user in ["admin partner", "husband"]:
-                target_uid = str(HUSBAND_QQ)
-            else:
-                target_uid = str(user_id)
-
-            if target_uid and target_uid == str(user_id):
-                if target_uid not in regions_data:
-                    regions_data[target_uid] = {}
-                regions_data[target_uid]["location"] = r_loc
-                if "last_greet_date" not in regions_data[target_uid]:
-                    regions_data[target_uid]["last_greet_date"] = ""
-                save_json_data(REGIONS_FILE, regions_data)
-                print(f"\n[Location updated]: QQ:{target_uid} -> {r_loc}")
+    # 2. Discard legacy model location tags; bindings require explicit commands.
+    if re.search(r"\[REGION_UPDATE:", tag_text):
+        print('[Location update ignored]: model tags cannot overwrite explicit bindings')
 
     # 3. Add a note
     for sch_m in re.finditer(r"\[SCHEDULE_ADD:\s*([^\]]+)\]", tag_text):
@@ -1967,11 +1942,13 @@ async def handle_message_event(ws, data):
     # Location management; private record listings are restricted to the original admin.
     reg_cmd_match = re.fullmatch(r"set location\s*[:：]?\s*(.+?)(?:\s+(\d{5,12}))?", cleaned_msg)
     if reg_cmd_match:
-        loc = reg_cmd_match.group(1).strip()
+        from location_integrity import parse_binding
+        parsed_binding = parse_binding(cleaned_msg, 'set location')
+        loc = parsed_binding["location"]
         if loc in ["your area", "unknown", "local", "nearby", "\u6240\u5728\u5730\u533a", "\u672a\u77e5", "\u672c\u5730", "\u9644\u8fd1"]:
             cmd_reply = "Bind an actual city, such as Harbin, Taiyuan or Suzhou, rather than a placeholder like 'your area', meow!"
         else:
-            target_param = reg_cmd_match.group(2)
+            target_param = parsed_binding["target"] or reg_cmd_match.group(2)
             target_qq = user_id
 
             if target_param:

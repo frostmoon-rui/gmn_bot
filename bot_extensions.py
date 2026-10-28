@@ -154,10 +154,11 @@ class Extensions:
             raise RuntimeError(f'{urllib.parse.urlsplit(url).path}: HTTP {error.code}: {body}') from None
 
     async def normalize_location(self, location):
+        from location_integrity import VALIDATION_VERSION
         original = re.sub(r'[\u200b-\u200f\ufeff]', '', location).strip()
         existing = self.locations.get(original)
         capital_query = province_capital(original)
-        if existing and existing.get('status') in {'resolved', 'needs_city'} and not (
+        if existing and existing.get('validation_version') == VALIDATION_VERSION and existing.get('status') in {'resolved', 'needs_city'} and not (
             capital_query and not existing.get('capital_reference')):
             changed = False
             for region in self.b.regions_data.values():
@@ -168,15 +169,25 @@ class Extensions:
                 await self.b.save_json_data_async(self.b.REGIONS_FILE, self.b.regions_data)
             return existing
         def resolve():
-            query = capital_query or original.replace('\u5e7f\u897f\u7701', '\u5e7f\u897f\u58ee\u65cf\u81ea\u6cbb\u533a')
+            from location_integrity import choose_geocode
+            query = capital_query or original.replace('广西省', '广西壮族自治区')
             data = self.get_json('https://maps.googleapis.com/maps/api/geocode/json?' +
                 urllib.parse.urlencode({'address': query, 'language': 'en', 'key': self.key}))
             results = data.get('results', [])
+            result_language = 'en'
             if not results:
-                raise RuntimeError('Google geocoding returned no matching location')
-            result = results[0]
-            if result.get('partial_match'):
-                raise RuntimeError('Only a partial place match; specify country, province and city')
+                raise RuntimeError('Google geocoding returned no matching result')
+            try:
+                result = choose_geocode(query, results)
+            except ValueError:
+                if not re.search(r'[\u4e00-\u9fff]', query):
+                    raise
+                retry_query = ('中国' + query) if any(name in query for name in PROVINCE_CAPITALS) and not query.startswith('中国') else query
+                retry = self.get_json('https://maps.googleapis.com/maps/api/geocode/json?' +
+                    urllib.parse.urlencode({'address': retry_query, 'language': 'zh-CN', 'key': self.key}))
+                result = choose_geocode(retry_query, retry.get('results', []))
+                result_language = 'zh-CN'
+            english_result = next((item for item in results if item.get('place_id') and item.get('place_id') == result.get('place_id')), result)
             point = result['geometry']['location']
             if not (-90 <= float(point['lat']) <= 90 and -180 <= float(point['lng']) <= 180):
                 raise RuntimeError('Coordinates are outside the valid range')
@@ -186,11 +197,11 @@ class Extensions:
             broad = bool(types) and all(t in {'country', 'administrative_area_level_1', 'political'} for t in types)
             return {'original': original, 'formatted_address': result.get('formatted_address', original),
                 'capital_reference': bool(capital_query), 'effective_location': capital_query or original,
-                'locality_en': next((c.get('long_name', '') for c in result.get('address_components', [])
+                'locality_en': next((c.get('long_name', '') for c in english_result.get('address_components', [])
                     if 'sublocality_level_1' in c.get('types', []) or 'locality' in c.get('types', [])), ''),
-                'location_types': types,
+                'validation_version': VALIDATION_VERSION, 'location_types': types,
                 'place_id': result.get('place_id'), 'latitude': float(point['lat']), 'longitude': float(point['lng']),
-                'country_code': country, 'language': 'en', 'status': 'needs_city' if broad else 'resolved',
+                'country_code': country, 'language': result_language, 'status': 'needs_city' if broad else 'resolved',
                 'updated': datetime.now(SHANGHAI).isoformat()}
         try:
             record = await asyncio.to_thread(resolve)
@@ -243,7 +254,8 @@ class Extensions:
             # If Google geocoding fails, the independent free WGS84 source can provide coordinates.
             # Accept only a complete, unique city/district match, never the first ambiguous result.
             query = province_capital(location) or location
-            leaf = query.split()[-1]
+            from location_integrity import city_query
+            leaf = query.split()[-1] if province_capital(location) else city_query(query)
             data = await asyncio.to_thread(request_weather_json, 'https://geocoding-api.open-meteo.com/v1/search?'+
                 urllib.parse.urlencode({'name': leaf, 'count': 10, 'language': 'zh' if re.search(r'[\u3400-\u9fff]', leaf) else 'en', 'format': 'json'}))
             canonical = lambda name: re.sub(r'(?:\u5e02|\u53bf|\u533a)$', '', name.strip()).casefold()
@@ -267,6 +279,8 @@ class Extensions:
                 raise ValueError('Location is not precisely resolved; do not mix in another city')
             return resolved
         async def amap():
+            if not province_capital(location) and (await point()).get('country_code') != 'CN':
+                return None
             try:
                 return await asyncio.to_thread(self.amap.client.weather, province_capital(location) or location)
             except AmapError as error:
@@ -597,6 +611,7 @@ class Extensions:
                 raise RuntimeError('Python research process failed: ' + errors.decode('utf-8', errors='replace')[-2000:])
             result = json.loads(output)
             self._wikipedia_cooldowns.observe(result.get('warnings', []))
+            print('[Search retrieval]:', result.get('retrieval_stats', {}), 'pages:', len(result.get('pages', [])))
             return result
         finally:
             if process.returncode is None:

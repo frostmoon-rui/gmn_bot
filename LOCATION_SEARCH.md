@@ -1,0 +1,9 @@
+# Location integrity and current local-service searches
+
+Location bindings change only through an explicit `set location` command. Both `set location:ACCOUNT_ID PLACE` and `set location:PLACE ACCOUNT_ID` are supported; editing another account still requires the original admin. Model `REGION_UPDATE` tags are ignored and removed from visible replies. Weather, travel, heating and research questions never change a home binding.
+
+Google city results marked `partial_match` require a complete match of the supplied city and administrative components, rather than blanket acceptance or rejection. A localized second query can verify a Chinese city request; the English locality is retained only when both results have the same place ID. Unmatched street data and ambiguous cities are rejected. Cached geocodes are versioned and revalidated on demand. The free fallback extracts the city from an administrative address without truncating multiword city names. Domestic providers verify country scope before contributing weather.
+
+Current/local-service searches use web sources instead of requiring an encyclopedia article. `latest` queries skip Wikipedia, retain local-language place names and retrieve government results in addition to ordinary searches. Google, DuckDuckGo and Bing result redirects are decoded before public-page URL validation. Government links are prioritized before the crawl limit; missing Wikipedia matches do not invalidate useful web pages. The summarizer must check jurisdiction, publication dates, standing seasonal rules and current-year changes rather than assume one city's schedule applies everywhere.
+
+Search diagnostics report counts for Google links, fallback links, Wikipedia pages and fetched pages. No CAPTCHA, login, TLS or public-address validation is bypassed. Empty or blocked search channels remain failures, not evidence that the requested information does not exist.
