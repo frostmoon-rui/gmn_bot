@@ -1751,7 +1751,6 @@ async def background_periodic_monitor(ws_getter):
     while True:
         await asyncio.sleep(1800)
         try:
-            print('[Background check]: Started')
             refresh_counter += 1
             if refresh_counter >= 8:
                 refresh_counter = 0
@@ -1759,9 +1758,7 @@ async def background_periodic_monitor(ws_getter):
                 await asyncio.to_thread(init_gpt_models)
                 print('[Model refresh]: Updating lists only; availability follows successful ordinary conversation requests')
             # Weather is fetched only by a query or a due, configured delivery.
-            print('[Weather]: No background region sweep; updates are on demand')
             # Earthquakes use a separate task to avoid duplicate notifications during weather checks.
-            print('[Background check]: Finished')
         except Exception as error:
             print('[Background check failed]:', type(error).__name__)
 

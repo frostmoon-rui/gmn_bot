@@ -67,3 +67,5 @@ This illustrates the format, not a current forecast. Integration also needs auth
 References: [Google Weather](https://developers.google.com/maps/documentation/weather/overview), [Open-Meteo](https://open-meteo.com/en/docs), [MSN Weather connector](https://learn.microsoft.com/en-us/connectors/msnweather/), and [Azure Maps Weather concepts](https://learn.microsoft.com/en-us/azure/azure-maps/weather-services-concepts).
 
 Weather images now emphasize temperature, rain and wind with large summary cards. Unit-separated line charts show hourly forecasts first, daily forecasts second, and recent history last when available. Missing samples leave gaps; probabilities and precipitation totals never share an axis. Rendering is local with Pillow.
+
+Model or rendering failures now produce only a short friendly notice, never a raw report excerpt. Empty half-hour maintenance logs are suppressed; real model refreshes and failures remain logged.

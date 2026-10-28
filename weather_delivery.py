@@ -57,11 +57,8 @@ def render_report(report):
 
 
 def fallback_brief(report):
-    lines = []
-    for line in report.splitlines()[:10]:
-        if line.strip() and sum(len(item) + 1 for item in lines) + len(line) <= 850:
-            lines.append(line)
-    return '\n'.join(lines) or 'Full weather details are in the image.'
+    """Never turn the detailed report back into a chat message on model failure."""
+    return 'The weather details are in the card, meow. Take care when heading out!'
 
 
 LANGUAGES = {'zh': 'Simplified Chinese', 'en': 'English', 'ru': 'Russian', 'ja': 'Japanese'}
@@ -88,7 +85,7 @@ def checked_brief(response, language, limit=1200):
     return text[:ends[-1]].strip() if ends else None
 
 
-async def gemini_brief(bot, report, language='en'):
+async def gemini_brief(bot, report, language='en', fallback_text=None):
     """No paid fallback, tools, chat history or provider switching for weather."""
     language = str(language).lower().replace('_', '-').split('-')[0]
     language = language if language in LANGUAGES else 'en'
@@ -121,4 +118,4 @@ async def gemini_brief(bot, report, language='en'):
             print('[Weather briefing rejected]:', model, 'language or incomplete output')
         except Exception as error:
             print('[Weather briefing unavailable]:', model, type(error).__name__)
-    return fallback_brief(report)
+    return fallback_text if fallback_text is not None else fallback_brief(report)

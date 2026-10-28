@@ -342,7 +342,10 @@ class Extensions:
         return format_weather(data, target, translate=english_provider_text)
 
     async def send_weather(self, ws, kind, group, user, report):
-        from weather_delivery import render_report, gemini_brief, fallback_brief
+        from weather_delivery import render_report, gemini_brief
+        language = getattr(getattr(self.b, 'features', None), 'language', 'en')
+        brief_notice = 'The weather details are in the card, meow. Take care when heading out!'
+        image_notice = 'The weather card did not render this time. Please ask me again later, meow.'
         async def deliver(segment, mention=False):
             segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' and mention else [])
             segments.append(segment)
@@ -353,12 +356,11 @@ class Extensions:
             image = await asyncio.to_thread(render_report, report)
         except Exception as error:
             print('[Weather image unavailable]:', type(error).__name__)
-            await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(fallback_brief(report), user)}}, True)
+            await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(image_notice, user)}}, True)
             return
         await deliver({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}}, True)
         print('[Weather image]: Full report sent as one PNG')
-        language = getattr(getattr(self.b, 'features', None), 'language', 'en')
-        brief = await gemini_brief(self.b, report, language)
+        brief = await gemini_brief(self.b, report, language, fallback_text=brief_notice)
         await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(brief, user)}})
 
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):

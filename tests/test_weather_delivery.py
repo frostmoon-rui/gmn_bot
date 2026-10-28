@@ -69,9 +69,11 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         request = AsyncMock(side_effect=TimeoutError())
         bot = SimpleNamespace(AVAILABLE_CHAT_MODELS=list('abcd'), gemini_content_config=lambda **kw: kw,
             client=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=request))))
-        answer = await gemini_brief(bot, 'a' * 10000)
+        answer = await gemini_brief(bot, 'RAW_WEATHER_TABLE\n' * 1000, fallback_text='See the card, meow!')
         self.assertEqual(request.await_count, 3)
         self.assertLessEqual(len(answer), 850)
+        self.assertEqual(answer, 'See the card, meow!')
+        self.assertNotIn('RAW_WEATHER_TABLE', fallback_brief('RAW_WEATHER_TABLE'))
 
     async def test_render_failure_sends_one_short_message_without_ai(self):
         ext = Extensions.__new__(Extensions)
@@ -86,3 +88,4 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         sent = json.loads(ws.send.call_args.args[0])
         self.assertEqual(sent['action'], 'send_private_msg')
         self.assertLessEqual(len(sent['params']['message'][0]['data']['text']), 850)
+        self.assertNotIn('a' * 20, sent['params']['message'][0]['data']['text'])
