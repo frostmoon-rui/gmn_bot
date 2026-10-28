@@ -596,6 +596,7 @@ class Extensions:
             return result
 
     async def _python_search_process(self, query, mode='web', topic=''):
+        print('[Search query]:', mode, json.dumps(query, ensure_ascii=False))
         from wikipedia_diagnostics import WikipediaCooldowns
         if not hasattr(self, '_wikipedia_cooldowns'):
             self._wikipedia_cooldowns = WikipediaCooldowns()
@@ -612,6 +613,8 @@ class Extensions:
             result = json.loads(output)
             self._wikipedia_cooldowns.observe(result.get('warnings', []))
             print('[Search retrieval]:', result.get('retrieval_stats', {}), 'pages:', len(result.get('pages', [])))
+            for diagnostic in result.get('search_diagnostics', []):
+                print('[Search engine]:', json.dumps(diagnostic, ensure_ascii=False))
             return result
         finally:
             if process.returncode is None:

@@ -73,7 +73,7 @@ class LocationSearchTests(unittest.IsolatedAsyncioTestCase):
         url='https://example.gov.cn/notice.html'
         with patch('search_worker.wikipedia') as wiki, patch('search_worker.google',return_value=[url]), \
              patch('search_worker.alternative_search',return_value=[]),patch('search_worker.time.sleep'), \
-             patch('research_transport.crawl_public_page',return_value='Current official heating notice'):
+             patch('research_transport.crawl_public_page',return_value='Current official heating schedule notice'):
             result=collect('current local heating schedule','latest')
         wiki.assert_not_called()
         self.assertEqual(result['pages'][0]['url'],url)
@@ -84,7 +84,7 @@ class LocationSearchTests(unittest.IsolatedAsyncioTestCase):
         from search_worker import alternative_search
         target='https://example.gov.cn/heating.html'
         encoded='a1'+base64.urlsafe_b64encode(target.encode()).decode().rstrip('=')
-        html='<a href="https://www.bing.com/search?q=other">nav</a><a href="https://www.bing.com/ck/a?u='+encoded+'">notice</a>'
+        html='<a href="https://www.bing.com/search?q=other">nav</a><h2><a href="https://www.bing.com/ck/a?u='+encoded+'">Heating schedule notice</a></h2>'
         with patch('search_worker.read',side_effect=['<html></html>',html]) as read:
             self.assertEqual(alternative_search('local heating schedule'),[target])
         self.assertEqual(read.call_count,2)

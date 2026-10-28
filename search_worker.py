@@ -11,6 +11,7 @@ import time
 from html.parser import HTMLParser
 from wikipedia_diagnostics import wikipedia_languages, wiki_error_label, WikipediaFetchError
 from search_links import decode_result_link
+from search_quality import OrganicResults, relevant, SearchResults, keyword_query
 
 
 OPENAI_TOPIC = re.compile(r'(?<![a-z0-9_])(?:chatgpt|gpt)(?![a-z_])|(?<![a-z0-9_])openai(?![a-z0-9_])', re.I)
@@ -90,10 +91,10 @@ def google(query, recent=False):
         params['tbs'] = 'qdr:m'
     raw = read('https://www.google.com/search?' + urllib.parse.urlencode(params))
     if 'unusual traffic' in raw.lower() or '/sorry/' in raw or 'g-recaptcha' in raw:
-        raise RuntimeError('Google requires verification; try later. No CAPTCHA bypass was attempted.')
-    parser = Links()
+        raise RuntimeError('Google requires verification; retry later. No CAPTCHA bypass was attempted.')
+    parser = OrganicResults()
     parser.feed(raw)
-    return parser.links[:18]
+    return parser.results(query)
 
 
 def _wikipedia_api(query, language, topic=None):
@@ -163,28 +164,43 @@ def official_seeds(query):
 
 def alternative_search(query):
     failures=[]
-    for endpoint in ('https://html.duckduckgo.com/html/?','https://www.bing.com/search?'):
-        try:
-            parser=Links()
-            parser.feed(read(endpoint+urllib.parse.urlencode({'q':query})))
-            if parser.links:
-                return parser.links[:18]
-        except Exception as error:
-            failures.append(wiki_error_label(error))
+    diagnostics=[]
+    paused=set()
+    for attempt in dict.fromkeys((query, keyword_query(query))):
+        for endpoint in ('https://html.duckduckgo.com/html/?','https://www.bing.com/search?'):
+            host=urllib.parse.urlsplit(endpoint).hostname
+            if host in paused:
+                continue
+            try:
+                params={'q':attempt}
+                if re.search(r'[\u3400-\u9fff]',query):
+                    params.update({'mkt':'zh-CN','setlang':'zh-hans'} if 'bing.com' in host else {'kl':'cn-zh'})
+                parser=OrganicResults()
+                parser.feed(read(endpoint+urllib.parse.urlencode(params)))
+                result=parser.results(query)
+                diagnostics.extend(dict(row, engine=host, query=attempt) for row in result.diagnostics)
+                if result:
+                    return SearchResults(result.entries,diagnostics)
+            except Exception as error:
+                failures.append(wiki_error_label(error))
+                if isinstance(error,urllib.error.HTTPError) and error.code in {403,429,999}:
+                    paused.add(host)
     if failures:
         raise RuntimeError('fallback-search-unavailable: '+', '.join(failures))
-    return []
+    return SearchResults(diagnostics=diagnostics)
 
 
 def collect(query, mode='web', topic='', skip_wikipedia=()):
     warnings = []
-    stats = {'google_links':0,'fallback_links':0,'wikipedia_pages':0}
+    stats = {'google_links':0,'fallback_links':0,'wikipedia_pages':0,'rejected_pages':0,'fetch_failures':0}
+    diagnostics = []
     def search_google(text, recent):
         links=google(text,recent)
+        diagnostics.extend(dict(row,engine='google',query=text) for row in getattr(links,'diagnostics',[]))
         stats['google_links']+=len(links)
         return links
     if mode == 'wiki':
-        # The model selects encyclopedia intent and topic; sufficient articles skip search engines.
+        # Fetch model-selected encyclopedia topics first; sufficient articles skip search engines.
         wiki_pages = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             jobs = [(pool.submit(wikipedia, query, language, topic or None), language)
@@ -201,12 +217,12 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
             pages = prepare_pages(wiki_pages)
             if pages:
                 return {'pages': pages, 'warnings': warnings, 'urls': [page['url'] for page in pages],
-                        'note': 'The model selected encyclopedia retrieval; background articles do not verify current events.'}
+                        'note': 'Model-selected encyclopedia articles provide background, not current-event verification.'}
     seeds = official_seeds(query)
     urls = list(seeds)
     pages = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        # Stop this Google round on throttling; do not bypass verification.
+        # Serialize Google requests and stop this round on throttling; do not bypass verification.
         search_query = ('site:openai.com OR site:developers.openai.com ' + query) if seeds else query
         try:
             recent = mode == 'latest' or is_recent_query(query)
@@ -217,8 +233,8 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
             if mode == 'latest' and re.search(r'[\u4e00-\u9fff]',query) and not seeds:
                 urls.extend(url for url in search_google(query+' site:gov.cn',False) if url not in urls)
         except urllib.error.HTTPError as error:
-            warnings.append(f'Google HTTP {error.code}: stopped this Google round; using fallback search and official pages')
-            # Respect throttling and use independent fallback sources.
+            warnings.append(f'Google HTTP {error.code}: stopped this Google round; using fallback search and direct official pages')
+            # Respect throttling and use independent fallback channels.
             time.sleep(3)
         except Exception as error:
             warnings.append('Google: ' + str(error))
@@ -233,6 +249,7 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
                     pages.extend(values)
                     stats['wikipedia_pages']+=len(values)
                 else:
+                    diagnostics.extend(getattr(values,'diagnostics',[]))
                     stats['fallback_links']+=len(values)
                     urls.extend(url for url in values if url not in urls)
             except Exception as error:
@@ -242,12 +259,12 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
         def fetch(url):
             try:
                 text = crawl_public_page(url)
-                if text.strip():
+                if text.strip() and relevant(query, text[:16000]):
                     return {'url': url, 'text': text, 'source': 'Official source' if url in seeds else 'Search page',
                         'dates_found': sorted(set(re.findall(r'20\d{2}[-/]\d{1,2}[-/]\d{1,2}', text)))[:30]}
             except Exception as error:
                 return {'url': url, 'text': '', 'error': str(error)}
-            return {'url': url, 'text': '', 'error': 'Page has no body text or uses an unsupported format'}
+            return {'url': url, 'text': '', 'error': 'empty-or-off-topic-page', 'rejected':True}
         limited = set(skip_wikipedia)
         for warning in warnings:
             match = re.search(r'Wikipedia \[(en|zh)\]:.*HTTP 429', warning)
@@ -262,10 +279,13 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
             if page.get('text'):
                 pages.append(page)
             else:
+                stats['rejected_pages' if page.get('rejected') else 'fetch_failures'] += 1
                 warnings.append(page['url'] + ': ' + page['error'])
-    # Prefer primary pages; Wikipedia supplies background only.
+    # Prioritize primary pages; Wikipedia supplies background only.
+    stats['fetched_pages'] = len(pages)
     return {'pages': prepare_pages(pages), 'warnings': warnings, 'urls': urls[:24], 'retrieval_stats':stats,
-        'note': 'Recent searches are supplemented with general results; check relevance, event dates and publication dates.'}
+        'search_diagnostics':diagnostics,
+        'note': 'Supplement recent searches with general results; verify relevance, event dates and publication dates from the text.'}
 
 
 if __name__ == '__main__':
