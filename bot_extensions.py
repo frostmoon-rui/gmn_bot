@@ -60,6 +60,7 @@ def province_capital(location):
 
 
 class Extensions:
+    from bot_actions import COMMANDS as plugin_commands
     def __init__(self, bot):
         self.b = bot
         self.people = bot.load_json_data('people.json', {})
@@ -187,6 +188,7 @@ class Extensions:
                 'capital_reference': bool(capital_query), 'effective_location': capital_query or original,
                 'locality_en': next((c.get('long_name', '') for c in result.get('address_components', [])
                     if 'sublocality_level_1' in c.get('types', []) or 'locality' in c.get('types', [])), ''),
+                'location_types': types,
                 'place_id': result.get('place_id'), 'latitude': float(point['lat']), 'longitude': float(point['lng']),
                 'country_code': country, 'language': 'en', 'status': 'needs_city' if broad else 'resolved',
                 'updated': datetime.now(SHANGHAI).isoformat()}
@@ -222,8 +224,20 @@ class Extensions:
         country = self.locations.get(location, {}).get('country_code')
         domestic = country == 'CN' or (not country and domestic_hint(location))
         point_task = None
+        country_reference = False
         async def resolve_point():
+            nonlocal country_reference
             resolved = await self.normalize_location(location)
+            if resolved and resolved.get('status') == 'needs_city' and 'country' in resolved.get('location_types', []):
+                code = str(resolved.get('country_code', '')).upper()
+                if re.fullmatch(r'[A-Z]{2}', code):
+                    from bot_actions import capital_name
+                    name = capital_name(code)
+                    if name:
+                        capital = await self.normalize_location(name + ', ' + code)
+                        if capital and capital.get('status') == 'resolved' and capital.get('country_code') == code:
+                            resolved = capital
+                            country_reference = True
             if resolved and resolved.get('status') == 'resolved':
                 return resolved
             # If Google geocoding fails, the independent free WGS84 source can provide coordinates.
@@ -234,6 +248,8 @@ class Extensions:
                 urllib.parse.urlencode({'name': leaf, 'count': 10, 'language': 'zh' if re.search(r'[\u3400-\u9fff]', leaf) else 'en', 'format': 'json'}))
             canonical = lambda name: re.sub(r'(?:\u5e02|\u53bf|\u533a)$', '', name.strip()).casefold()
             matches = [row for row in data.get('results', []) if canonical(str(row.get('name', ''))) == canonical(leaf)
+                       and (not row.get('feature_code') or str(row['feature_code']).startswith('PPL'))
+                       and (not resolved or 'country' not in resolved.get('location_types', []) or str(row.get('feature_code', '')).startswith('PPL'))
                        and (not domestic or row.get('country_code') == 'CN')]
             if len(matches) != 1:
                 raise ValueError('Fallback geocoder found no complete unique match; no other city was substituted')
@@ -309,6 +325,8 @@ class Extensions:
         if not result:
             return None
         result = self.annotate_weather(result, {'capital_reference': bool(province_capital(location))})
+        if country_reference:
+            result['capital_reference'] = True
         result = await asyncio.to_thread(self.weather_history.enrich, location, result)
         self.weather_cache[location] = (asyncio.get_running_loop().time(), result)
         while len(self.weather_cache) > 32:
@@ -330,6 +348,7 @@ class Extensions:
             data['_cache_day'] = datetime.now(SHANGHAI).date().isoformat()
             data.setdefault('fetched_at', datetime.now(SHANGHAI).isoformat())
             if point.get('capital_reference'):
+                data['capital_reference'] = True
                 data['location_note'] = 'Only a province was supplied. This is a capital-city reference forecast, not a province-wide forecast. Do not disclose specific place names.'
         return data
 
@@ -364,6 +383,12 @@ class Extensions:
         await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(brief, user)}})
 
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
+        from bot_actions import english_weather_request as weather_request
+        weather = weather_request(text)
+        if weather is not None:
+            if not self.start_user_job(user, 'weather', self.weather_at(ws, kind, group, user, **weather)):
+                return 'A weather lookup is already running, meow.'
+            return 'I will check the requested place and send a weather card, meow.'
         website = re.fullmatch(r'website screenshot(?:\s*:\s*(\S+))?(?:\s+(zh|en|ru|ja))?(?:\s+(dark|light))?', text, re.I)
         if (website or text in {'recommended links', 'friend application'}) and (mentioned or kind == 'private'):
             page = (website[1] or 'home').lower() if website else ('resources' if text == 'recommended links' else 'friends')
@@ -729,6 +754,27 @@ class Extensions:
         except Exception as error:
             print('[Tomorrow weather failed]:', str(error))
             await self.send(ws, kind, group, user, 'Tomorrow’s weather query failed. Please try later.')
+
+    async def weather_at(self, ws, kind, group, user, location='', target='today'):
+        """One-off explicit place lookup never replaces the speaker's saved home area."""
+        location = location.strip() or self.b.regions_data.get(str(user), {}).get('location', '')
+        if not location:
+            await self.send(ws, kind, group, user, 'Which city should I check, meow?')
+            return
+        try:
+            data = await self.google_weather(location)
+            if not data:
+                await self.send(ws, kind, group, user, 'Please specify the country and city; I could not locate this forecast precisely.')
+                return
+            from weather_report import has_tomorrow
+            if target == 'tomorrow' and not has_tomorrow(data):
+                await self.send(ws, kind, group, user, 'Tomorrow is unavailable; I will not substitute today, meow.')
+                return
+            await self.send_weather(ws, kind, group, user, self.weather_report(data, target,
+                important=str(user) in self.important))
+        except Exception as error:
+            print('[Weather action failed]:', type(error).__name__)
+            await self.send(ws, kind, group, user, 'The weather lookup failed this time. Ask me again later, meow.')
 
     def maps_post(self, url, payload, fields=None):
         headers = {'Content-Type': 'application/json', 'X-Goog-Api-Key': self.key}

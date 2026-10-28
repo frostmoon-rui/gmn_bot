@@ -5,6 +5,7 @@ import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 LABELS = {
+    'capital_reference': 'Capital-city reference only; this does not cover the whole region.',
     'morning': 'Good morning!',
     'title': 'Detailed weather for your area', 'date': 'Local date', 'updated': 'Updated',
     'current': 'Current conditions', 'daily': 'Daily forecast', 'hours': 'Hourly forecast',
@@ -163,6 +164,8 @@ def format_weather(data, target='today', labels=None, translate=None, diagnostic
         lines.insert(0, labels['morning'])
     if data.get('report_time'):
         lines.append(labels['updated'] + ': ' + local_time(data['report_time'], zone))
+    if data.get('capital_reference'):
+        lines.append(labels['capital_reference'])
     lines += ['', labels['current']]
     if available(data.get('desc')):
         lines.append(labels['desc'] + ': ' + text(data['desc']))

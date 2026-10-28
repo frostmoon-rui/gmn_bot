@@ -444,6 +444,9 @@ Hidden background tags (place at the very end and never expose them):
 # ==================== 5. Remove hidden background tags from visible replies ====================
 def model_system_prompt(is_random=False):
     prompt = build_system_prompt()
+    if not is_random:
+        from bot_actions import INSTRUCTION
+        prompt += INSTRUCTION
     if session_actor.get() is not None:
         prompt += '\n'+admins.hint(session_actor.get())
     if is_random:
@@ -2178,10 +2181,7 @@ async def handle_message_event(ws, data):
     user_reg = regions_data.get(str(user_id))
 
     # 4.1 Explicit weather requests
-    is_weather_query = bool(
-        (cleaned_msg == 'weather' or re.search(r"(?:weather forecast|check weather|weather today|today weather|show weather|how is the weather)", cleaned_msg, re.I)) and
-        (is_at_me or "Lucky" in raw_msg or cleaned_msg in ["weather forecast", "check weather", "weather"] or msg_type == "private")
-    )
+    is_weather_query = cleaned_msg in {'weather forecast', 'today weather', 'weather', 'weather today', 'check weather', 'weather tomorrow'}
 
     if is_weather_query:
         target_loc = user_reg.get("location") if user_reg else None
@@ -2391,6 +2391,17 @@ async def handle_message_event(ws, data):
         print('[Random interjection skipped]:', group_id, 'Model unavailable; no group error announcement')
         return
 
+    from bot_actions import parse_action, dispatch
+    action = parse_action(reply_raw)
+    if action and not is_random_chime and (addressed or hit_keyword or msg_type == 'private'):
+        from types import SimpleNamespace
+        await dispatch(SimpleNamespace(**globals()), action, data, ws,
+                       master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
+        return
+    if '[BOT_ACTION:' in reply_raw:
+        if not is_random_chime:
+            await extensions.send(ws, msg_type, group_id, user_id, 'Please clarify the requested function and its details, meow.')
+        return
     search_plan = parse_search_request(reply_raw)
     if search_plan and not is_random_chime and (addressed or hit_keyword or msg_type == 'private'):
         tip = extensions.start_model_search(ws, msg_type, group_id, user_id, search_plan)

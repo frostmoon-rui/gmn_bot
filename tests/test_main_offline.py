@@ -72,6 +72,13 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline
 
+    async def test_model_action_calls_weather_instead_of_sending_json(self):
+        self.scope['extensions'].weather_at = AsyncMock()
+        self.scope['call_gemini_with_history'] = AsyncMock(return_value='[BOT_ACTION: {"tool":"weather","args":{"location":"Madagascar"}}]')
+        await self.scope['handle_message_event'](self.ws, self.event('Could you check the conditions there?', True))
+        self.scope['extensions'].weather_at.assert_awaited_once_with(self.ws, 'group', 20, 10, 'Madagascar', 'today')
+        self.assertNotIn('[BOT_ACTION:', json.dumps(self.sent))
+
     async def test_explicit_quoted_photo_is_fetched_and_recognized_not_collected(self):
         blob = b'\x89PNG\r\n\x1a\n' + b'x' * 24
         original = {'message_type': 'group', 'group_id': 20, 'user_id': 11,

@@ -1,5 +1,5 @@
 google-genai
 websockets
 Pillow
-
 tzdata
+geonamescache

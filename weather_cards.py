@@ -115,6 +115,8 @@ def render_card(data, labels, translate, font):
     write(margin, 417, labels['min_temp'] + ' ' + value('min_temp', '°C') + '   /   ' +
           labels['max_temp'] + ' ' + value('max_temp', '°C') + '    ·    ' + labels['humidity'] + ' ' + value('humidity', '%'), 23)
     y = 472
+    if data.get('capital_reference'):
+        write(margin, 451, labels['capital_reference'], 17, muted, width-margin*2)
     for heading, rows, originals, specs in sections:
         write(margin, y, heading, 30)
         y += 62
