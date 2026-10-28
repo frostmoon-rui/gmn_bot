@@ -32,3 +32,5 @@ venv/
 /make_speech.py
 
 /weather_diagnostics/
+
+/model_catalogs_cache/

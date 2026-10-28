@@ -40,8 +40,11 @@ class RankingTests(unittest.TestCase):
                      'is_research_model': is_research_model, 'rank_research_models': rank_research_models,
                      'research_model_score': research_model_score, 'print': Mock(), '__builtins__': __builtins__,
                      're': __import__('re')}
+        namespace.update(AVAILABLE_CHAT_MODELS=[], AVAILABLE_ORGANIZER_MODELS=[],
+                         AVAILABLE_RESEARCH_MODELS=[], GEMINI_API_KEY='test', TARGET_PROXY='')
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), namespace)
-        namespace['init_chat_models']()
+        with patch('model_catalogs.discover', return_value=['gemini-4-argon', 'gemini-3.1-pro-preview', 'gemini-3.8-flash']):
+            namespace['init_chat_models']()
         self.assertEqual(namespace['AVAILABLE_RESEARCH_MODELS'], ['gemini-4-argon', 'gemini-3.8-flash'])
         self.assertEqual(namespace['AVAILABLE_CHAT_MODELS'], ['gemini-3.8-flash'])
 

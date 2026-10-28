@@ -57,7 +57,7 @@ ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"
 CLAUDE_MODEL_NAMES = [
     model.strip() for model in os.getenv(
         "ANTHROPIC_MODELS",
-        "claude-opus-4-8,claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5-20250929,claude-haiku-4-5-20251001"
+        "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5"
     ).split(",") if model.strip()
 ]
 
@@ -535,60 +535,17 @@ def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
 
 # ==================== 6. Select conversation models ====================
 def init_chat_models():
+    from model_catalogs import discover
     global AVAILABLE_CHAT_MODELS, AVAILABLE_ORGANIZER_MODELS, AVAILABLE_RESEARCH_MODELS
-    print("\n[Discovering fast conversation models...]")
-    EXCLUDE = [
-        "image", "tts", "audio", "transcribe", "live", "robotics",
-        "omni", "veo", "embedding", "deep-research", "antigravity"
-    ]
-    try:
-        valid = []
-        valid_pro = []
-        valid_research = []
-        for m in client.models.list():
-            name = m.name.replace("models/", "")
-            lowered = name.lower()
-            actions = getattr(m, 'supported_actions', None)
-            if (is_research_model(name) or name == 'gemini-3.8-flash') and (not actions or 'generateContent' in actions):
-                valid_research.append(name)
-            if any(k in lowered for k in EXCLUDE): continue
-            if not lowered.startswith("gemini-"): continue
-            if "pro" in lowered:
-                valid_pro.append(name)
-                continue
-            # Keep ordinary text Flash/Flash Lite models, excluding dedicated utility models.
-            if not ("flash" in lowered or "lite" in lowered): continue
-            valid.append(name)
-
-        def score(name: str):
-            # Rank chat by version and capability; Lite is a lower-priority fallback within each version.
-            model_name = name.lower()
-            version_match = re.search(r"gemini-(\d+)(?:\.(\d+))?", model_name)
-            major = int(version_match.group(1)) if version_match else 0
-            minor = int(version_match.group(2) or 0) if version_match else 0
-            score_value = major * 1000 + minor * 100
-            if "lite" in model_name:
-                score_value -= 150
-            if model_name.endswith("-latest"):
-                score_value += 20
-            return score_value
-
-        AVAILABLE_CHAT_MODELS = sorted(valid, key=score, reverse=True)
-
-        AVAILABLE_ORGANIZER_MODELS = sorted(set(valid_pro), key=research_model_score, reverse=True)
-        AVAILABLE_RESEARCH_MODELS = [name for name in ('gemini-4-argon', 'gemini-3.8-flash') if name in valid_research]
-    except Exception:
-        AVAILABLE_CHAT_MODELS = [
-            "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-            "gemini-3.5-flash", "gemini-3-flash", "gemini-3.1-flash-lite",
-            "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash",
-            "gemini-2.0-flash-lite"
-        ]
-        AVAILABLE_ORGANIZER_MODELS = ["gemini-3.1-pro-preview"]
-        AVAILABLE_RESEARCH_MODELS = ["gemini-4-argon", "gemini-3.8-flash"]
-    print(f">>> Fast conversation queue: {AVAILABLE_CHAT_MODELS}\n")
-    print(f">>> Notebook Pro organization queue: {AVAILABLE_ORGANIZER_MODELS}\n")
-    print(f">>> Research candidates (validated when called): {AVAILABLE_RESEARCH_MODELS}\n")
+    fallback = (list(AVAILABLE_CHAT_MODELS) + list(AVAILABLE_ORGANIZER_MODELS) +
+                ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'])
+    names = discover('gemini', GEMINI_API_KEY, 'https://generativelanguage.googleapis.com/v1beta', fallback, TARGET_PROXY)
+    AVAILABLE_CHAT_MODELS = [name for name in names if ('flash' in name or 'lite' in name) and not is_research_model(name)]
+    AVAILABLE_ORGANIZER_MODELS = rank_research_models(names)
+    AVAILABLE_RESEARCH_MODELS = [name for name in ('gemini-4-argon', 'gemini-3.8-flash') if name in names]
+    print('[Gemini chat candidates]:', AVAILABLE_CHAT_MODELS)
+    print('[Gemini organizer candidates]:', AVAILABLE_ORGANIZER_MODELS)
+    print('[Gemini scoped research candidates]:', AVAILABLE_RESEARCH_MODELS)
 
 def promote_runtime_model(provider: str, model_name: str):
     """Promote successful models at runtime without removing any fallback models."""
@@ -621,36 +578,25 @@ def promote_runtime_model(provider: str, model_name: str):
     print(f"[Runtime review][{provider.upper()}]: {model_name} answered successfully; promoted to first choice")
 
 def init_claude_models():
-    """Initialize and display the Claude queue from highest to lowest priority."""
+    from model_catalogs import discover
     global CLAUDE_MODEL_NAMES, CLAUDE_MODEL_NAME
-    CLAUDE_MODEL_NAMES = sorted(set(CLAUDE_MODEL_NAMES), key=claude_model_score, reverse=True)
-    if not CLAUDE_MODEL_NAMES:
-        CLAUDE_MODEL_NAMES = ["claude-sonnet-4-6"]
-    CLAUDE_MODEL_NAME = CLAUDE_MODEL_NAMES[0]
-    print(f"\n[Discovering Claude conversation models...]")
-    print(f">>> Claude priority queue: {CLAUDE_MODEL_NAMES}")
-    print(f">>> Preferred Claude model: [{CLAUDE_MODEL_NAME}]\n")
+    CLAUDE_MODEL_NAMES = discover('claude', ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, CLAUDE_MODEL_NAMES, TARGET_PROXY)
+    CLAUDE_MODEL_NAME = CLAUDE_MODEL_NAMES[0] if CLAUDE_MODEL_NAMES else 'claude-opus-5-5'
+    print('[Claude text candidates]:', CLAUDE_MODEL_NAMES)
 
 def init_deepseek_models():
-    """Initialize and display the DeepSeek queue from highest to lowest priority."""
+    from model_catalogs import discover
     global DEEPSEEK_MODEL_NAMES, DEEPSEEK_MODEL_NAME
-    DEEPSEEK_MODEL_NAMES = ["deepseek-v4-pro", "deepseek-flash", "deepseek-reasoner", "deepseek-chat"]
-    DEEPSEEK_MODEL_NAME = DEEPSEEK_MODEL_NAMES[0]
-    print("\n[Discovering DeepSeek conversation models...]")
-    print(f">>> DeepSeek priority queue: {DEEPSEEK_MODEL_NAMES}")
-    print(f">>> Preferred DeepSeek model: [{DEEPSEEK_MODEL_NAME}]\n")
+    DEEPSEEK_MODEL_NAMES = discover('deepseek', DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_NAMES, TARGET_PROXY)
+    DEEPSEEK_MODEL_NAME = DEEPSEEK_MODEL_NAMES[0] if DEEPSEEK_MODEL_NAMES else 'deepseek-chat'
+    print('[DeepSeek text candidates]:', DEEPSEEK_MODEL_NAMES)
 
 def init_mimo_models():
-    """Initialize MiMo 2.6/2.5 queues, preferring Pro with Flash as a fast fallback."""
+    from model_catalogs import discover
     global MIMO_MODEL_NAMES, MIMO_MODEL_NAME
-    MIMO_MODEL_NAMES = [
-        "mimo-v2.6-pro",
-        "mimo-v2.6-flash",
-    ]
-    MIMO_MODEL_NAME = MIMO_MODEL_NAMES[0]
-    print("\n[Discovering MiMo conversation models...]")
-    print(f">>> MiMo priority queue: {MIMO_MODEL_NAMES}")
-    print(f">>> Preferred MiMo model: [{MIMO_MODEL_NAME}]\n")
+    MIMO_MODEL_NAMES = discover('mimo', MIMO_API_KEY, MIMO_BASE_URL, MIMO_MODEL_NAMES, TARGET_PROXY)
+    MIMO_MODEL_NAME = MIMO_MODEL_NAMES[0] if MIMO_MODEL_NAMES else 'mimo-v2.6-pro'
+    print('[MiMo text candidates]:', MIMO_MODEL_NAMES)
 
 async def verify_gemini_models(startup_only: bool = False):
     """Call Gemini candidates; at startup, return immediately after finding a usable model."""
@@ -714,132 +660,12 @@ async def verify_gemini_models(startup_only: bool = False):
         print("[Gemini availability]: No model passed live tests; backend temporarily unavailable")
 
 def init_gpt_models():
-    """Discover currently available GPT models from OpenAI-compatible endpoints and rank them."""
+    from model_catalogs import discover
     global GPT_MODEL_NAMES, GPT_MODEL_NAME
-    print("\n[Discovering available GPT conversation models...]")
-
-    fallback_models = [
-        model.strip()
-        for model in os.getenv(
-            "OPENAI_MODELS",
-            "gpt-4o,gpt-4o-mini,gpt-4-turbo,gpt-3.5-turbo"
-        ).split(",")
-        if model.strip()
-    ]
-
-    if not OPENAI_API_KEY:
-        print("[Notice]: OPENAI_API_KEY is not configured; using the preset GPT model list.")
-        GPT_MODEL_NAMES = fallback_models or ["gpt-4o"]
-        GPT_MODEL_NAME = GPT_MODEL_NAMES[0]
-        print(f">>> Current GPT queue: {GPT_MODEL_NAMES}\n")
-        return
-
-    exclude_keywords = [
-        "audio", "realtime", "tts", "whisper", "dall-e", "embedding",
-        "moderation", "davinci", "babbage", "curie", "text-search", "transcribe",
-        "image", "live", "search", "codex"
-    ]
-
-    def fetch_models():
-        request = urllib.request.Request(
-            f"{OPENAI_BASE_URL}/models",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "User-Agent": "Mozilla/5.0"
-            },
-            method="GET"
-        )
-        proxy_handler = urllib.request.ProxyHandler(
-            {"http": TARGET_PROXY, "https": TARGET_PROXY}
-        ) if TARGET_PROXY else urllib.request.ProxyHandler({})
-        opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(request, timeout=10) as response:
-            return json.loads(response.read().decode("utf-8"))
-
-    try:
-        model_data = fetch_models()
-        valid_models = []
-        for item in model_data.get("data", []):
-            model_id = str(item.get("id", "")).strip()
-            lowered = model_id.lower()
-            if not model_id:
-                continue
-            if not model_id.startswith(("gpt-", "chatgpt", "o1", "o3")):
-                continue
-            if any(word in lowered for word in exclude_keywords):
-                continue
-            valid_models.append(model_id)
-
-        def gpt_score(name: str):
-            """Rank stability first, then capability; prefer undated aliases over dated snapshots."""
-            model_name = name.lower()
-
-            # Rank flagship models by version and capability, including custom endpoint variants such as 5.6 terra/luna.
-            if model_name.startswith("gpt-6"):
-                score = 12000
-            elif "gpt-5.6" in model_name:
-                score = 11600
-            elif "gpt-5.5" in model_name:
-                score = 11400
-            elif "gpt-5.4" in model_name:
-                score = 11200
-            elif "gpt-5.3" in model_name:
-                score = 11000
-            elif "gpt-5.2" in model_name:
-                score = 10800
-            elif "gpt-5.1" in model_name:
-                score = 10600
-            elif model_name.startswith("gpt-5"):
-                score = 10400
-            elif model_name.startswith("o3"):
-                score = 10000
-            elif model_name.startswith("o1"):
-                score = 9800
-            elif "gpt-4.5" in model_name:
-                score = 9000
-            elif "gpt-4.1" in model_name:
-                score = 8800
-            elif "gpt-4o" in model_name:
-                score = 8500
-            elif model_name.startswith("gpt-4"):
-                score = 8000
-            elif "gpt-3.5" in model_name:
-                score = 6500
-            else:
-                score = 1000
-
-            # Pro/flagship variants generally offer greater capability; mini/nano provide speed and quota fallbacks.
-            if "-pro" in model_name:
-                score += 400
-            if "-mini" in model_name:
-                score -= 450
-            if "-nano" in model_name:
-                score -= 800
-            if "preview" in model_name:
-                score -= 700
-
-            # Prefer stable aliases over dated snapshots to avoid pinning an old version at startup.
-            if re.search(r"-20\d{2}-\d{2}-\d{2}$", model_name):
-                score -= 250
-            elif model_name.endswith("-latest"):
-                score += 80
-
-            return score
-
-        if valid_models:
-            GPT_MODEL_NAMES = sorted(set(valid_models), key=gpt_score, reverse=True)
-            GPT_MODEL_NAME = GPT_MODEL_NAMES[0]
-            print(f">>> Discovered and ranked {len(GPT_MODEL_NAMES)} GPT models: {GPT_MODEL_NAMES}")
-        else:
-            GPT_MODEL_NAMES = fallback_models or ["gpt-4o"]
-            GPT_MODEL_NAME = GPT_MODEL_NAMES[0]
-            print(f">>> No suitable conversation models; using defaults: {GPT_MODEL_NAMES}")
-    except Exception as e:
-        GPT_MODEL_NAMES = fallback_models or ["gpt-4o"]
-        GPT_MODEL_NAME = GPT_MODEL_NAMES[0]
-        print(f"[GPT discovery failed ({e})]: Using default queue {GPT_MODEL_NAMES}")
-
-    print(f">>> Preferred GPT model: [{GPT_MODEL_NAME}]\n")
+    fallback = [name.strip() for name in os.getenv('OPENAI_MODELS', 'gpt-6-astra,gpt-6.1-sol,gpt-6.1-terra,gpt-6-luna').split(',') if name.strip()]
+    GPT_MODEL_NAMES = discover('openai', OPENAI_API_KEY, OPENAI_BASE_URL, GPT_MODEL_NAMES or fallback, TARGET_PROXY)
+    GPT_MODEL_NAME = GPT_MODEL_NAMES[0] if GPT_MODEL_NAMES else 'gpt-6-astra'
+    print('[OpenAI text candidates]:', GPT_MODEL_NAMES)
 
 async def verify_gpt_models(startup_only: bool = False):
     """Call GPT candidates; at startup, return immediately after finding a usable model."""
@@ -1614,7 +1440,8 @@ async def call_gpt_with_history(session_id: str, prompt_text: str,
             except Exception as e:
                 last_error = f"{model_name}: {describe_api_error(e)}"
                 print('[GPT model failed]:', last_error)
-                if isinstance(e, urllib.error.HTTPError) and e.code in {401, 402}:
+                from model_catalogs import account_blocked
+                if isinstance(e, urllib.error.HTTPError) and account_blocked(e.code, last_error):
                     break
         raise RuntimeError(last_error)
 
@@ -1754,8 +1581,8 @@ async def background_periodic_monitor(ws_getter):
             refresh_counter += 1
             if refresh_counter >= 8:
                 refresh_counter = 0
-                await asyncio.to_thread(init_chat_models)
-                await asyncio.to_thread(init_gpt_models)
+                await asyncio.gather(*(asyncio.to_thread(function) for function in (
+                    init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))
                 print('[Model refresh]: Updating lists only; availability follows successful ordinary conversation requests')
             # Weather is fetched only by a query or a due, configured delivery.
             # Earthquakes use a separate task to avoid duplicate notifications during weather checks.
@@ -2626,11 +2453,8 @@ async def main():
     # Resolve locations lazily when their weather or map information is requested.
     extensions.spawn(extensions.nightly())
     extensions.spawn(features.reminder_loop())
-    await asyncio.to_thread(init_chat_models)
-    init_claude_models()
-    init_deepseek_models()
-    init_mimo_models()
-    await asyncio.to_thread(init_gpt_models)
+    await asyncio.gather(*(asyncio.to_thread(function) for function in (
+        init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))
     await prepare_stolen_emoji_store()
     start_food_map(Path(__file__).resolve().parent)
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
