@@ -8,9 +8,21 @@ from unittest.mock import AsyncMock, patch
 from PIL import Image
 from bot_extensions import Extensions
 from weather_delivery import render_report, gemini_brief, checked_brief, fallback_brief
+from response_visibility import visible_response_text
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reasoning_parts_and_style_fragments_are_never_visible(self):
+        response = SimpleNamespace(text='private reasoning plus public text', candidates=[SimpleNamespace(
+            content=SimpleNamespace(parts=[SimpleNamespace(text='very short per bubble).', thought=True),
+                                           SimpleNamespace(text='Bring an umbrella.', thought=False)]))])
+        self.assertEqual(visible_response_text(response), 'Bring an umbrella.')
+        self.assertEqual(visible_response_text(SimpleNamespace(text='<think>secret</think>Stay warm.')), 'Stay warm.')
+        self.assertIsNone(checked_brief(SimpleNamespace(text='very short per bubble). Stay warm.'), 'en'))
+        self.assertEqual(visible_response_text(SimpleNamespace(text='etc.), friendly (')), '')
+        response.candidates[0].content.parts = [SimpleNamespace(text='reasoning only', thought=True)]
+        self.assertEqual(visible_response_text(response), '')
+
     async def test_wrong_language_and_partial_generation_are_rejected(self):
         self.assertIsNone(checked_brief(SimpleNamespace(text='Today is cloudy with temperatures ranging from 16 to 24, though gusts may'), 'zh'))
         self.assertIsNone(checked_brief(SimpleNamespace(text='Today is cloudy, though gusts may'), 'en'))
@@ -29,6 +41,8 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             client=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=request))))
         self.assertEqual(await gemini_brief(bot, chinese, 'zh-CN'), chinese)
         self.assertIn('Simplified Chinese', request.call_args.kwargs['config']['system_instruction'])
+        self.assertIn('affectionate', request.call_args.kwargs['config']['system_instruction'])
+        self.assertIn('Never explain', request.call_args.kwargs['config']['system_instruction'])
         self.assertEqual(request.await_count, 2)
 
     async def test_png_supports_multilingual_long_reports(self):

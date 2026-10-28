@@ -1686,7 +1686,8 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
                 ),
                 timeout=12.0
             )
-            reply_text = (response.text or "").strip()
+            from response_visibility import visible_response_text
+            reply_text = visible_response_text(response)
             if reply_text:
                 promote_runtime_model("gemini", model_id)
                 chat_histories[session_id].append(

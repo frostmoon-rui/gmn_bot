@@ -118,7 +118,7 @@ def metric_rows(row):
     return values, probability
 
 
-def format_weather(data, target='today', labels=None, translate=None):
+def format_weather(data, target='today', labels=None, translate=None, diagnostics=False):
     from weather_providers import RANGES
     labels = dict(LABELS, **(labels or {}))
     translate = translate or (lambda value: str(value))
@@ -139,7 +139,7 @@ def format_weather(data, target='today', labels=None, translate=None):
             if key in RANGES and not RANGES[key][0] <= float(value) <= RANGES[key][1]:
                 continue
             suffix = ''
-            if provenance and data.get('field_sources', {}).get(key):
+            if diagnostics and provenance and data.get('field_sources', {}).get(key):
                 suffix = ' [' + text(data['field_sources'][key]) + ']'
             if key == 'uv' and provenance and data.get('uv_kind'):
                 suffix += ' (' + labels['daily_uv' if data['uv_kind'] == 'daily maximum' else 'current_uv'] + ')'
@@ -223,24 +223,27 @@ def format_weather(data, target='today', labels=None, translate=None):
     for provider, payload in alerts.items():
         entries = payload.get('weatherAlerts', []) if isinstance(payload, dict) else payload if isinstance(payload, list) else []
         if not entries:
-            lines.append(text(provider) + ': ' + labels['empty_alerts'])
+            if labels['empty_alerts'] not in lines:
+                lines.append(labels['empty_alerts'])
         for alert in entries:
             # Do not emit alert areaName, polygon or free-form location-bearing text.
-            lines.append(text(provider) + ': ' + ' / '.join(text(alert[key]) for key in ('eventType', 'severity', 'certainty', 'urgency') if alert.get(key)))
+            lines.append(' / '.join(text(alert[key]) for key in ('eventType', 'severity', 'certainty', 'urgency') if alert.get(key)))
             for key in ('startTime', 'expirationTime'):
                 if alert.get(key):
                     lines.append(local_time(alert[key], zone))
     if data.get('disagreements'):
         lines.append(labels['disagreement'])
         for conflict in data['disagreements']:
-            lines.append(labels.get(conflict['field'], conflict['field']) + ': ' +
-                         str(conflict['selected']) + ' [' + text(conflict['selected_source']) + '] / ' +
-                         str(conflict['other']) + ' [' + text(conflict['other_source']) + ']')
-    lines += ['', labels['sources']]
-    for name, report in data.get('source_reports', {}).items():
-        lines.append(text(name) + ' | ' + local_time(report.get('reported_at'), zone) + ' | ' + text(report.get('kind', '')))
-    for name, status in data.get('provider_status', {}).items():
-        lines.append(text(name) + ': ' + text(status))
+            detail = str(conflict['selected']) + ' / ' + str(conflict['other'])
+            if diagnostics:
+                detail += ' [' + text(conflict['selected_source']) + ' / ' + text(conflict['other_source']) + ']'
+            lines.append(labels.get(conflict['field'], conflict['field']) + ': ' + detail)
+    if diagnostics:
+        lines += ['', labels['sources']]
+        for name, report in data.get('source_reports', {}).items():
+            lines.append(text(name) + ' | ' + local_time(report.get('reported_at'), zone) + ' | ' + text(report.get('kind', '')))
+        for name, status in data.get('provider_status', {}).items():
+            lines.append(text(name) + ': ' + text(status))
     missing = [labels[key] for key in METRICS if not available(data.get(key))]
     if missing:
         lines.append(labels['missing'] + ': ' + ', '.join(missing))

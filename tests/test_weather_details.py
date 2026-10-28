@@ -145,6 +145,22 @@ class WeatherRetentionTests(unittest.TestCase):
 
 
 class WeatherReportTests(unittest.TestCase):
+    def test_chat_report_hides_sources_but_keeps_local_diagnostics(self):
+        data = fixture()
+        data['field_sources'] = {'temp': 'PROVIDER_NAME'}
+        data['source_reports'] = {'PROVIDER_NAME': {'reported_at': '2026-10-28T09:30'}}
+        data['provider_status'] = {'PROVIDER_NAME': 'http-status-403'}
+        data['provider_alerts'] = {'PROVIDER_NAME': {'weatherAlerts': []}}
+        data['disagreements'] = [{'field': 'temp', 'selected': 0, 'other': 2,
+                                  'selected_source': 'PROVIDER_NAME', 'other_source': 'OTHER_PROVIDER'}]
+        report = format_weather(data)
+        self.assertNotIn('PROVIDER_NAME', report)
+        self.assertNotIn('OTHER_PROVIDER', report)
+        self.assertNotIn('http-status-403', report)
+        self.assertIn('Temperature 0°C', report)
+        self.assertIn('PROVIDER_NAME', format_weather(data, diagnostics=True))
+        self.assertEqual(data['provider_status']['PROVIDER_NAME'], 'http-status-403')
+
     def test_morning_report_uses_localized_greeting_override(self):
         self.assertTrue(format_weather(fixture(), 'morning', {'morning': 'Custom greeting'}).startswith('Custom greeting'))
 
