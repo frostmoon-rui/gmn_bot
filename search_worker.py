@@ -121,7 +121,9 @@ def wikipedia(query, language, topic=None):
     except Exception as error:
         api_failure = wiki_error_label(error)
         if isinstance(error, urllib.error.HTTPError) and error.code == 429:
-            raise WikipediaFetchError('API HTTP 429; paused requests for this language') from None
+            retry = (error.headers or {}).get('Retry-After', '')
+            seconds = min(3600, max(60, int(retry))) if str(retry).isdigit() else 600
+            raise WikipediaFetchError('API HTTP 429; retry after ' + str(seconds) + ' seconds') from None
     from research_transport import crawl_public_page
     title = topic or search_topic(query)
     url = f'https://{language}.wikipedia.org/wiki/' + urllib.parse.quote(title.replace(' ', '_'), safe='')
@@ -165,14 +167,14 @@ def alternative_search(query):
     return parser.links[:18]
 
 
-def collect(query, mode='web', topic=''):
+def collect(query, mode='web', topic='', skip_wikipedia=()):
     warnings = []
     if mode == 'wiki':
         # The model selects encyclopedia intent and topic. Fetch relevant articles first; sufficient results skip search engines.
         wiki_pages = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             jobs = [(pool.submit(wikipedia, query, language, topic or None), language)
-                    for language in wikipedia_languages(query, topic)]
+                    for language in wikipedia_languages(query, topic) if language not in skip_wikipedia]
             for job, language in jobs:
                 try:
                     values = job.result()
@@ -207,7 +209,7 @@ def collect(query, mode='web', topic=''):
         jobs = [(pool.submit(alternative_search, search_query), 'Fallback web search')]
         if mode != 'wiki':
             jobs += [(pool.submit(wikipedia, query, language, topic or None), 'Wikipedia [' + language + ']')
-                     for language in wikipedia_languages(query, topic)]
+                     for language in wikipedia_languages(query, topic) if language not in skip_wikipedia]
         for task, source in jobs:
             try:
                 values = task.result()
@@ -230,6 +232,13 @@ def collect(query, mode='web', topic=''):
             except Exception as error:
                 return {'url': url, 'text': '', 'error': str(error)}
             return {'url': url, 'text': '', 'error': 'Page has no body text or uses an unsupported format'}
+        limited = set(skip_wikipedia)
+        for warning in warnings:
+            match = re.search(r'Wikipedia \[(en|zh)\]:.*HTTP 429', warning)
+            if match:
+                limited.add(match[1])
+        urls = [url for url in urls if urllib.parse.urlsplit(url).hostname not in
+                {language + '.wikipedia.org' for language in limited}]
         for page in pool.map(fetch, urls[:24]):
             if page.get('text'):
                 pages.append(page)
@@ -244,4 +253,5 @@ if __name__ == '__main__':
     sys.stdin.reconfigure(encoding='utf-8')
     sys.stdout.reconfigure(encoding='utf-8')
     request = json.load(sys.stdin)
-    json.dump(collect(request['query'], request.get('mode', 'web'), request.get('topic', '')), sys.stdout, ensure_ascii=False)
+    json.dump(collect(request['query'], request.get('mode', 'web'), request.get('topic', ''),
+                      request.get('skip_wikipedia', [])), sys.stdout, ensure_ascii=False)

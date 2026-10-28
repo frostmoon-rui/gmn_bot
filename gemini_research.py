@@ -1,6 +1,7 @@
 """Free-first scoped Gemini planning and direct Argon calls; retain catalog helpers."""
 import asyncio
 import re
+import time
 
 RESEARCH_MODE = 'gemini-research'
 DIRECT_ARGON_MODE = 'gemini-argon-direct'
@@ -50,10 +51,16 @@ async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answ
     if json_mode:
         config['response_mime_type'] = 'application/json'
     failures = []
+    if not hasattr(bot, '_scoped_gemini_cooldowns'):
+        bot._scoped_gemini_cooldowns = {}
+    cooldowns = bot._scoped_gemini_cooldowns
     for tier in ('free', 'paid'):
         if tier == 'paid' and not getattr(bot, 'RESEARCH_PAID_ENABLED', False):
             break
         for model in models:
+            if cooldowns.get((tier, model), 0) > time.monotonic():
+                failures.append(tier + '/' + model + ':quota-cooldown')
+                continue
             print('[Scoped Gemini]: Trying', tier, purpose, model)
             try:
                 if tier == 'free':
@@ -70,6 +77,10 @@ async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answ
                 return result
             except Exception as error:
                 code = failure_code(error)
+                if code == '429':
+                    retry = (getattr(error, 'headers', None) or {}).get('Retry-After', '')
+                    delay = min(3600, max(1, int(retry))) if str(retry).isdigit() else 60
+                    cooldowns[(tier, model)] = time.monotonic() + delay
                 failures.append(tier + '/' + model + ':' + code)
                 print('[Scoped Gemini unavailable]:', tier, model, code)
     raise RuntimeError('Gemini research candidates unavailable: ' + ', '.join(failures))

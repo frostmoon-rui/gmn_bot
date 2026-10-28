@@ -557,16 +557,22 @@ class Extensions:
             return result
 
     async def _python_search_process(self, query, mode='web', topic=''):
+        from wikipedia_diagnostics import WikipediaCooldowns
+        if not hasattr(self, '_wikipedia_cooldowns'):
+            self._wikipedia_cooldowns = WikipediaCooldowns()
         process = await asyncio.create_subprocess_exec(sys.executable,
             str(Path(__file__).with_name('search_worker.py')),
             cwd=str(Path(__file__).resolve().parent),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             output, errors = await asyncio.wait_for(process.communicate(
-                json.dumps({'query': query, 'mode': mode, 'topic': topic}, ensure_ascii=False).encode('utf-8')), timeout=360)
+                json.dumps({'query': query, 'mode': mode, 'topic': topic,
+                            'skip_wikipedia': self._wikipedia_cooldowns.active()}, ensure_ascii=False).encode('utf-8')), timeout=360)
             if process.returncode:
                 raise RuntimeError('Python research process failed: ' + errors.decode('utf-8', errors='replace')[-2000:])
-            return json.loads(output)
+            result = json.loads(output)
+            self._wikipedia_cooldowns.observe(result.get('warnings', []))
+            return result
         finally:
             if process.returncode is None:
                 process.kill()
@@ -608,7 +614,7 @@ class Extensions:
                 print('[Pro research fallback]:', type(error).__name__, '; continuing with MiMo 2.6 Pro')
                 result = {'pages': [], 'warnings': []}
             pages = result.get('pages', [])
-            for warning in result.get('warnings', []):
+            for warning in ([] if model == RESEARCH_MODE else result.get('warnings', [])):
                 print('[Python research notice]:', warning)
             if model == RESEARCH_MODE:
                 from mimo_explanations import explain, reply_chunks

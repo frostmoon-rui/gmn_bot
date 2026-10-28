@@ -73,8 +73,10 @@ async def research(bot, search, question):
                 result = await search(task['query'], task['mode'], task['topic'])
                 pages.extend(result.get('pages') or [])
                 for warning in result.get('warnings', []):
-                    print('[Research retrieval notice]:', warning)
-                    warnings.append(str(warning)[:500])
+                    warning = str(warning)[:500]
+                    if warning not in warnings:
+                        print('[Research retrieval notice]:', warning)
+                        warnings.append(warning)
                 print('[Research retrieval result]:', len(result.get('pages') or []), 'pages')
             except Exception as error:
                 print('[Research retrieval failed]:', type(error).__name__)
