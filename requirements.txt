@@ -3,3 +3,4 @@ websockets
 Pillow
 tzdata
 geonamescache
+jieba==0.42.1

@@ -11,12 +11,16 @@ from local_settings import setting
 from video_transport import validate_video_target
 
 
-def read_public_page(url, limit=900000):
+def research_proxy():
     value = setting('SEARCH_PROXY', None)
     if value is None:
         proxies = urllib.request.getproxies()
         value = proxies.get('https') or proxies.get('http') or ''
-    proxy = local_proxy(value)
+    return local_proxy(value)
+
+
+def read_public_page(url, limit=900000):
+    proxy = research_proxy()
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None

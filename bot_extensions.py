@@ -675,7 +675,11 @@ class Extensions:
                     await self.b.remember_search_result(kind, group, user, query, report)
                 return
             if not pages:
-                await self.send(ws, kind, group, user, 'No reliable material was found yet. I will not guess; please try later.')
+                states = {row.get('state') for row in result.get('search_diagnostics', [])}
+                unavailable = states & {'javascript-required','verification-required','consent-required','request-failed'}
+                notice = ('Search access is restricted and the remaining results did not answer the question, meow. This does not mean the information does not exist.'
+                          if unavailable else 'The retrieved results did not contain enough relevant evidence, meow. I will not guess.')
+                await self.send(ws, kind, group, user, notice)
                 return
             from search_worker import has_domain, is_recent_query
             if (mode == 'latest' or is_recent_query(query)) and all(has_domain(p.get('url', ''), 'wikipedia.org') for p in pages):

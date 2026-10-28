@@ -4,6 +4,8 @@ These checks screen evidence for topic overlap, not truth or publication dates.
 """
 import math
 import re
+import logging
+from functools import lru_cache
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from search_links import decode_result_link
@@ -24,7 +26,9 @@ def normalize(text):
 
 def terms(query):
     query = re.sub(r'\b(?:site|filetype|inurl):\S+', ' ', query, flags=re.I)
-    chunks = re.findall(r'[a-z][a-z0-9-]*|[\u3400-\u9fff]+', normalize(query))
+    query = re.sub(r'(?<!\d)20\d{2}年?(?!\d)', ' ', query)
+    query = query.casefold().replace('供热', '供暖').replace('采暖', '供暖')
+    chunks = re.findall(r'[a-z][a-z0-9-]*|[\u3400-\u9fff]+', query)
     result = set()
     for chunk in chunks:
         if chunk.isascii():
@@ -33,8 +37,15 @@ def terms(query):
         else:
             for word in HAN_QUESTIONS.split(chunk):
                 if len(word) >= 2:
-                    result.update(word[i:i+2] for i in range(len(word)-1))
+                    result.update(token for token in chinese_tokens(word) if len(token) >= 2)
     return result
+
+
+@lru_cache(maxsize=256)
+def chinese_tokens(word):
+    import jieba
+    jieba.setLogLevel(logging.ERROR)
+    return tuple(jieba.cut(word, HMM=False))
 
 
 def keyword_query(query):
@@ -88,6 +99,8 @@ class OrganicResults(HTMLParser):
             self.page_state = 'verification-required'
         elif 'consent.google.com' in lowered and ('before you continue' in lowered or '同意' in lowered):
             self.page_state = 'consent-required'
+        elif '/httpservice/retry/enablejs' in lowered:
+            self.page_state = 'javascript-required'
         super().feed(data)
 
     def handle_starttag(self, tag, attrs):

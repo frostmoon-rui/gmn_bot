@@ -3,7 +3,7 @@ import unittest
 import urllib.parse
 import urllib.error
 from unittest.mock import patch
-from search_quality import OrganicResults, relevant, keyword_query
+from search_quality import OrganicResults, relevant, keyword_query, terms
 from search_worker import alternative_search, collect
 
 
@@ -112,3 +112,68 @@ class SearchQualityTests(unittest.TestCase):
         with patch('research_transport.read_public_page',return_value='<title>百度安全验证</title>宁夏供暖'):
             with self.assertRaisesRegex(ValueError,'verification'):
                 crawl_public_page('https://notice.example/a')
+
+    def test_chinese_words_do_not_contain_year_or_cross_word_fragments(self):
+        for query in ('2026年宁夏供暖时间','宁夏 供暖时间 2026','宁夏什么时候供暖'):
+            self.assertEqual(terms(query),{'宁夏','供暖'})
+            self.assertTrue(relevant(query,'宁夏近日宣布开始供热，具体以各市公告为准。'))
+        self.assertFalse(relevant('宁夏供暖','宁夏自治区旅游介绍'))
+
+    def test_google_javascript_shell_stops_repeated_requests(self):
+        from search_quality import SearchResults
+        shell='<title>Google Search</title><noscript><meta http-equiv="refresh" content="0;url=/httpservice/retry/enablejs"></noscript>'
+        parser=OrganicResults()
+        parser.feed(shell)
+        result=parser.results('宁夏供暖')
+        self.assertEqual(result.diagnostics[0]['state'],'javascript-required')
+        with patch('search_worker.google',return_value=result) as google, \
+             patch('search_worker.alternative_search',return_value=SearchResults()),patch('search_worker.time.sleep'):
+            report=collect('2026年宁夏供暖时间','latest')
+        self.assertEqual(google.call_count,1)
+        self.assertIn('javascript-required',report['warnings'][0])
+
+    def test_google_browser_fallback_reads_normal_rendered_results(self):
+        from search_worker import google
+        shell='<noscript><meta content="0;url=/httpservice/retry/enablejs"></noscript>'
+        rendered='<h3><a href="https://notice.example/a">宁夏供热安排</a></h3>'
+        with patch('search_worker.read',return_value=shell), \
+             patch('search_browser.render_search',return_value={'state':'rendered','html':rendered}) as browser:
+            result=google('2026年宁夏供暖时间')
+        self.assertEqual(result,['https://notice.example/a'])
+        self.assertEqual(browser.call_count,1)
+        self.assertEqual(result.diagnostics[-1]['transport'],'browser')
+
+    def test_browser_challenge_remains_failure_without_executing_verification(self):
+        from search_worker import google
+        shell='<noscript><meta content="0;url=/httpservice/retry/enablejs"></noscript>'
+        with patch('search_worker.read',return_value=shell), \
+             patch('search_browser.render_search',return_value={'state':'rendered','html':'<p>unusual traffic</p>'}):
+            result=google('宁夏供暖')
+        self.assertEqual(result,[])
+        self.assertEqual(result.diagnostics[-1]['state'],'verification-required')
+
+    def test_browser_only_renders_fixed_public_search_pages(self):
+        from search_browser import allowed_request
+        self.assertTrue(allowed_request('https://www.google.com/search?q=test',navigation=True))
+        self.assertFalse(allowed_request('https://www.google.com/accounts',navigation=True))
+        self.assertFalse(allowed_request('https://127.0.0.1/search',navigation=True))
+        self.assertFalse(allowed_request('https://evil.example/search',navigation=True))
+        self.assertFalse(allowed_request('https://www.google.com/search',method='POST'))
+
+
+class SearchFailureReplyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_restricted_channel_is_not_sent_to_a_model_as_empty_evidence(self):
+        import copy
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from bot_extensions import Extensions
+        bot=SimpleNamespace(load_json_data=lambda name,default:copy.deepcopy(default),
+            call_mimo_direct_question=AsyncMock(),describe_api_error=str)
+        ext=Extensions(bot)
+        ext.python_search=AsyncMock(return_value={'pages':[],'warnings':[],
+            'search_diagnostics':[{'state':'verification-required'}]})
+        ext.send=AsyncMock()
+        await ext.search_job(None,'group',20,10,'heating schedule',mode='latest')
+        bot.call_mimo_direct_question.assert_not_called()
+        ext.send.assert_awaited_once()
+        self.assertTrue(ext.send.call_args.args[-1])

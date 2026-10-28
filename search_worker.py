@@ -94,7 +94,20 @@ def google(query, recent=False):
         raise RuntimeError('Google requires verification; retry later. No CAPTCHA bypass was attempted.')
     parser = OrganicResults('https://www.google.com')
     parser.feed(raw)
-    return parser.results(query)
+    result = parser.results(query)
+    if parser.page_state == 'javascript-required':
+        from search_browser import render_search
+        rendered = render_search('https://www.google.com/search?' + urllib.parse.urlencode(params))
+        diagnostics = [dict(row, transport='http') for row in result.diagnostics]
+        if rendered.get('html'):
+            browser_parser = OrganicResults('https://www.google.com')
+            browser_parser.feed(rendered['html'])
+            browser_result = browser_parser.results(query)
+            diagnostics.extend(dict(row, transport='browser') for row in browser_result.diagnostics)
+            return SearchResults(browser_result.entries, diagnostics)
+        diagnostics.append({key:value for key,value in rendered.items() if key != 'html'})
+        return SearchResults(diagnostics=diagnostics)
+    return result
 
 
 def _wikipedia_api(query, language, topic=None):
@@ -202,9 +215,17 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
     warnings = []
     stats = {'google_links':0,'fallback_links':0,'wikipedia_pages':0,'rejected_pages':0,'fetch_failures':0}
     diagnostics = []
+    google_paused = False
     def search_google(text, recent):
+        nonlocal google_paused
+        if google_paused:
+            return []
         links=google(text,recent)
         diagnostics.extend(dict(row,engine='google',query=text) for row in getattr(links,'diagnostics',[]))
+        states = {row.get('state') for row in getattr(links,'diagnostics',[])}
+        if states & {'javascript-required','verification-required','consent-required'}:
+            google_paused = True
+            warnings.append('Google channel unavailable: '+', '.join(sorted(states))+'; stopped this round')
         stats['google_links']+=len(links)
         return links
     if mode == 'wiki':
