@@ -118,6 +118,16 @@ def metric_rows(row):
     return values, probability
 
 
+class WeatherReport(str):
+    """Keep structured display data alongside the plain-text briefing facts."""
+    def __new__(cls, text, data, labels, translate):
+        instance = super().__new__(cls, text)
+        instance.weather_data = data
+        instance.weather_labels = labels
+        instance.weather_translate = translate
+        return instance
+
+
 def format_weather(data, target='today', labels=None, translate=None, diagnostics=False):
     from weather_providers import RANGES
     labels = dict(LABELS, **(labels or {}))
@@ -248,7 +258,7 @@ def format_weather(data, target='today', labels=None, translate=None, diagnostic
     if missing:
         lines.append(labels['missing'] + ': ' + ', '.join(missing))
     lines += [labels['hazards'], labels['care']]
-    return '\n'.join(line for line in lines if line is not None)
+    return WeatherReport('\n'.join(line for line in lines if line is not None), data, labels, translate)
 
 
 def chunks(text, limit=2400):

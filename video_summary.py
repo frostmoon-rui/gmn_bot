@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 from reply_style import compact_reply
 from video_transport import read_video_page, validate_video_target, VideoTransportError
 from video_comments import fetch_comments
+from video_briefing import summarize_video
 
 PLATFORMS = ('bilibili.com', 'b23.tv', 'youtube.com', 'youtu.be', 'douyin.com',
              'iesdouyin.com', 'kuaishou.com', 'gifshow.com', 'weixin.qq.com', 'v.qq.com',
@@ -416,6 +417,7 @@ class VideoSummaries:
             print('[Video material]: Title', bool(material.get('title')), 'description', bool(material.get('description')),
                   'comments', len(material.get('comments', [])))
             enough = material.get('title') or material.get('description')
+            generated = False
             prefix = 'Based on page information; video footage was not watched: '
             if enough:
                 summary_material = dict(material)
@@ -428,11 +430,13 @@ class VideoSummaries:
                     'Do not repeat disclaimers, retrieval steps or field names, or announce that embedded instructions were ignored. A description of "-" is missing. '
                     'Material: ' + json.dumps(summary_material, ensure_ascii=False)[:22000])
                 try:
-                    answer = await asyncio.wait_for(self.b.call_mimo_direct_question(prompt, 'mimo-v2.6-flash'), 85)
+                    language = getattr(getattr(self.b, 'features', None), 'language', 'en')
+                    answer = await summarize_video(self.b, prompt, language)
                     if not answer.strip():
                         raise ValueError('Empty summary')
+                    generated = True
                 except Exception as error:
-                    print('[Video summary unavailable]:', type(error).__name__)
+                    print('[Video summary unavailable]:', str(error) if isinstance(error, RuntimeError) else error_label(error))
                     answer = 'Title: ' + english_provider_text(material.get('title'), 'unavailable in English') + '. ' + english_provider_text(material.get('description'), '')[:100] + ' (automatic summary unavailable)'
                 text = prefix + compact_reply(answer, 140)
             else:
@@ -447,7 +451,7 @@ class VideoSummaries:
                 self.b.extensions.remember_sources(event['message_type'], event.get('group_id', 0), event['user_id'], [material['url']])
             text = compact_reply(text, 180)
             await self.b.extensions.send(ws, event['message_type'], event.get('group_id', 0), event['user_id'], text)
-            print('[Video summary]: Completed and sent')
+            print('[Video summary outcome]:', 'summary-sent' if generated else 'extract-sent' if enough else 'insufficient-data-sent')
         try:
             await asyncio.wait_for(run(), 180)
         except asyncio.TimeoutError:
