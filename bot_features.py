@@ -10,7 +10,23 @@ from datetime import datetime, timedelta, timezone
 from bot_care import crisis_intent
 
 TZ = timezone(timedelta(hours=8))
-HELP = {'website': 'Website interaction (mention me in groups; send directly in private)\n'
+HELP = {'weather': 'Weather queries (all existing features remain available)\n'
+                   'weather Paris | Paris weather | weather Siming District*Xiamen\n'
+                   'child*parent selects an explicit district/city hierarchy without replacing saved locations.\n'
+                   'weather today | weather tomorrow | set location:city\n'
+                   'The full card, cat briefing, comparisons and opt-in 22:30 notifications remain available.\n'
+                   'National products: help weather-maps',
+        'weather-maps': 'National weather maps (mention me in groups; / is optional)\n'
+                        '/24h temperature: daily mean temperature observations\n'
+                        '/current temperature: latest published hourly temperature observations\n'
+                        '/current precipitation: one-hour precipitation observations\n'
+                        '/24h precipitation: observed 24-hour precipitation total\n'
+                        '/30d precipitation: past-30-day total, not a 30-day forecast\n'
+                        '/china precipitation forecast: next-24-hour precipitation forecast\n'
+                        '/china temperature forecast: next-24-hour maximum temperature forecast\n'
+                        'Original NMC legends and source marks are retained. Charts are national, not city-specific.\n'
+                        'Demand-only downloads, shared five-minute cache, short failure backoff; never saved as stickers.',
+        'website': 'Website interaction (mention me in groups; send directly in private)\n'
             'https://frostmoonrui.com\n'
             'website screenshot:home / about / friends / resources / food / projects\n'
             'Example: website screenshot:friends ja light\n'

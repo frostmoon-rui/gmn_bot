@@ -156,11 +156,12 @@ class Extensions:
 
     async def normalize_location(self, location):
         from location_integrity import VALIDATION_VERSION
-        original = re.sub(r'[\u200b-\u200f\ufeff]', '', location).strip()
+        from weather_queries import weather_query
+        original = weather_query(re.sub(r'[\u200b-\u200f\ufeff]', '', location))
         existing = self.locations.get(original)
         capital_query = province_capital(original)
         if existing and existing.get('validation_version') == VALIDATION_VERSION and existing.get('status') in {'resolved', 'needs_city'} and not (
-            capital_query and not existing.get('capital_reference')):
+            (capital_query and not existing.get('capital_reference')) or ('|' in original and not existing.get('scope_verified'))):
             changed = False
             for region in self.b.regions_data.values():
                 if region.get('location') == location and region.get('google_location') != existing:
@@ -173,7 +174,7 @@ class Extensions:
             from location_integrity import choose_geocode
             query = capital_query or original.replace('广西省', '广西壮族自治区')
             data = self.get_json('https://maps.googleapis.com/maps/api/geocode/json?' +
-                urllib.parse.urlencode({'address': query, 'language': 'en', 'key': self.key}))
+                urllib.parse.urlencode({'address': query.replace('|', ', '), 'language': 'en', 'key': self.key}))
             results = data.get('results', [])
             result_language = 'en'
             try:
@@ -183,7 +184,7 @@ class Extensions:
                     raise
                 retry_query = ('中国' + query) if any(name in query for name in PROVINCE_CAPITALS) and not query.startswith('中国') else query
                 retry = self.get_json('https://maps.googleapis.com/maps/api/geocode/json?' +
-                    urllib.parse.urlencode({'address': retry_query, 'language': 'zh-CN', 'key': self.key}))
+                    urllib.parse.urlencode({'address': retry_query.replace('|', ', '), 'language': 'zh-CN', 'key': self.key}))
                 result = choose_geocode(retry_query, retry.get('results', []))
                 result_language = 'zh-CN'
             english_result = next((item for item in results if item.get('place_id') and item.get('place_id') == result.get('place_id')), result)
@@ -199,7 +200,7 @@ class Extensions:
                 'locality_en': next((c.get('long_name', '') for level in ('sublocality_level_1','locality',
                     'administrative_area_level_5','administrative_area_level_4','administrative_area_level_3')
                     for c in english_result.get('address_components', []) if level in c.get('types', [])), ''),
-                'validation_version': VALIDATION_VERSION, 'location_types': types,
+                'validation_version': VALIDATION_VERSION, 'location_types': types, 'scope_verified': '|' in query,
                 'place_id': result.get('place_id'), 'latitude': float(point['lat']), 'longitude': float(point['lng']),
                 'country_code': country, 'language': result_language, 'status': 'needs_city' if broad else 'resolved',
                 'updated': datetime.now(SHANGHAI).isoformat()}
@@ -223,6 +224,8 @@ class Extensions:
 
     async def google_weather(self, location):
         """Share the existing ten-minute cache and serialize requests for one region."""
+        from weather_queries import weather_query
+        location = weather_query(location)
         lock = self.weather_locks.setdefault(location, asyncio.Lock())
         async with lock:
             return await self._weather_for_location(location)
@@ -414,7 +417,17 @@ class Extensions:
         brief = await gemini_brief(self.b, report, language, fallback_text=brief_notice)
         await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(brief, user)}})
 
+    async def weather_map_job(self, ws, kind, group, user, product):
+        from weather_map_delivery import deliver_weather_map
+        await deliver_weather_map(self, ws, kind, group, user, product)
+
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
+        from weather_maps import map_request
+        product = map_request(text)
+        if product and (mentioned or kind == 'private'):
+            if not self.start_user_job(user, 'weather-map', self.weather_map_job(ws, kind, group, user, product)):
+                return 'A weather-map lookup is already running, meow.'
+            return 'Fetching the latest published national weather map, meow.'
         from bot_actions import english_weather_request as weather_request
         weather = weather_request(text)
         if weather is not None:

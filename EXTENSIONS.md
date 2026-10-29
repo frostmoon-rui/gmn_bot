@@ -187,3 +187,26 @@ The separate `GEMINI_RESEARCH_PAID_API_KEY` belongs only in local configuration 
 Explicit research has no overall five-minute deadline. Individual Gemini calls remain bounded at 600 seconds, Python retrieval processes at 360 seconds, MiMo Flash planning at 180 seconds, and MiMo Pro synthesis at 660 seconds. Ordinary Flash search retains its short-answer behavior and five-minute deadline. Source lists are available on request. No real keys or usage databases belong in the public repository.
 
 Wikipedia language routing follows the topic: English topics query English Wikipedia instead of using an English slug on the Chinese site. Chinese topics may still query both languages. A missing article (404) is an empty result, not a generic interface failure. Other warnings identify the language, API/article stage and HTTP status without echoing private exception details. API 429 stops further article requests for that language; independent web research can continue.
+
+
+## Additional weather queries and national maps
+
+All existing city weather cards, cat briefings, saved locations, tomorrow forecasts, comparisons and opt-in 22:30 notifications remain available.
+`weather Siming District*Xiamen` selects a child district and its parent city. A partial parent-only match cannot satisfy that query; existing personal records are not rewritten.
+
+Mention the bot in a group, or send these directly in private. The leading slash is optional.
+
+| Command | Product |
+| --- | --- |
+| `/24h temperature` | China daily mean temperature observations |
+| `/current temperature` | Latest published China hourly temperature observations |
+| `/current precipitation` | China one-hour precipitation observations |
+| `/24h precipitation` | China observed 24-hour precipitation total |
+| `/30d precipitation` | China past-30-day precipitation total, not a 30-day forecast |
+| `/china precipitation forecast` | China next-24-hour precipitation forecast |
+| `/china temperature forecast` | China next-24-hour maximum temperature forecast |
+
+The [China National Meteorological Center](https://www.nmc.cn/) provides these separate national products.
+Original legends, coverage, validity periods and source marks remain unchanged. Captions display product-reference time in UTC+08:00; it is not necessarily the website upload time. Original charts retain their upstream Chinese legends.
+The fixed product pages are resolved on demand, with image/origin validation, product-specific freshness checks, shared in-flight requests, a five-minute cache and a 16 MB memory limit. Failures back off for one minute. An expired, ambiguous or unavailable product is not replaced with another chart or an old image; a short notice links to the original page.
+These products never use private location bindings and never enter the sticker library. The validated `weather_map` model action uses the same caller-scoped delivery path.

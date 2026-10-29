@@ -14,6 +14,7 @@ def capital_name(code):
 
 SCHEMAS = {
     'weather': {'location': (str, 120), 'target': (str, 16)},
+    'weather_map': {'product': (str, 32)},
     'search': {'query': (str, 500), 'mode': (str, 16), 'topic': (str, 100)},
     'research': {'query': (str, 1000)},
     'website': {'page': (str, 20), 'language': (str, 4), 'theme': (str, 8)},
@@ -31,6 +32,9 @@ You may use existing bot functions when the current speaker wants a concrete act
 Return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
 Tools and arguments:
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
+weather_map {product: temperature_24h|temperature_current|precipitation_current|precipitation_24h|precipitation_30d|precipitation_forecast|temperature_forecast} for a requested China national weather map;
+These maps are national products, not a city's weather. 30d precipitation is past accumulation, not a 30-day forecast.
+For a child/parent location selector, preserve child*parent (for example Chelsea*London) in the weather location.
 search {query, mode: web|wiki|latest, topic}; research {query} for a requested detailed/deep investigation;
 website {page: home|about|friends|resources|food|projects, language: zh|en|ru|ja, theme: dark|light};
 map {operation: map|places|nearby|route|traffic, query: native place/route specification};
@@ -76,6 +80,10 @@ def parse_action(text):
         return None
     if tool=='weather' and args.get('target','today') not in {'today','tomorrow'}:
         return None
+    if tool=='weather_map':
+        from weather_maps import PRODUCTS
+        if args.get('product') not in PRODUCTS:
+            return None
     if tool=='search' and args.get('mode','web') not in {'web','wiki','latest'}:
         return None
     if tool=='website' and (args.get('page','home') not in {'home','about','friends','resources','food','projects'} or
@@ -95,6 +103,7 @@ def parse_action(text):
 
 
 def english_weather_request(text):
+    text = text.strip().removeprefix('/')
     match=re.fullmatch(r'(?:weather(?: forecast)?(?:\s+(?:in|for))?\s*[:：]?\s*(.*?)|(.*?)\s+weather(?: forecast)?)[?.!]*',text,re.I)
     if match:
         location=(match[1] or match[2] or '').strip()
@@ -114,6 +123,9 @@ async def dispatch(bot, action, event, ws, *, master=False, whitelist=False, gro
             await ext.send(ws,kind,group,user,text)
     if tool=='weather':
         await ext.weather_at(ws,kind,group,user,args.get('location',''),args.get('target','today'))
+        return
+    if tool=='weather_map':
+        await ext.weather_map_job(ws,kind,group,user,args['product'])
         return
     if tool=='search':
         await reply(ext.start_model_search(ws,kind,group,user,{'query':args['query'],
