@@ -319,8 +319,9 @@ async def fetch_weather_info(location_str: str) -> dict:
     return None
 
 # ==================== 3.1 Earthquake reports and notifications ====================
-def fetch_latest_earthquake_sync() -> dict:
-    url = "https://api.wolfx.jp/cenc_eqlist.json"
+def fetch_latest_earthquake_sync() -> list:
+    from earthquake_feed import OFFICIAL_URL
+    url = OFFICIAL_URL
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': TARGET_PROXY, 'https': TARGET_PROXY}) if TARGET_PROXY else urllib.request.ProxyHandler({}))
     with opener.open(req, timeout=15) as r:
@@ -2169,7 +2170,7 @@ async def handle_message_event(ws, data):
             eq_loc = eq_data.get("location")
             mag = eq_data.get("magnitude")
             # Initiate an explicit care notification with force=True.
-            cmd_reply = f"Latest post-event report (not a real-time warning; CENC via Wolfx):\nTime: {eq_time_str}\nLocation: {english_provider_text(eq_loc, 'See the original source for the location')}\nMagnitude: {mag}"
+            cmd_reply = f"Latest post-event report (not a real-time warning; {eq_data.get('source', 'CENC')}):\nTime: {eq_time_str}\nLocation: {english_provider_text(eq_loc, 'See the original source for the location')}\nMagnitude: {mag}"
         else:
             cmd_reply = "Meow... the latest earthquake report is unavailable. Please try again later."
 

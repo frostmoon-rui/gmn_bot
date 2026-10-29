@@ -184,7 +184,7 @@ class EarthquakeTests(unittest.IsolatedAsyncioTestCase):
         text = await feed.query()
         self.assertIn('cannot be confirmed', text)
         await feed.query()
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
 
 
 if __name__ == '__main__':

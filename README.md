@@ -116,3 +116,9 @@ Use `website screenshot:friends en dark`, `recommended links`, or `friend applic
 - NapCat / OneBot, Amap, Google, and the model and weather service providers.
 
 The project has not adopted a single open-source license. Third-party material remains subject to its own terms; public access does not grant unrestricted republication rights.
+
+## Community maps and visual help
+
+Use `heatmap join Sichuan` (or a country), `heatmap china/world`, and `heatmap leave` after mentioning the bot in a group. Participation is explicit and group-scoped; weather bindings are not automatically enrolled. Regions with even one consenting current member are displayed. No individual locations or member list is published.
+
+`help` now opens eight visual categories; `help CATEGORY` stays on one category page, and `help text CATEGORY` keeps commands copyable. Existing topic aliases remain. Official CENC post-event bulletins refresh every 30 minutes, with labelled fallback and the existing separate warning/subscription channels retained. See [privacy rules and source details](COMMUNITY_MAPS.md).

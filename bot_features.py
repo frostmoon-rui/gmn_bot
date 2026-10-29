@@ -152,6 +152,10 @@ HELP = {'local-weather': 'Local high-resolution weather charts\n'
           'Update announcements are not posted to groups.'}
 
 
+HELP.update({'interaction': 'Chat and care\nAsk a question | image:description\ncomfort me | keep me company | grounding exercise | mental health support | first aid:situation\nremind me 10 minutes rest | my reminders | cancel reminder ID\ndo not disturb on/off | clear context\nReply to a bot image and mention it with delete to retract and block that image.', 'community': 'Opt-in community maps (mention me in this group)\nheatmap china | heatmap world\nheatmap join Sichuan | heatmap join France | heatmap leave\nheatmap join without a region attempts your own existing coarse location; no address is geocoded.\nheatmap privacy explains consent. Weather bindings are not automatically enrolled.\nOnly consenting current group members count. Even a region with one participant is displayed.\nProvince/country counts appear below the map; no city, coordinate, account ID, member list or hidden total.', 'earthquakes': 'Earthquake bulletins and warning references\nlatest earthquake | earthquake warning\nCENC official post-event reports refresh every 30 minutes.\nWolfx remains a labelled fallback and warning relay. Existing explicit subscriptions remain; no unrelated group broadcasts.\nPost-event reports are not advance warnings. Missing warnings do not establish safety; no reliable countdown is provided.'})
+HELP['general'] += '\nCommunity: heatmap join [province/country] | heatmap china/world | heatmap leave\nEarthquakes: official reports every 30 minutes; existing warnings remain.\nVisual help has two levels; help text CATEGORY keeps commands copyable.'
+
+
 def cq_escape(text, parameter=False):
     value = str(text).replace('&', '&amp;').replace('[', '&#91;').replace(']', '&#93;')
     return value.replace(',', '&#44;') if parameter else value
@@ -303,9 +307,12 @@ class Features:
     async def command(self, text, kind, group, user, addressed, admin=False):
         if not addressed and text != 'cat help':
             return None
-        help_match = re.fullmatch(r'(?:help|manual|cat help|kitty help|butler help)(?:\s+(.+))?', text, re.I)
+        help_match = re.fullmatch(r'(help text|manual text|help|manual|cat help|kitty help|butler help)(?:\s+(.+))?', text, re.I)
         if help_match:
-            return HELP.get((help_match[1] or 'general').strip().lower(), 'Options: help search / maps / identity / admin')
+            from help_cards import make_reply
+            topic = (help_match[2] or 'general').strip().lower()
+            topic = {'heatmap':'community','reminders':'interaction','earthquake':'earthquakes'}.get(topic,topic)
+            return make_reply(HELP, topic, text_only=help_match[1].lower().endswith(' text'))
         if text in {'bot status', 'cat status'}:
             provider = self.b.ACTIVE_MODEL_PROVIDER
             name = {'gpt': self.b.GPT_MODEL_NAME, 'claude': self.b.CLAUDE_MODEL_NAME,

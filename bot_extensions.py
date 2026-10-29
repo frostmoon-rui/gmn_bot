@@ -21,7 +21,8 @@ from gemini_research import RESEARCH_MODE, generate_research
 from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
-from earthquake_feed import EarthquakeFeed
+from earthquake_feed import EarthquakeFeed, matches_province
+from community_maps import CommunityMaps
 from website_snapshots import capture as capture_website, page_url as website_page_url, SnapshotError, PAGES as WEBSITE_PAGES
 from weather_history import WeatherHistory, weather_instructions, tidy_weather_reply
 from weather_providers import WeatherAggregator, open_meteo, request_json as request_weather_json, day_string
@@ -90,6 +91,7 @@ class Extensions:
         self.admins = getattr(bot, 'admins', None) or AdminRegistry(root, getattr(bot, 'MASTER_QQ', int(setting('MASTER_QQ', 0))))
         self.food = FoodCommands(root, self.amap.client)
         self.earthquakes = EarthquakeFeed()
+        self.community = CommunityMaps(bot)
         self.weather_history = WeatherHistory(root)
         self.weather_aggregator = WeatherAggregator()
         self.earthquake_deliveries = bot.load_json_data('earthquake_deliveries.json', {})
@@ -119,6 +121,9 @@ class Extensions:
         return True
 
     async def send(self, ws, kind, group, user, text):
+        from help_cards import HelpReply, deliver_help
+        if isinstance(text, HelpReply):
+            return await deliver_help(ws, kind, group, user, text)
         # Text segments prevent CQ strings in retrieved material from becoming executable message segments.
         segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
         segments.append({'type': 'text', 'data': {'text': self.admins.phrasing(text, user)}})
@@ -437,6 +442,11 @@ class Extensions:
         await deliver_local_topic(self, ws, kind, group, user, product, location)
 
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
+        community = getattr(self, 'community', None)
+        if community is not None:
+            result = await community.command(text, ws, kind, group, user, mentioned or kind == 'private', self.send)
+            if result is not None:
+                return result
         from weather_queries import topic_request
         topic = topic_request(text)
         if topic and (mentioned or kind == 'private'):
@@ -977,13 +987,14 @@ class Extensions:
         await self.send(ws, kind, group, user, await self.earthquakes.query())
 
     async def earthquake_monitor(self):
-        """Poll independently every 20 seconds; notify only explicitly subscribed important members."""
+        """Refresh official bulletins every 30 minutes; preserve short warning polls and explicit subscriptions."""
         await asyncio.sleep(5)
         while True:
             try:
                 ws = self.b.active_ws
+                reports = await self.earthquakes.reports()
                 if ws and self.important:
-                    warnings, reports = await asyncio.gather(self.earthquakes.warnings(), self.earthquakes.reports())
+                    warnings = await self.earthquakes.warnings()
                     # Prefer the nationwide source; supplement with Sichuan data without duplicate source-event notifications.
                     warnings = [e for e in warnings if e['id'].startswith('cenc:')] or warnings
                     events = warnings+[event for event in reports if event['age_seconds'] <= 1800]
@@ -995,16 +1006,18 @@ class Extensions:
                                 continue
                             if int(uid) not in self.b.WHITELIST_QQ and not self.admins.allowed(uid):
                                 continue
-                            province = self.b.extract_province_keyword(self.b.regions_data.get(str(uid), {}).get('location', ''))
-                            if not province or province not in event['location']:
+                            if not matches_province(self.b.regions_data.get(str(uid), {}), event):
                                 continue
                             key = str(uid)+':'+event['id']
-                            if key in self.earthquake_deliveries:
+                            aliases = [str(uid)+':'+identifier for identifier in event.get('dedup_ids', [event['id']])]
+                            if any(alias in self.earthquake_deliveries for alias in aliases):
                                 continue
                             label = 'Earthquake warning reference' if event['kind'] == 'early_warning' else 'Post-event earthquake report (not a warning)'
                             message = f'{label}: {event["time"]}, M{event["magnitude"]} in a matching province-level region. Source: {event["source"]}. A province-level match does not establish shaking at your location. If you feel shaking, prioritize safety and follow local official notices. This bot does not provide a reliable countdown.'
                             # Persist the attempt first; unknown receipts must not trigger repeated mentions. Explicit queries remain available.
                             self.earthquake_deliveries[key] = datetime.now(SHANGHAI).isoformat()
+                            for alias in aliases:
+                                self.earthquake_deliveries[alias] = self.earthquake_deliveries[key]
                             if len(self.earthquake_deliveries) > 2000:
                                 self.earthquake_deliveries = dict(list(self.earthquake_deliveries.items())[-1500:])
                             await self.b.save_json_data_async('earthquake_deliveries.json', self.earthquake_deliveries)

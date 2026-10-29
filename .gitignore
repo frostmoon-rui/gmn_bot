@@ -34,3 +34,4 @@ venv/
 
 /model_catalogs_cache/
 /startup_runtime/
+/group_heatmap.json

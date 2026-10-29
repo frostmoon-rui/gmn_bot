@@ -13,6 +13,7 @@ def capital_name(code):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 SCHEMAS = {
+    'community_map': {'scope': (str, 8)},
     'weather': {'location': (str, 120), 'target': (str, 16)},
     'weather_map': {'product': (str, 32)},
     'weather_chart': {'product': (str, 32), 'location': (str, 120)},
@@ -32,6 +33,7 @@ INSTRUCTION = '''
 You may use existing bot functions when the current speaker wants a concrete action, not just describe them.
 Return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
 Tools and arguments:
+community_map {scope: china|world} for this group's opt-in aggregate map. Never infer participation, enroll anyone, publish an individual location, or select a different group.
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
 weather_map {product: temperature_24h|temperature_current|precipitation_current|precipitation_24h|precipitation_30d|precipitation_forecast|temperature_forecast} for a requested China national weather map;
 These maps are national products, not a city's weather. 30d precipitation is past accumulation, not a 30-day forecast.
@@ -78,6 +80,8 @@ def parse_action(text):
     for name in ('research','search'):
         if tool==name and not args.get('query','').strip():
             return None
+    if tool=='community_map' and args.get('scope','china') not in {'china','world'}:
+        return None
     if tool=='image' and not args.get('prompt','').strip():
         return None
     if tool=='weather' and args.get('target','today') not in {'today','tomorrow'}:
@@ -123,6 +127,9 @@ async def dispatch(bot, action, event, ws, *, master=False, whitelist=False, gro
     async def reply(text):
         if text:
             await ext.send(ws,kind,group,user,text)
+    if tool=='community_map':
+        await reply(await ext.community.command('heatmap '+args.get('scope','china'),ws,kind,group,user,True,ext.send))
+        return
     if tool=='weather':
         await ext.weather_at(ws,kind,group,user,args.get('location',''),args.get('target','today'))
         return
