@@ -56,6 +56,20 @@ The helper also supports `-UseLocalPassword` for hidden terminal password input.
 If elevation is required, it passes a DPAPI-protected credential over a temporary
 same-user-only named pipe after normal UAC approval. It creates no password file
 and never puts a plaintext password on a process command line.
+
+If registration repeatedly fails, run `tools/diagnose_windows_logon.ps1` from an
+elevated Windows PowerShell window. It reads recent Security 4625 failure metadata
+and writes a private `startup_logon_diagnostic.local.json` report. It never
+submits a password or changes policy, and omits account names from event records.
+Substatus `0xc000006a` is a password mismatch; `0xc000015b` indicates a missing
+logon right. Do not keep retrying or change unrelated account policies.
+For a Microsoft-linked profile, check Settings > Accounts > Sign-in options >
+Additional settings > "Only allow Windows Hello sign-in for Microsoft accounts on
+this device". If the owner chooses to allow password sign-in, turn that option
+off manually and verify one successful Windows password sign-in before retrying.
+The diagnostic also reports the local passwordless configuration marker; confirm
+the setting in Windows Settings rather than treating that marker alone as proof
+of the failure's cause. The installer does not change this security setting.
 Windows stores the task credential; changing that password requires re-registering
 the task. Installation backs up a previous matching task, registers a boot trigger
 with a 30-second delay and Password logon, then moves `silent_start.vbs` and
