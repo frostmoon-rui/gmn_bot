@@ -102,8 +102,20 @@ Check status after sign-in without sending QQ messages:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\windows_boot.ps1 -Mode Status
 ```
 
-Do not run GUI managers alongside the supervised headless stack: they can compete
-for the same core, ports or QQ account. To return to GUI operation, disable/stop
+Clash Verge needs explicit proxy ownership handoff. With the current-account boot
+task already installed, run `tools/windows_proxy_desktop.ps1 -Mode Install` in
+elevated PowerShell once. This adds an interactive logon task without changing the
+boot task's stored password. Use a separate private copy of the generated proxy
+YAML for ProxyConfiguration, with mixed-port matching ProxyPort, so GUI updates
+cannot overwrite the boot core's file. At logon the helper writes a same-boot
+ownership marker, lets the supervisor observe it, stops only the standalone proxy
+and starts Clash Verge. The GUI then controls nodes, system proxy and TUN.
+QQ and Python are not targeted by this handoff. Signing out releases control back
+to the boot supervisor; locking the desktop does not. Refresh the private headless
+snapshot deliberately after changing subscriptions or nodes. Subscription updates
+can remain manual. No firewall or router settings are changed.
+
+Avoid running two managers for the same QQ instance. To return fully to GUI operation, disable/stop
 the `GMN-Bot-Startup` task in Task Scheduler, verify its processes have stopped,
 then open the GUI. Restore the backed-up Startup entries if returning permanently
 to login-only startup. Keep copies of QQ, proxy and bot data before migration.

@@ -53,6 +53,20 @@ function Test-Listening([int]$Port) {
         Where-Object { $_.Port -eq $Port }).Count -gt 0
 }
 
+function Test-DesktopProxyControl {
+    $marker = Join-Path $root 'windows_proxy_desktop.local.json'
+    if (-not (Test-Path -LiteralPath $marker)) { return $false }
+    try {
+        $request = Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($request.BootKey -ne $bootKey -or $request.Owner -ine $config.UserName) { return $false }
+        return @(Get-Process -Name explorer -IncludeUserName -ErrorAction SilentlyContinue |
+            Where-Object { $_.UserName -ieq $config.UserName }).Count -gt 0
+    } catch {
+        # Avoid a competing core while the ownership marker is being written.
+        return $true
+    }
+}
+
 function Find-Component([string]$Executable, [string]$Hint = '') {
     $leaf = [IO.Path]::GetFileName($Executable).Replace("'", "''")
     $matches = @()
@@ -161,7 +175,7 @@ if ($Mode -eq 'Install') {
     Write-Output "Installed $($config.TaskName) with Password logon and a 30-second boot delay."
     Write-Output "Old login-only entries are in $backup"
     Write-Output 'No live programs were started or stopped. The task first runs after reboot.'
-    Write-Output 'Do not open Clash Verge or NapCat Desktop while their headless instances are running.'
+    Write-Output 'Use desktop proxy handoff for Clash Verge; avoid a second NapCat Desktop instance.'
     exit 0
 }
 
@@ -191,11 +205,13 @@ try {
     $lastNapCat = [datetime]::MinValue
     $lastBot = [datetime]::MinValue
     $lastNotice = [datetime]::MinValue
+    $bootKey = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks.ToString()
     Write-BootLog 'Supervisor started. Waiting for the local proxy and NapCat before Python.'
     while ($true) {
         $now = Get-Date
         $proxyReady = Test-Listening $config.ProxyPort
-        if (-not $proxyReady -and ($now - $lastProxy).TotalSeconds -ge 60) {
+        $desktopProxy = Test-DesktopProxyControl
+        if (-not $desktopProxy -and -not $proxyReady -and ($now - $lastProxy).TotalSeconds -ge 60) {
             if (@(Find-Component $config.ProxyExecutable).Count -eq 0) {
                 $null = Start-Component 'proxy' $config.ProxyExecutable @('-d',$config.ProxyDirectory,'-f',$config.ProxyConfiguration) $config.ProxyDirectory
                 $lastProxy = $now
