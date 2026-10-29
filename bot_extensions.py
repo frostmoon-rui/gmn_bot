@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import sys
+import time
 from moji_public import MojiPublic, location_candidates, title_matches_location
 from pathlib import Path
 import urllib.parse
@@ -175,8 +176,6 @@ class Extensions:
                 urllib.parse.urlencode({'address': query, 'language': 'en', 'key': self.key}))
             results = data.get('results', [])
             result_language = 'en'
-            if not results:
-                raise RuntimeError('Google geocoding returned no matching result')
             try:
                 result = choose_geocode(query, results)
             except ValueError:
@@ -197,8 +196,9 @@ class Extensions:
             broad = bool(types) and all(t in {'country', 'administrative_area_level_1', 'political'} for t in types)
             return {'original': original, 'formatted_address': result.get('formatted_address', original),
                 'capital_reference': bool(capital_query), 'effective_location': capital_query or original,
-                'locality_en': next((c.get('long_name', '') for c in english_result.get('address_components', [])
-                    if 'sublocality_level_1' in c.get('types', []) or 'locality' in c.get('types', [])), ''),
+                'locality_en': next((c.get('long_name', '') for level in ('sublocality_level_1','locality',
+                    'administrative_area_level_5','administrative_area_level_4','administrative_area_level_3')
+                    for c in english_result.get('address_components', []) if level in c.get('types', [])), ''),
                 'validation_version': VALIDATION_VERSION, 'location_types': types,
                 'place_id': result.get('place_id'), 'latitude': float(point['lat']), 'longitude': float(point['lng']),
                 'country_code': country, 'language': result_language, 'status': 'needs_city' if broad else 'resolved',
@@ -254,12 +254,13 @@ class Extensions:
             # If Google geocoding fails, the independent free WGS84 source can provide coordinates.
             # Accept only a complete, unique city/district match, never the first ambiguous result.
             query = province_capital(location) or location
-            from location_integrity import city_query
+            from location_integrity import city_query, geoname_hierarchy_matches
             leaf = query.split()[-1] if province_capital(location) else city_query(query)
             data = await asyncio.to_thread(request_weather_json, 'https://geocoding-api.open-meteo.com/v1/search?'+
                 urllib.parse.urlencode({'name': leaf, 'count': 10, 'language': 'zh' if re.search(r'[\u3400-\u9fff]', leaf) else 'en', 'format': 'json'}))
             canonical = lambda name: re.sub(r'(?:\u5e02|\u53bf|\u533a)$', '', name.strip()).casefold()
             matches = [row for row in data.get('results', []) if canonical(str(row.get('name', ''))) == canonical(leaf)
+                       and geoname_hierarchy_matches(query, row)
                        and (not row.get('feature_code') or str(row['feature_code']).startswith('PPL'))
                        and (not resolved or 'country' not in resolved.get('location_types', []) or str(row.get('feature_code', '')).startswith('PPL'))
                        and (not domestic or row.get('country_code') == 'CN')]
@@ -279,7 +280,7 @@ class Extensions:
                 raise ValueError('Location is not precisely resolved; do not mix in another city')
             return resolved
         async def amap():
-            if not province_capital(location) and (await point()).get('country_code') != 'CN':
+            if country and country != 'CN':
                 return None
             try:
                 return await asyncio.to_thread(self.amap.client.weather, province_capital(location) or location)
@@ -778,16 +779,27 @@ class Extensions:
             print('[Tomorrow weather failed]:', str(error))
             await self.send(ws, kind, group, user, 'Tomorrow’s weather query failed. Please try later.')
 
+    def binding_location(self, kind, group, user):
+        record = getattr(self, 'recent_weather_locations', {}).get((kind, group, user))
+        return record[1] if record and time.monotonic()-record[0] <= 600 else ''
+
     async def weather_at(self, ws, kind, group, user, location='', target='today'):
         """One-off explicit place lookup never replaces the speaker's saved home area."""
-        location = location.strip() or self.b.regions_data.get(str(user), {}).get('location', '')
+        explicit = location.strip()
+        if explicit:
+            if not hasattr(self, 'recent_weather_locations'):
+                self.recent_weather_locations = {}
+            self.recent_weather_locations[(kind, group, user)] = (time.monotonic(), explicit)
+            while len(self.recent_weather_locations) > 64:
+                self.recent_weather_locations.pop(next(iter(self.recent_weather_locations)))
+        location = explicit or self.b.regions_data.get(str(user), {}).get('location', '')
         if not location:
             await self.send(ws, kind, group, user, 'Which city should I check, meow?')
             return
         try:
             data = await self.google_weather(location)
             if not data:
-                await self.send(ws, kind, group, user, 'Please specify the country and city; I could not locate this forecast precisely.')
+                await self.send(ws, kind, group, user, 'The weather service did not return valid data this time. Please try again shortly, meow.')
                 return
             from weather_report import has_tomorrow
             if target == 'tomorrow' and not has_tomorrow(data):

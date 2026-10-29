@@ -65,6 +65,8 @@ def location_candidates(point):
 
 def title_matches_location(point, title):
     location = point.get('effective_location') or point.get('original', '')
+    from location_integrity import city_query
+    location = re.sub(r'(?:\u5e02|\u53bf|\u533a|\u65d7)$', '', city_query(location))
     parts = [part for part in re.split(r'\s+|\u7701|(?:\u58ee\u65cf|\u56de\u65cf|\u7ef4\u543e\u5c14)?\u81ea\u6cbb\u533a|\u5e02', location) if part]
     if not parts:
         return False

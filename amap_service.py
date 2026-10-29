@@ -159,6 +159,9 @@ class AmapClient:
     def weather(self, address):
         self.local.deadline = time.monotonic()+40
         point = self.geocode(address)
+        from location_integrity import amap_weather_matches
+        if point.get('level') not in {'省', '市', '区县'} or not amap_weather_matches(address, point):
+            raise AmapError('Weather geocode does not match the supplied administrative area.')
         if not re.fullmatch(r'\d{6}', point['adcode']):
             raise AmapError('Amap weather requires a domestic city administrative code.')
         if point.get('level') == '\u7701' and point['adcode'] not in {'110000', '120000', '310000', '500000'}:

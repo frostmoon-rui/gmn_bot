@@ -17,3 +17,19 @@ Chinese relevance uses the pinned local Jieba tokenizer, with calendar years rem
 A Google JavaScript shell can be rendered once in an isolated, sandboxed Playwright browser, using the same SEARCH_PROXY policy as HTTP retrieval. This optional path uses no existing user profile, stealth configuration, login, or CAPTCHA solver. It admits only bounded GET requests to fixed search/asset hosts, validates public targets and disables downloads and service workers. Install optional browser support with `python -m pip install playwright` and `python -m playwright install chromium`. Verification pages remain failures. Script/consent/verification responses stop further Google requests in that round; an empty result caused by channel restrictions is reported as an access problem rather than an absence of information.
 
 When a current-events search has no usable web pages, a bounded Google News public RSS lookup can discover up to three publisher articles. Feed titles alone never become article evidence. An isolated browser follows normal news redirects to the named publisher, and the final public HTTPS publisher URL, full text and topic overlap are checked before adding the page. The news redirect service's normal data request is permitted only on its specific Google News endpoint; publisher POST requests remain blocked. Feed publication time stays separate from article/event dates. The fallback does not invoke paid AI search, reuse a personal browser session or change proxy settings. News is an additional retrieval channel, not a claim that all academic or current questions belong in news.
+
+County and prefecture weather requests retain the complete supplied hierarchy for
+validation, while extracting the leaf city/district for fallback searches. Google
+administrative levels 4 and 5 are accepted only when all supplied components
+match. Amap weather independently validates its administrative geocode and weather
+code; Google geocoding failure does not block it. A domestic POI is not accepted
+as city weather for a foreign place name. No GCJ-02 coordinates are relabeled as
+WGS84 in this fallback.
+
+An account-only `set location:123456789` uses an explicit weather location from
+that same speaker and conversation within ten minutes. Other users, other chats,
+expired context and bound-home default queries cannot supply that location.
+Without matching context, the command requests a city instead of storing a
+numeric account as the location. Existing permission checks still apply when
+binding another account. Weather provider outages no longer ask the user to
+resupply an already complete address as if it were necessarily incomplete.

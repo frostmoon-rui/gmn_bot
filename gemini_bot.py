@@ -1967,7 +1967,11 @@ async def handle_message_event(ws, data):
         from location_integrity import parse_binding
         parsed_binding = parse_binding(cleaned_msg, 'set location')
         loc = parsed_binding["location"]
-        if loc in ["your area", "unknown", "local", "nearby", "\u6240\u5728\u5730\u533a", "\u672a\u77e5", "\u672c\u5730", "\u9644\u8fd1"]:
+        if not loc:
+            loc = extensions.binding_location(msg_type, group_id, user_id)
+        if not loc:
+            cmd_reply = "Specify the target account and city, or first ask about that city in this chat."
+        elif loc in ["your area", "unknown", "local", "nearby", "\u6240\u5728\u5730\u533a", "\u672a\u77e5", "\u672c\u5730", "\u9644\u8fd1"]:
             cmd_reply = "Bind an actual city, such as Harbin, Taiyuan or Suzhou, rather than a placeholder like 'your area', meow!"
         else:
             target_param = parsed_binding["target"] or reg_cmd_match.group(2)
