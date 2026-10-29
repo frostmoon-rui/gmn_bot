@@ -1,4 +1,5 @@
 from local_settings import setting
+from model_proxy import select_model_proxy
 import asyncio
 import base64
 from collections import defaultdict
@@ -225,7 +226,7 @@ group_unread_buffers = defaultdict(list)
 msg_cache = {}
 
 sys_proxies = urllib.request.getproxies()
-TARGET_PROXY = sys_proxies.get("https") or sys_proxies.get("http") or "http://127.0.0.1:7890"
+TARGET_PROXY = select_model_proxy(setting('MODEL_PROXY', None), sys_proxies)
 if TARGET_PROXY:
     os.environ["HTTP_PROXY"] = TARGET_PROXY
     os.environ["HTTPS_PROXY"] = TARGET_PROXY

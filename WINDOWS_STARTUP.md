@@ -27,6 +27,11 @@ Create a **private**, ignored `windows_startup.local.json` in the project root:
 Use actual absolute paths, a numeric bot account and an existing, working proxy
 configuration. Preserve its node selection/cache and existing network settings.
 The core itself does not run Verge's subscription/software update timers.
+The supervisor sets HTTP_PROXY, HTTPS_PROXY and ALL_PROXY from the private
+startup configuration's ProxyPort. The bot also accepts MODEL_PROXY in private
+local_settings.json; set it to the same loopback URL to override stale desktop
+proxy settings. An open listening port alone does not establish that a model
+endpoint is reachable. MODEL_PROXY must not be published with proxy credentials.
 Disable the GUI's automatic subscription updates separately. Do not publish this
 JSON, proxy configuration, QQ data, startup logs or recovery backups.
 

@@ -174,6 +174,13 @@ try {
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
     $env:PYTHONUTF8 = '1'
     $env:PYTHONIOENCODING = 'utf-8'
+    # A boot session has no GUI manager to populate the user's WinINet proxy.
+    $bootProxy = 'http://127.0.0.1:' + [int]$config.ProxyPort
+    $env:HTTP_PROXY = $bootProxy
+    $env:HTTPS_PROXY = $bootProxy
+    $env:ALL_PROXY = $bootProxy
+    $env:NO_PROXY = '127.0.0.1,localhost,::1'
+    Write-BootLog "Child process proxy: $bootProxy"
     $env:NAPCAT_PATCH_PACKAGE = Join-Path $config.NapCatDirectory 'qqnt.json'
     $env:NAPCAT_LOAD_PATH = Join-Path $config.NapCatDirectory 'loadNapCat.js'
     $env:NAPCAT_INJECT_PATH = Join-Path $config.NapCatDirectory 'NapCatWinBootHook.dll'
