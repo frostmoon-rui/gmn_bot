@@ -3,6 +3,8 @@ from urllib.parse import urlencode
 
 
 def collect_model(point, descriptions, request):
+    from weather_standard import validate_point, unit_checked_model
+    validate_point(point)
     if point.get('coordinate_system', 'WGS84') != 'WGS84':
         raise ValueError('Open-Meteo requires WGS84 coordinates')
     current_fields = ('temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_gusts_10m,'
@@ -19,7 +21,8 @@ def collect_model(point, descriptions, request):
               'past_days': 1, 'forecast_days': 7, 'temperature_unit': 'celsius', 'wind_speed_unit': 'kmh',
               'precipitation_unit': 'mm', 'current': current_fields, 'daily': daily_fields, 'hourly': hourly_fields}
     raw = request('https://api.open-meteo.com/v1/forecast?' + urlencode(params))
-    current, daily, hourly = raw['current'], raw['daily'], raw.get('hourly', {})
+    checked = unit_checked_model(raw)
+    current, daily, hourly = checked['current'], checked['daily'], checked.get('hourly', {})
     day = current['time'][:10]
     position = daily['time'].index(day)
     def item(field, index):
@@ -54,7 +57,7 @@ def collect_model(point, descriptions, request):
               'days': days[position:], 'hours': [row for row in rows if row['time'][:13] >= cutoff][:48],
               'history_hours': [row for row in rows if row['time'][:13] < cutoff][-24:],
               'alerts': None, 'units': {name: raw.get(name, {}) for name in ('current_units', 'hourly_units', 'daily_units')},
-              'raw_response': raw}
+              'raw_response': raw, 'precipitation_interval_seconds': current.get('interval')}
     if position:
         result['yesterday'] = dict(days[position - 1], source='Open-Meteo historical model estimate, not observations')
         a, b = item('temperature_2m_max', position), item('temperature_2m_max', position - 1)

@@ -66,6 +66,8 @@ def normalize_google(parts):
 
 
 async def fetch_google(point, key, request, language='en'):
+    from weather_standard import validate_point
+    validate_point(point)
     base = {'key': key, 'location.latitude': point['latitude'], 'location.longitude': point['longitude'],
             'languageCode': language}
     specs = {'current': ('currentConditions:lookup', {}, None, 1),

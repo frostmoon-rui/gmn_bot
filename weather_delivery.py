@@ -21,7 +21,7 @@ def render_report(report):
     """Return one PNG, with all lines retained in two readable columns."""
     if hasattr(report, 'weather_data'):
         from weather_cards import render_card
-        return render_card(report.weather_data, report.weather_labels, report.weather_translate, report_font)
+        return render_card(report.weather_data, report.weather_labels, report.weather_translate, report_font, getattr(report, 'weather_target', 'today'))
     font = report_font(24)
     probe = ImageDraw.Draw(Image.new('RGB', (1, 1)))
     column_width, padding, line_height = 840, 40, 37

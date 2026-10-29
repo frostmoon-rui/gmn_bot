@@ -98,7 +98,9 @@ def metric_rows(row):
             value = measurement(wind.get(key), 'KILOMETERS_PER_HOUR')
             if value is not None:
                 values[target] = value
-        values['wind_direction'] = wind.get('direction', {}).get('cardinal', values.get('wind_direction'))
+        direction = wind.get('direction')
+        if isinstance(direction, dict):
+            values['wind_direction'] = direction.get('cardinal', values.get('wind_direction'))
     pressure = row.get('airPressure', {})
     if isinstance(pressure, dict) and pressure.get('meanSeaLevelMillibars') is not None:
         values['pressure_hpa'] = pressure['meanSeaLevelMillibars']
@@ -110,8 +112,10 @@ def metric_rows(row):
     precipitation = row.get('precipitation')
     probability = row.get('precipitation_probability', row.get('precipitationProbability'))
     if isinstance(precipitation, dict):
-        probability = precipitation.get('probability', {}).get('percent', probability)
-        qpf = precipitation.get('qpf', {})
+        chance = precipitation.get('probability')
+        probability = chance.get('percent', probability) if isinstance(chance, dict) else probability
+        qpf = precipitation.get('qpf') or {}
+        qpf = qpf if isinstance(qpf, dict) else {}
         if qpf.get('unit') == 'MILLIMETERS':
             values['precipitation_mm'] = qpf.get('quantity')
     elif scalar(precipitation) is not None:
@@ -121,8 +125,9 @@ def metric_rows(row):
 
 class WeatherReport(str):
     """Keep structured display data alongside the plain-text briefing facts."""
-    def __new__(cls, text, data, labels, translate):
+    def __new__(cls, text, data, labels, translate, target='today'):
         instance = super().__new__(cls, text)
+        instance.weather_target = target
         instance.weather_data = data
         instance.weather_labels = labels
         instance.weather_translate = translate
@@ -131,7 +136,8 @@ class WeatherReport(str):
 
 def format_weather(data, target='today', labels=None, translate=None, diagnostics=False):
     from weather_providers import RANGES
-    labels = dict(LABELS, **(labels or {}))
+    from weather_status import LABELS as STATUS_LABELS
+    labels = {**LABELS, **STATUS_LABELS, **(labels or {})}
     translate = translate or (lambda value: str(value))
     text = lambda value: translate(str(value)).replace('[CQ:', '(').replace('[SPLIT]', ' ')[:300]
     zone = data.get('timezone')
@@ -261,7 +267,7 @@ def format_weather(data, target='today', labels=None, translate=None, diagnostic
     if missing:
         lines.append(labels['missing'] + ': ' + ', '.join(missing))
     lines += [labels['hazards'], labels['care']]
-    return WeatherReport('\n'.join(line for line in lines if line is not None), data, labels, translate)
+    return WeatherReport('\n'.join(line for line in lines if line is not None), data, labels, translate, target)
 
 
 def chunks(text, limit=2400):

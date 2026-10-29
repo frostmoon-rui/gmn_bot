@@ -185,7 +185,7 @@ class AmapClient:
                 'feels_like': 'unknown', 'humidity': text(live.get('humidity')), 'uv': 'unknown', 'wind_kmph': 'unknown',
                 'wind_direction': text(live.get('winddirection')), 'wind_force': text(live.get('windpower')),
                 'min_temp': matching[0]['minTemperature']['degrees'], 'max_temp': matching[0]['maxTemperature']['degrees'],
-                'local_date': today, 'days': [d for d in days if d['date'] >= today],
+                'timezone': 'Asia/Shanghai', 'local_date': today, 'days': [d for d in days if d['date'] >= today],
                 'report_time': text(live.get('reporttime')), 'forecast_report_time': text(report.get('reporttime')),
                 'hours': [], 'history_hours': [], 'alerts': None,
                 'hazard_note': 'This Amap endpoint does not provide observed weather from yesterday, precipitation probability, feels-like temperature, cloud maps, individual lightning strikes or typhoon warnings. Missing values are not zero.'})

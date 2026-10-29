@@ -230,7 +230,8 @@ class Extensions:
     async def _weather_for_location(self, location):
         """Retain the legacy method name while collecting configured sources in parallel and merging fields."""
         cached = self.weather_cache.get(location)
-        if cached and asyncio.get_running_loop().time()-cached[0] < 600 and cached[1].get('_cache_day') == datetime.now(SHANGHAI).date().isoformat():
+        from weather_standard import cache_is_current
+        if cached and asyncio.get_running_loop().time()-cached[0] < 600 and cached[1].get('_cache_day') == datetime.now(SHANGHAI).date().isoformat() and cache_is_current(cached[1]):
             return cached[1]
         country = self.locations.get(location, {}).get('country_code')
         domestic = country == 'CN' or (not country and domestic_hint(location))
@@ -254,6 +255,15 @@ class Extensions:
             # If Google geocoding fails, the independent free WGS84 source can provide coordinates.
             # Accept only a complete, unique city/district match, never the first ambiguous result.
             query = province_capital(location) or location
+            if domestic:
+                from weather_location import offline_weather_point
+                try:
+                    fallback = await asyncio.to_thread(offline_weather_point, query, self.amap.client)
+                    if fallback:
+                        print('[Weather location]: Administrative area verified; independent WGS84 city coordinates selected')
+                        return fallback
+                except Exception as error:
+                    print('[Weather fallback location]:', type(error).__name__)
             from location_integrity import city_query, geoname_hierarchy_matches
             leaf = query.split()[-1] if province_capital(location) else city_query(query)
             data = await asyncio.to_thread(request_weather_json, 'https://geocoding-api.open-meteo.com/v1/search?'+
@@ -289,8 +299,12 @@ class Extensions:
                 raise
         async def google():
             normalized = await point()
-            if not self.key or location in self.unsupported_weather:
+            if not self.key:
                 return None
+            if location in self.unsupported_weather:
+                from weather_standard import WeatherUnavailable
+                prior = getattr(self, 'weather_endpoint_diagnostics', {}).get(location, {})
+                raise WeatherUnavailable(prior.get('endpoint_status', {'current': 'HTTP 404', 'days': 'HTTP 404'}))
             return await self.google_weather_source(normalized, location)
         async def moji():
             normalized = await point()
@@ -356,6 +370,9 @@ class Extensions:
         self.weather_endpoint_diagnostics[location] = diagnostics
         if not data and normalized.get('country_code') == 'CN' and {'current', 'days'} <= not_found:
             self.unsupported_weather.add(location)
+        if not data and any(status != 'ok' for status in diagnostics.get('endpoint_status', {}).values()):
+            from weather_standard import WeatherUnavailable
+            raise WeatherUnavailable(diagnostics['endpoint_status'])
         return data
 
     def annotate_weather(self, data, point):

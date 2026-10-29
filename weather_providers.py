@@ -20,7 +20,7 @@ RANGES = {'temp': (-100, 70), 'feels_like': (-120, 90), 'min_temp': (-100, 70),
           'precipitation_mm': (0, 2000), 'rain_mm': (0, 2000), 'showers_mm': (0, 2000),
           'snowfall_cm': (0, 1000), 'thunderstorm_probability': (0, 100), 'cloudCover': (0, 100)}
 FIELDS = tuple(RANGES)+('desc', 'wind_direction', 'wind_force', 'precipitation',
-                       'hours', 'history_hours', 'yesterday', 'model_temperature_comparison',
+                       'precipitation_probability', 'yesterday', 'model_temperature_comparison',
                        'current_conditions_history', 'timezone', 'utc_offset_seconds')
 
 
@@ -29,7 +29,7 @@ def day_string(value):
         if isinstance(value, dict):
             return date(int(value['year']), int(value['month']), int(value['day'])).isoformat()
         return date.fromisoformat(str(value)[:10]).isoformat()
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         return None
 
 
@@ -49,7 +49,8 @@ def numeric(value):
 
 def merge_weather(results):
     """Results are ranked by trust; preserve zero values without merging different local dates."""
-    usable = [(name, localize_provider_data(copy.deepcopy(data))) for name, data in results if data and day_string(data.get('local_date'))]
+    from weather_standard import normalize_provider, merge_hourly, alert_payload
+    usable = [(name, normalize_provider(localize_provider_data(copy.deepcopy(data)))) for name, data in results if data and day_string(data.get('local_date'))]
     if not usable:
         return None
     primary, first = usable[0]
@@ -60,7 +61,7 @@ def merge_weather(results):
     output['provider_data'] = {name: copy.deepcopy(data) for name, data in results if data}
     output['provider_alerts'] = {}
     for name, partial in results:
-        if partial and partial.get('alerts_only') and partial.get('alerts') is not None:
+        if partial and partial.get('alerts_only') and alert_payload(partial.get('alerts')) is not None:
             source = partial.get('source') or name
             output['provider_alerts'][source] = copy.deepcopy(partial['alerts'])
             output['sources'].append(source)
@@ -68,12 +69,17 @@ def merge_weather(results):
             output['alerts'] = copy.deepcopy(partial['alerts'])
             output['field_sources']['alerts'] = source
     forecasts = {}
+    output['quality_flags'] = []
+    output['excluded_source_dates'] = []
     for name, data in usable:
         if day_string(data['local_date']) != day:
+            output['excluded_source_dates'].append(name)
             continue
+        output['quality_flags'] = sorted(set(output['quality_flags']) | set(data.get('quality_flags', [])))
         source = data.get('source') or name
         output['sources'].append(source)
         output['source_reports'][source] = {'reported_at': data.get('report_time') or data.get('fetched_at'),
+                                           'forecast_reported_at': data.get('forecast_report_time'),
                                            'kind': data.get('data_kind', 'Provider weather data')}
         for key in FIELDS:
             value = data.get(key)
@@ -98,6 +104,11 @@ def merge_weather(results):
             if not fday or fday < day:
                 continue
             target = forecasts.setdefault(fday, {'date': fday, 'field_sources': {}})
+            pair = ('minTemperature', 'maxTemperature')
+            if all(present(forecast.get(k)) for k in pair) and not all(present(target.get(k)) for k in pair):
+                for k in pair:
+                    target[k] = copy.deepcopy(forecast[k])
+                    target['field_sources'][k] = source
             for key in (key for key in forecast if key not in {'date', 'displayDate', 'field_sources'}):
                 value = forecast.get(key)
                 if isinstance(value, dict) and 'degrees' in value and (
@@ -113,6 +124,9 @@ def merge_weather(results):
                 output['alerts'] = copy.deepcopy(data['alerts'])
                 output['field_sources']['alerts'] = source
     output['days'] = [forecasts[key] for key in sorted(forecasts)[:10]]
+    output['hours'] = merge_hourly(usable, 'hours', day, output)
+    output['history_hours'] = merge_hourly(usable, 'history_hours', day, output)
+    output['sources'] = list(dict.fromkeys(output['sources']))
     for field in ('min_temp', 'max_temp'):
         if not present(output.get(field)) and day in forecasts:
             key = 'minTemperature' if field == 'min_temp' else 'maxTemperature'
@@ -120,6 +134,11 @@ def merge_weather(results):
             if numeric(degrees) is not None:
                 output[field] = float(degrees)
                 output['field_sources'][field] = forecasts[day]['field_sources'].get(key)
+    from weather_standard import valid_range
+    if not valid_range(output, 'min_temp', 'max_temp'):
+        output['quality_flags'].append('invalid-temperature-range')
+        for field in ('min_temp', 'max_temp'):
+            output['field_sources'].pop(field, None)
     for key in RANGES:
         output.setdefault(key, 'unknown')
     output.setdefault('desc', 'unknown')
@@ -145,7 +164,8 @@ class WeatherAggregator:
     async def collect(self, key, providers):
         # Deduplicate concurrent area requests, but collect all configured providers.
         saved = self.cache.get(key)
-        if saved and time.monotonic()-saved[0] < 600 and saved[2] == datetime.now(TZ).date().isoformat():
+        from weather_standard import cache_is_current
+        if saved and time.monotonic()-saved[0] < 600 and saved[2] == datetime.now(TZ).date().isoformat() and cache_is_current(saved[1]):
             return copy.deepcopy(saved[1])
         if key not in self.pending:
             task = asyncio.create_task(self._collect(key, providers))
@@ -180,6 +200,8 @@ class WeatherAggregator:
             except Exception as error:
                 self.cooldowns[key, name] = time.monotonic()+300
                 statuses[name] = error_code(error)
+                if getattr(error, 'endpoint_status', None):
+                    statuses[name] = ', '.join(endpoint + '=' + status for endpoint, status in error.endpoint_status.items() if status != 'ok')
                 failures[name] = error_code(error)
                 print('[Weather source unavailable]:', name, type(error).__name__, '; other providers remain available')
                 return name, None
@@ -190,6 +212,7 @@ class WeatherAggregator:
                                 'provider_data': {name: redact(data) for name, data in rows if data}}
         if result:
             result['provider_status'] = statuses
+            result['provider_errors'] = failures
             result['raw_responses'] = responses
             self.cache[key] = (time.monotonic(), copy.deepcopy(result), datetime.now(TZ).date().isoformat())
             if len(self.cache) > 32:
