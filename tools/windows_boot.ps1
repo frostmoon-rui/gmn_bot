@@ -3,7 +3,8 @@
 param(
     [ValidateSet('Validate', 'Install', 'Run', 'Status')]
     [string]$Mode = 'Validate',
-    [string]$ConfigPath = ''
+    [string]$ConfigPath = '',
+    [System.Management.Automation.PSCredential]$Credential
 )
 $ErrorActionPreference = 'Stop'
 if (-not $ConfigPath) { $ConfigPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'windows_startup.local.json' }
@@ -107,24 +108,12 @@ if ($Mode -eq 'Install') {
     $backup = Join-Path $root ('backup\windows-startup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
     if ($old) { Export-ScheduledTask -TaskName $config.TaskName | Set-Content -LiteralPath (Join-Path $backup 'previous-task.xml') -Encoding Unicode }
+    # Cloud account SIDs are not interchangeable with the local profile identity.
     $credentialName = [string]$config.UserName
-    $localAccount = Get-LocalUser -SID $identity.User -ErrorAction SilentlyContinue
-    if ($localAccount -and [string]$localAccount.PrincipalSource -eq 'MicrosoftAccount') {
-        Write-Host 'This Windows profile is linked to a Microsoft account.'
-        Write-Host 'Use that Microsoft account password, not a Windows Hello PIN.'
-        $email = Read-Host 'Microsoft account email (Enter keeps the local account name)'
-        if ($email) {
-            $email = $email.Trim() -replace '^MicrosoftAccount\\',''
-            if ($email -notmatch '^[^\\@\s]+@[^\\@\s]+$') { throw 'Enter an email address, not a password.' }
-            $credentialName = 'MicrosoftAccount\' + $email
-        }
-    }
-    # Accept aliases only if Windows resolves them to this same profile's SID.
-    try { $credentialSid = (New-Object Security.Principal.NTAccount($credentialName)).Translate([Security.Principal.SecurityIdentifier]) }
-    catch { throw 'Windows could not resolve this account alias. Check the Microsoft account linked in Windows Settings.' }
-    if ($credentialSid.Value -ne $identity.User.Value) { throw 'This account belongs to a different Windows profile; no task was registered.' }
     # Windows stores the task credential. Never persist it in this script, JSON, logs, or history.
-    $credential = Get-Credential -UserName $credentialName -Message 'Enter this Windows/Microsoft account password, not a PIN. The task will run before sign-in.'
+    if (-not $Credential) {
+        $Credential = Get-Credential -UserName $credentialName -Message 'Enter the Windows account password, not a PIN. The task will run before sign-in.'
+    }
     if (-not $credential -or $credential.UserName -ine $credentialName) { throw 'Expected the selected Windows account.' }
     $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -Mode Run -ConfigPath "' + [IO.Path]::GetFullPath($ConfigPath) + '"') `
