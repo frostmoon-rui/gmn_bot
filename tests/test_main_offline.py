@@ -239,7 +239,9 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         calls = self.scope['call_gemini_with_history'].call_args_list
         self.assertEqual([call.args[0] for call in calls], ['group_20', 'group_21'])
         self.assertTrue(all(call.kwargs['is_random'] for call in calls))
-        self.assertTrue(all(len(message['text']) <= 30 for message in self.sent))
+        self.assertEqual(len(self.sent),2)
+        self.assertTrue(all(30 < len(message['text']) <= 120 for message in self.sent))
+        self.assertTrue(all(message['text'].endswith(('。','.')) for message in self.sent))
 
     async def test_repeater_main_flow_and_no_bot_self_loop(self):
         for user in (10, 11, 12, 999):

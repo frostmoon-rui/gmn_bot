@@ -397,6 +397,11 @@ Identity and group conversation:
 - Do not expose or solicit private medical, bodily or identity information.
 - Understand adult wordplay, flirting and mild sexual jokes naturally, without unnecessary lectures. Do not escalate to explicit sexual descriptions, harassment or identity-based insults. Never sexualize minors.
 - Follow the current addressee and reply relationship; do not mistake conversations between others for messages to you. Avoid repetitive cat actions and stock phrases.
+- With familiar, receptive and explicitly adult partners, be a little more playful: light innuendo, bashful banter and teasing are welcome without stiff lectures or explicit sexual descriptions.
+- Use at most one brief affectionate roleplay action when appropriate, such as offering a hug, leaning on a shoulder or a playful tail gesture. Keep it textual and varied; never claim actual physical contact.
+- Transgender identity, HRT, feminine presentation and group membership establish neither adulthood nor consent to flirting or particular forms of address. Keep unknown-age interactions nonsexual and do not make bodily traits or medication the joke.
+- Follow each person's latest confirmed name, pronouns and titles. Exclusive names such as "Master" belong only to the established relationship with someone who accepts them.
+- Stop intimate teasing when declined, when someone is uncomfortable or distressed, or when the topic becomes serious. Passive interjections do not initiate intimate invitations toward uninvolved members.
 
 Actual system time: [{cur_time}]
 Interpret "today", "yesterday", "just now" and "tomorrow" relative to that time. Do not confuse dates.
@@ -1492,6 +1497,9 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
                 timeout=12.0
             )
             from response_visibility import visible_response_text
+            from chat_style import generation_hit_limit
+            if generation_hit_limit(response):
+                print('[Model output limit]:', model_id, 'MAX_TOKENS')
             reply_text = visible_response_text(response)
             if reply_text:
                 promote_runtime_model("gemini", model_id)
@@ -2354,7 +2362,7 @@ async def handle_message_event(ws, data):
         unread_stream = "\n".join(group_unread_buffers[group_id][-20:])
         group_unread_buffers[group_id].clear()
         if is_random_chime:
-            context_prompt = f"[Unread group messages]:\n{unread_stream}\n\n(You are making a passive interjection, not answering a direct request. Say a casual observation in 1–10 characters and do not answer technical questions. {split_instruct})"
+            context_prompt = f"[Unread group messages]:\n{unread_stream}\n\n(You are making a passive interjection, not answering a direct request. Use one or two short complete sentences to react casually; do not force a bubble count, initiate intimate invitations or answer technical questions. Finish the sentence rather than leaving it cut off. {split_instruct})"
         elif is_talking_to_me:
             context_prompt = f"[Unread group messages]:\n{unread_stream}\n\n({identity_tag} is addressing you: {formatted_current}. {image_notice}For casual chat: {split_instruct} Explain academic concepts briefly and accurately; if evidence is needed, return only a SEARCH_REQUEST plan. Provide complete code as requested. Reply in English even when the messages use another language.)"
         else:
@@ -2391,8 +2399,15 @@ async def handle_message_event(ws, data):
         return
 
     # 7. Process and remove hidden background tags
-    reply_clean = (re.sub(r'\[[A-Z_]+:[^\]]*\]', '', reply_raw).replace('[SPLIT]', ' ').strip()[:30]
-                   if is_random_chime else clean_and_process_tags(reply_raw, user_id, nickname))
+    if is_random_chime:
+        from chat_style import prepare_passive_reply
+        reply_clean = prepare_passive_reply(reply_raw)
+        if len(reply_clean)<len(reply_raw):
+            print('[Passive reply formatting]:', len(reply_raw), '->', len(reply_clean), 'characters; prefer complete sentences')
+    else:
+        reply_clean = clean_and_process_tags(reply_raw, user_id, nickname)
+    if is_random_chime and not reply_clean:
+        return
 
     # Add an optional sticker reply.
     emoji_bonus = ""
