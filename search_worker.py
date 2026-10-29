@@ -212,6 +212,7 @@ def alternative_search(query):
 
 
 def collect(query, mode='web', topic='', skip_wikipedia=()):
+    started=time.monotonic()
     warnings = []
     stats = {'google_links':0,'fallback_links':0,'wikipedia_pages':0,'rejected_pages':0,'fetch_failures':0}
     diagnostics = []
@@ -310,6 +311,13 @@ def collect(query, mode='web', topic='', skip_wikipedia=()):
             else:
                 stats['rejected_pages' if page.get('rejected') else 'fetch_failures'] += 1
                 warnings.append(page['url'] + ': ' + page['error'])
+    if not pages and (mode=='latest' or is_recent_query(query)) and time.monotonic()-started<180:
+        from news_search import news_pages
+        news=news_pages(query)
+        pages.extend(news['pages'])
+        diagnostics.extend(news['diagnostics'])
+        stats['news_pages']=len(news['pages'])
+        urls.extend(page['url'] for page in news['pages'] if page['url'] not in urls)
     # Prioritize primary pages; Wikipedia supplies background only.
     stats['fetched_pages'] = len(pages)
     return {'pages': prepare_pages(pages), 'warnings': warnings, 'urls': urls[:24], 'retrieval_stats':stats,

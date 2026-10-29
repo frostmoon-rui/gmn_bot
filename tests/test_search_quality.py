@@ -49,6 +49,7 @@ class SearchQualityTests(unittest.TestCase):
     def test_body_relevance_is_checked_even_if_search_title_looked_relevant(self):
         with patch('search_worker.google',return_value=['https://people.example/a']), \
              patch('search_worker.alternative_search',return_value=[]),patch('search_worker.time.sleep'), \
+             patch('news_search.news_pages',return_value={'pages':[],'diagnostics':[]}), \
              patch('research_transport.crawl_public_page',return_value='Ramesh Mali professional profile'):
             result=collect(QUESTION,'latest')
         self.assertEqual(result['pages'],[])
@@ -127,7 +128,8 @@ class SearchQualityTests(unittest.TestCase):
         result=parser.results('宁夏供暖')
         self.assertEqual(result.diagnostics[0]['state'],'javascript-required')
         with patch('search_worker.google',return_value=result) as google, \
-             patch('search_worker.alternative_search',return_value=SearchResults()),patch('search_worker.time.sleep'):
+             patch('search_worker.alternative_search',return_value=SearchResults()),patch('search_worker.time.sleep'), \
+             patch('news_search.news_pages',return_value={'pages':[],'diagnostics':[]}):
             report=collect('2026年宁夏供暖时间','latest')
         self.assertEqual(google.call_count,1)
         self.assertIn('javascript-required',report['warnings'][0])

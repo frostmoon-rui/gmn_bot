@@ -52,7 +52,10 @@ def read_public_page(url, limit=900000):
             continue
         with response:
             content_type = response.headers.get('Content-Type', '').lower()
-            if not any(kind in content_type for kind in ('text/html', 'application/json', 'text/json', 'text/plain')):
+            news_feed = parsed.hostname == 'news.google.com' and parsed.path == '/rss/search'
+            types = ('text/html', 'application/json', 'text/json', 'text/plain') + (
+                ('application/rss+xml', 'application/xml', 'text/xml') if news_feed else ())
+            if not any(kind in content_type for kind in types):
                 raise ValueError('Unsupported research content type')
             body = response.read(limit + 1)
             if len(body) > limit:

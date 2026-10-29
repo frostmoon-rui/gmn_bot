@@ -52,7 +52,9 @@ def keyword_query(query):
     if not re.search(r'[\u3400-\u9fff]', query):
         return query
     query = re.sub(r'(?<!\d)20\d{2}(?:年)?(?!\d)', ' ', query)
-    return ' '.join(part.strip() for part in HAN_QUESTIONS.split(query) if part.strip())
+    query = ' '.join(part.strip() for part in HAN_QUESTIONS.split(query) if part.strip())
+    query = re.sub(r'[\u3400-\u9fff]+',lambda match:' '.join(chinese_tokens(match[0])),query)
+    return ' '.join(query.split())
 
 
 def relevant(query, text):
