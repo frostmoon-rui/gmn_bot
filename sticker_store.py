@@ -147,6 +147,21 @@ class StickerStore:
                 self.connection.close()
                 self.connection = None
 
+    def lookup_exact(self, blob):
+        """Compare original file SHA; aliases are used only for block checks."""
+        digest = hashlib.sha256(blob).hexdigest()
+        with self.lock:
+            db = self._db()
+            row = db.execute('SELECT caption,blocked FROM stickers WHERE sha=?', (digest,)).fetchone()
+            if row is not None:
+                return dict(row)
+            if (db.execute('SELECT 1 FROM blocked_aliases WHERE sha=?', (digest,)).fetchone()
+                    or db.execute('SELECT 1 FROM blocked_images WHERE sha=?', (digest,)).fetchone()
+                    or db.execute('''SELECT 1 FROM aliases a JOIN stickers s ON s.id=a.sticker_id
+                        WHERE a.sha=? AND s.blocked=1''', (digest,)).fetchone()):
+                return {'caption': '', 'blocked': 1}
+            return None
+
     def cleanup_large_non_gif(self, apply=False, limit=1024 * 1024):
         """Quarantine oversized non-GIF originals after a consistent SQLite backup."""
         with self.lock:

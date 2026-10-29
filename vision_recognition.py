@@ -29,11 +29,15 @@ def prepare_vision_image(blob, mime):
 
 class VisionRecognizer:
     def __init__(self, client, sdk_types, model_getter, request_timeout=12, total_timeout=40,
-                 state_store=None, state_file='vision_models.json'):
+                 state_store=None, state_file='vision_models.json', result_cache=None):
         self.client, self.types, self.models = client, sdk_types, model_getter
         self.request_timeout, self.total_timeout = request_timeout, total_timeout
         self.gate = asyncio.Semaphore(2)
         self.inflight, self.cache, self.backoff = {}, {}, {}
+        self.result_cache = result_cache
+        if self.result_cache is None and hasattr(state_store, 'root'):
+            from vision_cache import VisionCache
+            self.result_cache = VisionCache(state_store.root/'vision_cache.sqlite3')
         self.state_store, self.state_file = state_store, state_file
         self.state_lock = asyncio.Lock()
         self.state = state_store.load(state_file, {'version': 1, 'priority': [], 'models': {}}) if state_store else {'version': 1, 'priority': [], 'models': {}}
@@ -89,17 +93,22 @@ class VisionRecognizer:
         return selected
 
     async def describe(self, blob, mime, question=''):
-        question = str(question or '')[:1500]
-        key = hashlib.sha256(blob + question.encode('utf-8')).hexdigest()
+        if not blob or len(blob)>8*1024*1024:
+            return ''
+        question = str(question or '')[:1500].strip()
+        digest = hashlib.sha256(blob).hexdigest()
+        request_sha = hashlib.sha256(question.encode('utf-8')).hexdigest()
+        key = digest + ':' + request_sha
         cached = self.cache.get(key)
         if cached and cached[0] > time.monotonic():
+            print('[Vision cache hit]: Same file and request; no model call')
             return cached[1]
         task = self.inflight.get(key)
         if task is None:
             if len(self.inflight) >= 16:
-                print('[Vision skipped]: Background queue is busy, the original sticker can still be saved')
+                print('[Vision skipped]: Background queue is busy; the original sticker can still be saved')
                 return ''
-            task = asyncio.create_task(self._run(blob, mime, question))
+            task = asyncio.create_task(self._cached_run(blob, mime, question, digest, request_sha))
             self.inflight[key] = task
             def finished(done):
                 self.inflight.pop(key, None)
@@ -114,8 +123,27 @@ class VisionRecognizer:
                 if len(self.cache) > 150:
                     self.cache.pop(next(iter(self.cache)))
             task.add_done_callback(finished)
-        # Cancelling one waiter does not interrupt recognition shared by other groups.
+        else:
+            print('[Vision request shared]: Same file and request; waiting for the existing task')
+        # Cancelling one waiter does not cancel recognition shared by other groups.
         return await asyncio.shield(task)
+
+    async def _cached_run(self, blob, mime, question, digest, request_sha):
+        if self.result_cache is not None:
+            try:
+                caption = await asyncio.to_thread(self.result_cache.get, digest, request_sha)
+                if caption:
+                    print('[Vision file hit]: A successful local result exists; no model call')
+                    return caption
+            except Exception as error:
+                print('[Vision cache read failed]:', type(error).__name__, 'Preserve the original cache; continue normal recognition')
+        caption = await self._run(blob, mime, question)
+        if caption and self.result_cache is not None:
+            try:
+                await asyncio.to_thread(self.result_cache.put, digest, request_sha, caption)
+            except Exception as error:
+                print('[Vision cache write failed]:', type(error).__name__, 'The current observation remains valid')
+        return caption
 
     async def _run(self, blob, mime, question=''):
         try:

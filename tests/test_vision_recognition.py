@@ -96,7 +96,7 @@ class VisionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved['models']['gemini-test-flash-lite']['successes'], 1)
             restarted_call = AsyncMock(return_value=SimpleNamespace(text='Success after restart'))
             restarted = recognizer(restarted_call, state_store=JsonStore(folder))
-            await restarted.describe(BLOB, 'image/png')
+            await restarted.describe(BLOB+b'new-file', 'image/png')
             self.assertEqual(restarted_call.call_args.kwargs['model'], 'gemini-test-flash-lite')
             self.assertEqual(store.load('vision_models.json', {})['models']['gemini-test-flash-lite']['successes'], 2)
 

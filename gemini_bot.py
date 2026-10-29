@@ -1034,6 +1034,19 @@ async def collect_passive_stickers(segments, ws, group):
 
 
 async def cached_sticker_description(blob, mime):
+    existing = await asyncio.to_thread(sticker_store.lookup_exact, blob)
+    if existing is not None:
+        if existing['blocked']:
+            print('[Sticker file comparison]: Blocked original; skip recognition')
+            return ''
+        caption = str(existing.get('caption') or '').strip()
+        if caption:
+            digest = hashlib.sha256(blob).hexdigest()
+            sticker_descriptions[digest] = caption
+            if len(sticker_descriptions)>150:
+                sticker_descriptions.pop(next(iter(sticker_descriptions)))
+            print('[Sticker file comparison]: Exact file already has a caption; no model call')
+            return caption
     if await asyncio.to_thread(sticker_store.is_blocked, blob):
         print('[Image blocklist]: Skipped automatic image recognition')
         return ''
