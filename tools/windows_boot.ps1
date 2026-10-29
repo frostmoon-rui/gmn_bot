@@ -107,9 +107,25 @@ if ($Mode -eq 'Install') {
     $backup = Join-Path $root ('backup\windows-startup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
     if ($old) { Export-ScheduledTask -TaskName $config.TaskName | Set-Content -LiteralPath (Join-Path $backup 'previous-task.xml') -Encoding Unicode }
+    $credentialName = [string]$config.UserName
+    $localAccount = Get-LocalUser -SID $identity.User -ErrorAction SilentlyContinue
+    if ($localAccount -and [string]$localAccount.PrincipalSource -eq 'MicrosoftAccount') {
+        Write-Host 'This Windows profile is linked to a Microsoft account.'
+        Write-Host 'Use that Microsoft account password, not a Windows Hello PIN.'
+        $email = Read-Host 'Microsoft account email (Enter keeps the local account name)'
+        if ($email) {
+            $email = $email.Trim() -replace '^MicrosoftAccount\\',''
+            if ($email -notmatch '^[^\\@\s]+@[^\\@\s]+$') { throw 'Enter an email address, not a password.' }
+            $credentialName = 'MicrosoftAccount\' + $email
+        }
+    }
+    # Accept aliases only if Windows resolves them to this same profile's SID.
+    try { $credentialSid = (New-Object Security.Principal.NTAccount($credentialName)).Translate([Security.Principal.SecurityIdentifier]) }
+    catch { throw 'Windows could not resolve this account alias. Check the Microsoft account linked in Windows Settings.' }
+    if ($credentialSid.Value -ne $identity.User.Value) { throw 'This account belongs to a different Windows profile; no task was registered.' }
     # Windows stores the task credential. Never persist it in this script, JSON, logs, or history.
-    $credential = Get-Credential -UserName $config.UserName -Message 'Enter the Windows account password, not a PIN. The task will run before sign-in.'
-    if (-not $credential -or $credential.UserName -ine $config.UserName) { throw 'Expected the configured Windows account.' }
+    $credential = Get-Credential -UserName $credentialName -Message 'Enter this Windows/Microsoft account password, not a PIN. The task will run before sign-in.'
+    if (-not $credential -or $credential.UserName -ine $credentialName) { throw 'Expected the selected Windows account.' }
     $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -Mode Run -ConfigPath "' + [IO.Path]::GetFullPath($ConfigPath) + '"') `
         -WorkingDirectory $root
@@ -118,9 +134,16 @@ if ($Mode -eq 'Install') {
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $config.TaskName -Action $action -Trigger $trigger -Settings $settings `
-        -Description 'Private QQ bot stack: headless proxy, NapCat Shell and Python; no interactive sign-in required.' `
-        -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Highest -Force | Out-Null
+    try {
+        Register-ScheduledTask -TaskName $config.TaskName -Action $action -Trigger $trigger -Settings $settings `
+            -Description 'Private QQ bot stack: headless proxy, NapCat Shell and Python; no interactive sign-in required.' `
+            -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Highest -Force | Out-Null
+    } catch {
+        $credential = $null
+        Write-Host 'Task registration failed. Login-only startup entries remain unchanged.'
+        Write-Host 'For error 0x8007052e, verify the account password. Microsoft password changes may require one Windows password sign-in to refresh cached credentials.'
+        throw
+    }
     $task = Get-ScheduledTask -TaskName $config.TaskName
     if ([string]$task.Principal.LogonType -ne 'Password') { throw 'The task was not registered with password logon.' }
     # Retire login-only entries only after registration succeeds; keep recoverable copies.

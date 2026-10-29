@@ -46,6 +46,13 @@ Alternatively, double-click `Install-Windows-Startup.cmd` in the private runtime
 Its helper opens a visible elevated PowerShell window for UAC and password entry.
 
 Enter the Windows account password in the local credential prompt, not the PIN.
+For a Microsoft-linked profile, the installer first offers an email field locally.
+It accepts `MicrosoftAccount\email` only if Windows resolves it to the current
+profile's SID; it will not migrate the bot to another user profile. Use the actual
+Microsoft account password. Error `0x8007052e` means Windows rejected the supplied
+credentials. Stop repeated attempts; check the account/password and, if its online
+password recently changed, sign in to Windows with the password once to refresh
+cached credentials. No passwordless sign-in or security-policy changes are made.
 Windows stores the task credential; changing that password requires re-registering
 the task. Installation backs up a previous matching task, registers a boot trigger
 with a 30-second delay and Password logon, then moves `silent_start.vbs` and
