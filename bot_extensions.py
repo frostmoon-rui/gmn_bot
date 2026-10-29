@@ -222,6 +222,55 @@ class Extensions:
             await self.normalize_location(location)
         print('[Location normalized]: Province-only records use capital references; country-only records need a city')
 
+    async def resolve_weather_point(self, location):
+        """Share verified WGS84 resolution with on-demand local topic charts."""
+        from weather_queries import weather_query
+        location = weather_query(location)
+        country = self.locations.get(location, {}).get('country_code')
+        domestic = country == 'CN' or (not country and domestic_hint(location))
+        resolved = await self.normalize_location(location)
+        if resolved and resolved.get('status') == 'needs_city' and 'country' in resolved.get('location_types', []):
+            code = str(resolved.get('country_code', '')).upper()
+            if re.fullmatch(r'[A-Z]{2}', code):
+                from bot_actions import capital_name
+                name = capital_name(code)
+                if name:
+                    capital = await self.normalize_location(name + ', ' + code)
+                    if capital and capital.get('status') == 'resolved' and capital.get('country_code') == code:
+                        resolved = capital
+                        resolved = dict(resolved, capital_reference=True)
+        if resolved and resolved.get('status') == 'resolved':
+            return resolved
+        # If Google geocoding fails, the independent free WGS84 source can provide coordinates.
+        # Accept only a complete, unique city/district match, never the first ambiguous result.
+        query = province_capital(location) or location
+        if domestic:
+            from weather_location import offline_weather_point
+            try:
+                fallback = await asyncio.to_thread(offline_weather_point, query, self.amap.client)
+                if fallback:
+                    print('[Weather location]: Administrative area verified; independent WGS84 city coordinates selected')
+                    return dict(fallback, capital_reference=bool(province_capital(location)))
+            except Exception as error:
+                print('[Weather fallback location]:', type(error).__name__)
+        from location_integrity import city_query, geoname_hierarchy_matches
+        leaf = query.split()[-1] if province_capital(location) else city_query(query)
+        data = await asyncio.to_thread(request_weather_json, 'https://geocoding-api.open-meteo.com/v1/search?'+
+            urllib.parse.urlencode({'name': leaf, 'count': 10, 'language': 'zh' if re.search(r'[\u3400-\u9fff]', leaf) else 'en', 'format': 'json'}))
+        canonical = lambda name: re.sub(r'(?:\u5e02|\u53bf|\u533a)$', '', name.strip()).casefold()
+        matches = [row for row in data.get('results', []) if canonical(str(row.get('name', ''))) == canonical(leaf)
+                   and geoname_hierarchy_matches(query, row)
+                   and (not row.get('feature_code') or str(row['feature_code']).startswith('PPL'))
+                   and (not resolved or 'country' not in resolved.get('location_types', []) or str(row.get('feature_code', '')).startswith('PPL'))
+                   and (not domestic or row.get('country_code') == 'CN')]
+        if len(matches) != 1:
+            raise ValueError('Fallback geocoder found no complete unique match; no other city was substituted')
+        row = matches[0]
+        return {'status': 'resolved', 'original': location, 'effective_location': query,
+                'country_code': row.get('country_code'), 'latitude': row['latitude'], 'longitude': row['longitude'],
+                'formatted_address': ', '.join(str(row.get(field, '')) for field in ('name', 'admin1', 'country')),
+                'coordinate_system': 'WGS84', 'capital_reference': bool(province_capital(location))}
+
     async def google_weather(self, location):
         """Share the existing ten-minute cache and serialize requests for one region."""
         from weather_queries import weather_query
@@ -242,48 +291,10 @@ class Extensions:
         country_reference = False
         async def resolve_point():
             nonlocal country_reference
-            resolved = await self.normalize_location(location)
-            if resolved and resolved.get('status') == 'needs_city' and 'country' in resolved.get('location_types', []):
-                code = str(resolved.get('country_code', '')).upper()
-                if re.fullmatch(r'[A-Z]{2}', code):
-                    from bot_actions import capital_name
-                    name = capital_name(code)
-                    if name:
-                        capital = await self.normalize_location(name + ', ' + code)
-                        if capital and capital.get('status') == 'resolved' and capital.get('country_code') == code:
-                            resolved = capital
-                            country_reference = True
-            if resolved and resolved.get('status') == 'resolved':
-                return resolved
-            # If Google geocoding fails, the independent free WGS84 source can provide coordinates.
-            # Accept only a complete, unique city/district match, never the first ambiguous result.
-            query = province_capital(location) or location
-            if domestic:
-                from weather_location import offline_weather_point
-                try:
-                    fallback = await asyncio.to_thread(offline_weather_point, query, self.amap.client)
-                    if fallback:
-                        print('[Weather location]: Administrative area verified; independent WGS84 city coordinates selected')
-                        return fallback
-                except Exception as error:
-                    print('[Weather fallback location]:', type(error).__name__)
-            from location_integrity import city_query, geoname_hierarchy_matches
-            leaf = query.split()[-1] if province_capital(location) else city_query(query)
-            data = await asyncio.to_thread(request_weather_json, 'https://geocoding-api.open-meteo.com/v1/search?'+
-                urllib.parse.urlencode({'name': leaf, 'count': 10, 'language': 'zh' if re.search(r'[\u3400-\u9fff]', leaf) else 'en', 'format': 'json'}))
-            canonical = lambda name: re.sub(r'(?:\u5e02|\u53bf|\u533a)$', '', name.strip()).casefold()
-            matches = [row for row in data.get('results', []) if canonical(str(row.get('name', ''))) == canonical(leaf)
-                       and geoname_hierarchy_matches(query, row)
-                       and (not row.get('feature_code') or str(row['feature_code']).startswith('PPL'))
-                       and (not resolved or 'country' not in resolved.get('location_types', []) or str(row.get('feature_code', '')).startswith('PPL'))
-                       and (not domestic or row.get('country_code') == 'CN')]
-            if len(matches) != 1:
-                raise ValueError('Fallback geocoder found no complete unique match; no other city was substituted')
-            row = matches[0]
-            return {'status': 'resolved', 'original': location, 'effective_location': query,
-                    'country_code': row.get('country_code'), 'latitude': row['latitude'], 'longitude': row['longitude'],
-                    'formatted_address': ', '.join(str(row.get(field, '')) for field in ('name', 'admin1', 'country')),
-                    'coordinate_system': 'WGS84'}
+            resolved = await self.resolve_weather_point(location)
+            if resolved and resolved.get('capital_reference'):
+                country_reference = True
+            return resolved
         async def point():
             nonlocal point_task
             if point_task is None:
@@ -421,13 +432,19 @@ class Extensions:
         from weather_map_delivery import deliver_weather_map
         await deliver_weather_map(self, ws, kind, group, user, product)
 
+    async def weather_local_job(self, ws, kind, group, user, product, location=''):
+        from weather_local_delivery import deliver_local_topic
+        await deliver_local_topic(self, ws, kind, group, user, product, location)
+
     async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
-        from weather_maps import map_request
-        product = map_request(text)
-        if product and (mentioned or kind == 'private'):
-            if not self.start_user_job(user, 'weather-map', self.weather_map_job(ws, kind, group, user, product)):
-                return 'A weather-map lookup is already running, meow.'
-            return 'Fetching the latest published national weather map, meow.'
+        from weather_queries import topic_request
+        topic = topic_request(text)
+        if topic and (mentioned or kind == 'private'):
+            product, local = topic['product'], topic['scope']=='local'
+            job = self.weather_local_job(ws, kind, group, user, product, topic['location']) if local else self.weather_map_job(ws, kind, group, user, product)
+            if not self.start_user_job(user, 'weather-map', job):
+                return 'A weather chart is already running, meow.'
+            return 'Fetching local data and drawing a large chart, meow.' if local else 'Fetching the latest published national weather map, meow.'
         from bot_actions import english_weather_request as weather_request
         weather = weather_request(text)
         if weather is not None:

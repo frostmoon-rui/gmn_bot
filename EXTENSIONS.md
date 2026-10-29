@@ -210,3 +210,24 @@ The [China National Meteorological Center](https://www.nmc.cn/) provides these s
 Original legends, coverage, validity periods and source marks remain unchanged. Captions display product-reference time in UTC+08:00; it is not necessarily the website upload time. Original charts retain their upstream Chinese legends.
 The fixed product pages are resolved on demand, with image/origin validation, product-specific freshness checks, shared in-flight requests, a five-minute cache and a 16 MB memory limit. Failures back off for one minute. An expired, ambiguous or unavailable product is not replaced with another chart or an old image; a short notice links to the original page.
 These products never use private location bindings and never enter the sticker library. The validated `weather_map` model action uses the same caller-scoped delivery path.
+
+
+## Local high-resolution topic charts
+
+Appending a city selects a local series: `/24h temperature Paris`, `/current temperature Paris`, `/current precipitation Paris`, `/24h precipitation Paris`, `/30d precipitation Paris`.
+For local forecasts, use `/temperature forecast Paris` or `/precipitation forecast Paris`.
+Use a `local` prefix without a city to read the current caller's saved region, for example `/local current temperature`.
+Original bare commands continue to return national maps. An explicit city overrides the national default. A temporary lookup never changes saved bindings; missing bindings prompt for a city. Parent-area selectors remain available.
+
+Charts use 1920-pixel-wide panels, two twelve-point panels for a full day, numeric labels at every actual hour, and a separate current-sample timestamp. Past/current estimates are solid; forecasts are dashed; missing values are not zero-filled or connected across gaps.
+
+- Temperature history selects the past 24 hourly points. Precipitation history selects 24 completed one-hour intervals.
+- Current precipitation retains the provider's actual accumulation interval, separately from hourly totals.
+- Future precipitation starts at the next full-hour boundary and covers 24 complete intervals; temperature forecasts use the next 24 hourly points.
+- Monthly precipitation uses 30 completed provider days, excluding today's unfinished total. Incomplete coverage does not produce a full-period sum.
+- Data are [Open-Meteo model estimates](https://open-meteo.com/en/docs), including historical estimates, not station observations. Source timestamps are retained; no interpolation claims minute-level measurements.
+- China uses Asia/Shanghai; other regions use the provider's local timezone. Hourly UNIX timestamps preserve DST repeats. Daily totals follow the provider's statistical-day convention.
+- Hourly products share a demand-only ten-minute dataset cache per point; monthly data have a separate cache. At most sixteen datasets and two concurrent requests are retained. No region-wide refresh loop is added.
+- Images use a generic area heading and never expose a saved place name. They are sent only to the requesting conversation and never collected as stickers.
+
+See `help local-weather`. The validated `weather_chart` model action follows the same path. Existing multi-source cards, cat briefings, comparisons and scheduled weather care remain unchanged.

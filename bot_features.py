@@ -10,7 +10,17 @@ from datetime import datetime, timedelta, timezone
 from bot_care import crisis_intent
 
 TZ = timezone(timedelta(hours=8))
-HELP = {'weather': 'Weather queries (all existing features remain available)\n'
+HELP = {'local-weather': 'Local high-resolution weather charts\n'
+                    '/24h temperature Paris | /current temperature Paris | /current precipitation Paris\n'
+                    '/24h precipitation Paris | /30d precipitation Paris\n'
+                    '/temperature forecast Paris | /precipitation forecast Paris\n'
+                    'Use /local current temperature without a city to read your own saved area.\n'
+                    'Bare original commands still return national maps. Saved records are not overwritten.\n'
+                    '1920-pixel-wide panels label every real hourly sample. Forecasts are dashed; missing points stay missing.\n'
+                    'Past 30-day totals exclude today; current rain interval and hourly totals are kept separate.\n'
+                    'Open-Meteo historical model estimates are not station observations. No artificial minute-level interpolation.\n'
+                    'Regular multi-source weather cards and cat briefings remain available.',
+        'weather': 'Weather queries (all existing features remain available)\n'
                    'weather Paris | Paris weather | weather Siming District*Xiamen\n'
                    'child*parent selects an explicit district/city hierarchy without replacing saved locations.\n'
                    'weather today | weather tomorrow | set location:city\n'

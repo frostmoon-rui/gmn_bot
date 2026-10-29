@@ -15,6 +15,7 @@ def capital_name(code):
 SCHEMAS = {
     'weather': {'location': (str, 120), 'target': (str, 16)},
     'weather_map': {'product': (str, 32)},
+    'weather_chart': {'product': (str, 32), 'location': (str, 120)},
     'search': {'query': (str, 500), 'mode': (str, 16), 'topic': (str, 100)},
     'research': {'query': (str, 1000)},
     'website': {'page': (str, 20), 'language': (str, 4), 'theme': (str, 8)},
@@ -34,6 +35,7 @@ Tools and arguments:
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
 weather_map {product: temperature_24h|temperature_current|precipitation_current|precipitation_24h|precipitation_30d|precipitation_forecast|temperature_forecast} for a requested China national weather map;
 These maps are national products, not a city's weather. 30d precipitation is past accumulation, not a 30-day forecast.
+weather_chart {product: same product identifiers as weather_map, location: explicit city or empty for the speaker's saved area} for large local time-series charts. Historical data are model estimates, not station observations. Local 30d precipitation excludes today's unfinished total.
 For a child/parent location selector, preserve child*parent (for example Chelsea*London) in the weather location.
 search {query, mode: web|wiki|latest, topic}; research {query} for a requested detailed/deep investigation;
 website {page: home|about|friends|resources|food|projects, language: zh|en|ru|ja, theme: dark|light};
@@ -80,7 +82,7 @@ def parse_action(text):
         return None
     if tool=='weather' and args.get('target','today') not in {'today','tomorrow'}:
         return None
-    if tool=='weather_map':
+    if tool in {'weather_map','weather_chart'}:
         from weather_maps import PRODUCTS
         if args.get('product') not in PRODUCTS:
             return None
@@ -126,6 +128,9 @@ async def dispatch(bot, action, event, ws, *, master=False, whitelist=False, gro
         return
     if tool=='weather_map':
         await ext.weather_map_job(ws,kind,group,user,args['product'])
+        return
+    if tool=='weather_chart':
+        await ext.weather_local_job(ws,kind,group,user,args['product'],args.get('location',''))
         return
     if tool=='search':
         await reply(ext.start_model_search(ws,kind,group,user,{'query':args['query'],
