@@ -87,3 +87,25 @@ try{{
 @{{connected=[bool](Get-LoginCodePath $true);pending=[bool](Get-LoginCodePath $false)}} | ConvertTo-Json -Compress
 '''
         self.assertEqual(json.loads(self.run_ps(code)),{'connected':False,'pending':True})
+
+    def test_boot_handoff_requires_live_matching_owner_and_boot(self):
+        self.script=self.script.with_name('windows_boot.ps1')
+        marker=self.root/'windows_bot_desktop.local.json'
+        marker.write_text(json.dumps({'Pid':123,'SessionId':2,'Owner':'EXAMPLE\\owner','BootKey':'boot'}),'utf-8')
+        root=str(self.root).replace("'","''")
+        code=self.function_scope('Test-DesktopBotControl')+rf'''
+$root='{root}';$bootKey='boot';$config=[pscustomobject]@{{UserName='EXAMPLE\owner'}}
+$script:alive=$true;$script:rightOwner=$true
+function Get-CimInstance {{
+ if($script:alive){{[pscustomobject]@{{SessionId=2;CommandLine=(Join-Path $root 'tools\windows_bot_desktop.ps1')}}}}
+}}
+function Invoke-CimMethod {{
+ [pscustomobject]@{{Domain='EXAMPLE';User=$(if($script:rightOwner){{'owner'}}else{{'other'}})}}
+}}
+$live=Test-DesktopBotControl
+$script:alive=$false;$dead=Test-DesktopBotControl
+$script:alive=$true;$script:rightOwner=$false;$wrong=Test-DesktopBotControl
+$script:rightOwner=$true;$bootKey='new-boot';$stale=Test-DesktopBotControl
+@{{live=$live;dead=$dead;wrong=$wrong;stale=$stale}} | ConvertTo-Json -Compress
+'''
+        self.assertEqual(json.loads(self.run_ps(code)),{'live':True,'dead':False,'wrong':False,'stale':False})

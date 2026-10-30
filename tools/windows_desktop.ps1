@@ -124,12 +124,14 @@ if($Mode -eq 'Install'){
     $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $owner -Settings $settings `
-        -Description 'After sign-in, show live bot/NapCat/startup logs and existing management interfaces without moving workers.' -Force | Out-Null
+        -Description 'After sign-in, hand Python ownership to a visible desktop instance and show component logs and management interfaces.' -Force | Out-Null
     Write-Output 'Desktop views installed. The password-based boot task and its credentials were not modified.'
     exit 0
 }
 
 if($Mode -eq 'Activate'){
+    & (Join-Path $PSScriptRoot 'windows_bot_desktop.ps1') -Mode Activate -ConfigPath $ConfigPath
+    if($LASTEXITCODE -ne 0){throw 'Desktop bot handoff failed.'}
     $exe="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     foreach($view in @('bot','napcat','startup')){
         Start-Process -FilePath $exe -ArgumentList ('-NoLogo -NoProfile -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Mode Monitor -Component '+$view+' -ConfigPath "'+[IO.Path]::GetFullPath($ConfigPath)+'"') -WorkingDirectory $root -WindowStyle Normal

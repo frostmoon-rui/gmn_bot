@@ -67,6 +67,21 @@ function Test-DesktopProxyControl {
     }
 }
 
+function Test-DesktopBotControl {
+    $marker=Join-Path $root 'windows_bot_desktop.local.json'
+    if(-not (Test-Path -LiteralPath $marker)){return $false}
+    try{
+        $request=Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
+        if($request.BootKey -ne $bootKey -or $request.Owner -ine $config.UserName -or [int]$request.SessionId -eq 0){return $false}
+        $process=Get-CimInstance Win32_Process -Filter ('ProcessId='+[int]$request.Pid)
+        if(-not $process -or $process.SessionId -ne $request.SessionId -or -not $process.CommandLine){return $false}
+        $expected=Join-Path $root 'tools\windows_bot_desktop.ps1'
+        if($process.CommandLine.IndexOf($expected,[StringComparison]::OrdinalIgnoreCase) -lt 0){return $false}
+        $owner=Invoke-CimMethod -InputObject $process -MethodName GetOwner
+        return ($owner.Domain+'\'+$owner.User) -ieq $config.UserName
+    }catch{return $false}
+}
+
 function Find-Component([string]$Executable, [string]$Hint = '') {
     $leaf = [IO.Path]::GetFileName($Executable).Replace("'", "''")
     $matches = @()
@@ -227,7 +242,7 @@ try {
                 }
             }
         }
-        if ($proxyReady -and $napReady -and ($now - $lastBot).TotalSeconds -ge 60) {
+        if ($proxyReady -and $napReady -and -not (Test-DesktopBotControl) -and ($now - $lastBot).TotalSeconds -ge 60) {
             if (@(Find-Component $config.PythonExecutable 'gemini_bot.py').Count -eq 0) {
                 $null = Start-Component 'bot' $config.PythonExecutable @('-u',$scriptFile) $root
                 $lastBot = $now

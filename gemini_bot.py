@@ -1,3 +1,7 @@
+if __name__ == '__main__':
+    from bot_instance import require_instance
+    _instance_lock = require_instance(__file__)
+
 from local_settings import setting
 from model_proxy import select_model_proxy
 import asyncio

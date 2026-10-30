@@ -131,15 +131,33 @@ After sign-in, three visible read-only consoles follow bot, NapCat, and
 startup/proxy logs. They automatically switch to new files after a worker restart.
 The existing Clash window is restored; its handoff now launches the GUI visibly.
 The local NapCat management page opens when its configured listener is ready,
-without putting its token into the URL. No second QQ, Python or proxy worker is
-started by the views. Log contents remain private on this computer.
+without putting its token into the URL. The activation also hands Python over
+to one fresh desktop instance as described below. QQ is not restarted, and the
+existing proxy handoff remains separate. Log contents stay on this computer.
 If QQ is awaiting authorization, its existing local QR image is also opened so
 the signed-in user can scan and approve it. This is not an automatic login bypass.
 
 Windows cannot move noninteractive boot-session windows into the desktop.
-These are live desktop views and management interfaces; the working processes
-continue in their existing sessions. Closing a log view does not stop a worker.
-Signing out closes the views while the pre-login boot stack remains available.
+QQ stays in its existing session; Python is restarted in the desktop session.
+Closing a read-only log view does not stop a worker. The separate active bot
+console controls the desktop wrapper. Signing out returns bot supervision to
+the pre-login boot task.
 Run `tools/windows_desktop.ps1 -Mode Activate` to reopen the views manually.
 The future sign-in/session behavior still needs an actual sign-in acceptance
 check; offline validation does not log out or reboot the computer.
+## Desktop bot ownership
+
+After sign-in, the elevated desktop task publishes ownership, stops only this
+project's Python bot under the configured account, and starts a fresh instance
+in a visible console. QQ and the proxy are not restarted. Output remains visible
+and is saved in local startup logs. A failed child is restarted by the desktop
+wrapper. Closing the desktop console releases ownership; the boot supervisor
+resumes responsibility. Task credentials are unchanged.
+
+The boot supervisor accepts ownership only from a live matching desktop wrapper
+under the configured account and current boot. Stale markers do not disable
+startup. A process-held file lock in `startup_runtime/bot-instance.lock` rejects
+duplicate manual launches before loading runtime settings or personal data.
+The OS releases the lock on exit, including crashes; do not delete the lock file
+while the bot is running. A restarted boot supervisor is required to activate
+changes to its running PowerShell loop.
