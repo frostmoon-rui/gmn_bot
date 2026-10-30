@@ -205,7 +205,8 @@ class WeatherPipelineTests(unittest.IsolatedAsyncioTestCase):
 class WeatherCardContractTests(unittest.TestCase):
     def test_sparse_card_is_compact_and_single_chart_uses_full_width(self):
         image, texts, boxes = rendered(fixture())
-        self.assertLess(image.height, 1100)
+        # Condition/date headers have a dedicated band without adding empty panels.
+        self.assertLess(image.height, 1200)
         self.assertNotIn('Hourly forecast', texts)
         self.assertIn('Wind force', texts)
         self.assertTrue(any(box[2]-box[0]>1200 and box[3]-box[1]>200 for box in boxes))

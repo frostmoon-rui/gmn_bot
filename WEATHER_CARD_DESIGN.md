@@ -20,6 +20,14 @@ lines remain at the bottom. The separate conversational briefing is unchanged.
   hours use distinct instants. One-sided daily temperatures remain single points.
 - Legends and supporting text wrap for translated labels; sparse reports omit
   empty chart sections. The existing single-topic chart commands remain available.
+- Time/date headers, temperature endpoints, current readings and section titles
+  use bold faces. Local vector condition icons accompany the temperature columns;
+  explicit provider day/night flags distinguish sun and moon. Missing conditions
+  use a neutral mark. Icons never infer clear weather from zero or missing rain.
+- Hourly condition codes remain paired with the provider supplying their weather
+  description. Raster supersampling improves glyphs, rounded borders and column
+  edges without interpolating, smoothing or replacing any measurement. Final
+  width stays 1800 pixels; long reports use a bounded working raster.
 
 Offline preview with entirely synthetic data:
 

@@ -18,6 +18,7 @@ def fixture():
         rain=round(max(0,3.5-abs(index-15))*.7,2)
         hours.append({'time':(start+timedelta(hours=index)).isoformat()+'+08:00',
             'temperature_2m':round(temperature,1),'apparent_temperature':round(temperature-3,1),
+            'weather_code':61 if rain else 2 if 8<=index<=19 else 0,'is_day':int(7<=index<=18),
             'precipitation':rain,'rain':round(rain*.8,2),'showers':round(rain*.2,2),
             'precipitation_probability':min(95,round(rain*30+10)),
             'wind_speed_10m':round(18+10*math.sin(index/4)**2,1),
@@ -32,12 +33,13 @@ def fixture():
     for index,(low,high) in enumerate([(2,14),(0,10),(-3,7),(-5,4),(-2,8),(1,12),(3,15)]):
         days.append({'date':(start+timedelta(days=index)).date().isoformat(),
             'minTemperature':{'degrees':low},'maxTemperature':{'degrees':high},
+            'weather_code':[61,63,71,3,0,2,0][index],
             'apparent_temperature_max':high-3,'precipitation_sum':[5.2,8.6,1.4,0,0,.2,0][index],
             'probability':[70,85,40,10,5,20,5][index],'wind_speed_10m_max':20+index*2,
             'wind_gusts_10m_max':38+index*3,'uv_index_max':max(1,4-index*.3),
             'humidity':52+index*2,'cloudCover':max(0,70-index*8)})
     return {'local_date':'2026-10-30','timezone':'Asia/Shanghai','report_time':'2026-10-30T09:30+08:00',
-        'temp':7,'feels_like':3,'min_temp':2,'max_temp':14,'desc':'Partly cloudy',
+        'temp':7,'feels_like':3,'min_temp':2,'max_temp':14,'desc':'Partly cloudy','weather_code':2,'is_day':1,
         'precipitation_mm':.4,'probability':65,'wind_kmph':28,'wind_gust_kmph':54,
         'humidity':72,'uv':2,'pressure_hpa':1019,'visibility_km':12,
         'hours':hours,'days':days,'sources':['Google Weather','Open-Meteo model'],

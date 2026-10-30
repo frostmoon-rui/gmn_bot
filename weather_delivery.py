@@ -3,15 +3,20 @@ import asyncio
 import re
 from io import BytesIO
 from pathlib import Path
+from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont
 from response_visibility import visible_response_text
 
 
-def report_font(size):
-    for path in ('C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/arial.ttf',
-                 '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-                 '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'):
+@lru_cache(maxsize=96)
+def report_font(size, bold=False):
+    candidates = ('C:/Windows/Fonts/msyhbd.ttc', 'C:/Windows/Fonts/arialbd.ttf',
+                  '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+                  '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf') if bold else ()
+    for path in candidates + ('C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/arial.ttf',
+                             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+                             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'):
         if Path(path).is_file():
             return ImageFont.truetype(path, size)
     return ImageFont.load_default(size=size)

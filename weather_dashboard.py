@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 from io import BytesIO
 import math
+import re
 
 from PIL import Image, ImageDraw
 from weather_report import METRICS, local_time
@@ -114,9 +115,15 @@ class Painter:
         self.font, self.labels, self.translate = font, labels, translate
         self.draw = ImageDraw.Draw(Image.new('RGB', (1, 1)))
 
-    def write(self, x, y, text, size=26, color=INK, width=None):
+    def face(self, size, bold=False):
+        try:
+            return self.font(size, bold=bold)
+        except TypeError:
+            return self.font(size)
+
+    def write(self, x, y, text, size=26, color=INK, width=None, bold=False):
         text = str(text).replace('[SPLIT]', ' ').replace('[CQ:', '(').replace('\n', ' ')
-        face = self.font(size)
+        face = self.face(size, bold)
         if width and self.draw.textlength(text, font=face) > width:
             while text and self.draw.textlength(text+'…', font=face) > width:
                 text = text[:-1]
@@ -125,12 +132,16 @@ class Painter:
 
     def wrap(self, text, width, size):
         lines, current = [], ''
-        for token in str(text):
-            if current and self.draw.textlength(current+token, font=self.font(size)) > width:
-                lines.append(current)
+        for token in re.findall(r'\S+\s*',str(text)):
+            if current and self.draw.textlength((current+token).rstrip(), font=self.font(size)) > width:
+                lines.append(current.rstrip())
                 current = ''
-            current += token
-        return lines+[current] if current else lines
+            for character in token:
+                if current and self.draw.textlength((current+character).rstrip(),font=self.font(size))>width:
+                    lines.append(current.rstrip())
+                    current=''
+                current+=character
+        return lines+[current.rstrip()] if current else lines
 
     def label(self, key, daily=False):
         key = DAILY_NAMES.get(key, key) if daily else key
@@ -157,7 +168,7 @@ class Painter:
     def panel_height(self, keys, width, daily, rows, major):
         legend = len(self.legend(keys, width-56, daily))*34
         if any(key in keys for key in ('temp','feels_like','min_temp','max_temp')):
-            return (290 if daily and len(rows)<=3 else 430 if daily else 400 if major else 330)+legend
+            return (355 if daily and len(rows)<=3 else 550 if daily else 520 if major else 445)+legend
         return (360 if major else 306)+legend
 
     def panel(self, box, keys, rows, originals, data, kind, major):
@@ -173,13 +184,13 @@ class Painter:
             peak_values=[row[peak_key] for row in rows if row.get(peak_key) is not None]
             if peak_values:
                 badge=self.label(peak_key,daily)+' ↑ '+f'{max(peak_values):g}'+metric_unit(peak_key)
-                badge_width=self.draw.textlength(badge,font=self.font(24))+32
+                badge_width=self.draw.textlength(badge,font=self.face(24,True))+32
                 if badge_width<width*.55:
                     start=right-badge_width-24
                     self.draw.rounded_rectangle((start,y+15,right-24,y+57),radius=15,fill='#f0f4f7')
-                    self.write(start+16,y+21,badge,24,COLORS.get(peak_key,MUTED))
+                    self.write(start+16,y+21,badge,24,COLORS.get(peak_key,MUTED),bold=True)
                     title_width=start-x-52
-        self.write(x+28, y+18, heading, 30 if major else 28, width=title_width)
+        self.write(x+28, y+18, heading, 30 if major else 28, width=title_width,bold=True)
         legends = self.legend(keys, width-56, daily)
         for row_index, line in enumerate(legends):
             for key, caption, offset, length in line:
@@ -194,6 +205,7 @@ class Painter:
             self.trends(box, plot_top, keys, rows, originals, data, daily)
 
     def ranges(self, box, top, keys, rows, originals, data, daily):
+        from weather_graphics import weather_icon
         x, _, right, bottom = box
         samples=[temperature_sample(row,keys) for row in rows]
         values=[value for marks,_ in samples for _,value in marks]
@@ -201,7 +213,9 @@ class Painter:
             self.write(x+28,top,self.labels['data_unavailable'],color=MUTED)
             return
         low,high=scale_bounds(values,'°C')
-        left,end,base=x+105,right-52,bottom-96
+        band_top=top-12
+        top+=75 if daily and len(rows)<=3 else 115
+        left,end,base=x+105,right-65,bottom-84
         def yy(value):
             return base-(value-low)/(high-low)*(base-top)
         ticks=axis_ticks(low,high,'°C')
@@ -218,7 +232,7 @@ class Painter:
         elapsed=[value if value is not None else index*(86400 if daily else 3600)
                  for index,value in enumerate(elapsed)]
         start,stop=min(elapsed),max(elapsed)
-        padding=min(80,(end-left)/max(2,len(rows))*0.45)
+        padding=min(92,(end-left)/max(2,len(rows))*0.45)
         positions=[left+padding+(end-left-2*padding)*(value-start)/(stop-start)
                    if stop>start else (left+end)/2 for value in elapsed]
         gaps=[b-a for a,b in zip(positions,positions[1:]) if b>a]
@@ -227,8 +241,20 @@ class Painter:
         candidates=sorted({round(i*(len(rows)-1)/max(1,count-1)) for i in range(count)})
         labelled=[]
         for index in candidates:
-            if not labelled or positions[index]-positions[labelled[-1]]>115:
+            if not labelled or positions[index]-positions[labelled[-1]]>(115 if daily else 155):
                 labelled.append(index)
+        for index in labelled:
+            original=originals[index]
+            stamp=local_time(original.get('date') or row_time(original),data.get('timezone'))
+            caption=stamp[5:10] if daily else stamp[11:16]
+            if not daily and len({value.date() for value in times if value})>1:
+                caption=stamp[5:16].replace('T',' ')
+            xx=positions[index]
+            text_width=self.draw.textlength(caption or '—',font=self.face(25,True))
+            self.write(xx-text_width/2,band_top,caption or '—',25,INK,170,bold=True)
+            size=34 if daily and len(rows)<=3 else 48
+            weather_icon(self.draw,xx-size/2,band_top+38,size,original,daily)
+            self.draw.line((xx,top-4,xx,base+5),fill='#eef2f5',width=1)
         has_bounds=any(key in keys for key in ('min_temp','max_temp'))
         for index,((marks,span),xx) in enumerate(zip(samples,positions)):
             if not marks:
@@ -253,15 +279,15 @@ class Painter:
             for position,(key,value) in enumerate(endpoints):
                 below=(len(endpoints)>1 and position==0) or key=='min_temp'
                 caption=f'{value:g}°C'
-                tx=xx-self.draw.textlength(caption,font=self.font(25))/2
-                height=min(bottom-78,yy(value)+12) if below else max(top-28,yy(value)-36)
-                self.write(tx,height,caption,25,COLORS[key])
+                tx=xx-self.draw.textlength(caption,font=self.face(28,True))/2
+                height=min(bottom-74,yy(value)+12) if below else max(top-28,yy(value)-40)
+                self.write(tx,height,caption,28,COLORS[key],bold=True)
         for index in labelled:
-            original=originals[index]
-            stamp=local_time(original.get('date') or row_time(original),data.get('timezone'))
-            caption=stamp[5:10] if daily else stamp[5:16].replace('T',' ')
-            text_width=self.draw.textlength(caption or '—',font=self.font(24))
-            self.write(positions[index]-text_width/2,bottom-42,caption or '—',24,MUTED,170)
+            wind=rows[index].get('wind_kmph')
+            if wind is not None:
+                caption=f'{wind:g} km/h'
+                text_width=self.draw.textlength(caption,font=self.font(23))
+                self.write(positions[index]-text_width/2,bottom-37,caption,23,MUTED,165)
 
     def trends(self, box, top, keys, rows, originals, data, daily):
         x, _, right, bottom = box
@@ -433,10 +459,12 @@ def render_dashboard(data, labels, translate, font, target='today'):
     height=footer+106
     if height>30000:
         raise ValueError('Weather dashboard exceeds the safe canvas limit')
-    image=Image.new('RGB',(WIDTH,height),PAPER)
-    painter.draw=draw=ImageDraw.Draw(image)
+    from weather_graphics import SmoothDraw, raster_scale, weather_icon
+    scale=raster_scale(WIDTH,height)
+    image=Image.new('RGB',(round(WIDTH*scale),round(height*scale)),PAPER)
+    painter.draw=draw=SmoothDraw(image,scale)
     title=labels['title']+(' · '+labels['tomorrow'] if target=='tomorrow' else '')
-    painter.write(MARGIN,27,title,42,width=WIDTH-2*MARGIN)
+    painter.write(MARGIN,27,title,42,width=WIDTH-2*MARGIN,bold=True)
     subtitle=labels['forecast_day']+': '+day if target=='tomorrow' else day
     stamp=local_time(data.get('report_time'),data.get('timezone')).replace('T',' ')
     if target!='tomorrow' and stamp:
@@ -454,9 +482,13 @@ def render_dashboard(data, labels, translate, font, target='today'):
         primary=value('max_temp' if key=='temp' and target=='tomorrow' else key,unit)
         if key=='wind_kmph' and number(hero.get(key)) is None and hero.get('wind_force'):
             heading,primary=labels['wind_force'],translate(str(hero['wind_force']))
-        painter.write(xx+26,148,heading,27,INK,cw-52)
-        painter.write(xx+24,182,primary,74 if number(hero.get('max_temp' if key=='temp' and target=='tomorrow' else key)) is not None else 34,color,cw-48)
+        painter.write(xx+26,148,heading,27,INK,cw-52,bold=True)
+        has_reading=number(hero.get('max_temp' if key=='temp' and target=='tomorrow' else key)) is not None
+        has_reading=has_reading or (key=='wind_kmph' and bool(hero.get('wind_force')))
+        painter.write(xx+24,182,primary,74 if has_reading else 34,color,cw-48,bold=True)
         if key=='temp':
+            weather_icon(draw,xx+cw-88,151,54,original if target=='tomorrow' else hero,
+                         target=='tomorrow',background='#e9dcd0')
             metric='min_temp' if target=='tomorrow' else 'feels_like'
             detail=labels[metric]+' '+value(metric,'°C')
             if hero.get('desc'):
@@ -473,15 +505,17 @@ def render_dashboard(data, labels, translate, font, target='today'):
     for index,line in enumerate(support):
         painter.write(MARGIN,368+index*34,line,25,MUTED)
     for kind,rows,originals,panels in sections:
-        painter.write(MARGIN,panels[0][0][1]-52,labels[kind],32)
+        painter.write(MARGIN,panels[0][0][1]-52,labels[kind],32,bold=True)
         for box,keys in panels:
             painter.panel(box,keys,rows,originals,data,kind,box[2]-box[0]>1000)
     draw.rounded_rectangle((MARGIN,alert_top,WIDTH-MARGIN,footer-16),radius=20,fill='#e7edf1')
-    painter.write(MARGIN+24,alert_top+14,labels['alerts'],27)
+    painter.write(MARGIN+24,alert_top+14,labels['alerts'],27,bold=True)
     for index,line in enumerate(notes):
         painter.write(MARGIN+24,alert_top+56+index*34,line,24,MUTED)
     for index,line in enumerate(footer_lines(data,labels)):
         painter.write(MARGIN,footer+12+index*36,line,22,MUTED,WIDTH-2*MARGIN)
     output=BytesIO()
+    if scale!=1:
+        image=image.resize((WIDTH,height),Image.Resampling.LANCZOS)
     image.save(output,'PNG',optimize=True)
     return output.getvalue()

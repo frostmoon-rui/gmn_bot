@@ -145,6 +145,7 @@ def normalize_provider(data):
 
 def merge_hourly(providers, key, day, output):
     """Fill holes only at the same instant. Never mix dated, undated or unknown-zone samples."""
+    from weather_graphics import condition_metadata
     samples = {}
     destination = weather_zone(output)
     naive_owner = None
@@ -184,6 +185,17 @@ def merge_hourly(providers, key, day, output):
             desc = original.get('desc') or (description.get('text') if isinstance(description, dict) else None)
             if desc and 'desc' not in row:
                 row['desc'] = desc
+                # Condition symbols follow the provider supplying the description.
+                row.pop('weather_type', None)
+                row.pop('weather_code', None)
+                row.update(condition_metadata(original))
+            elif 'desc' not in row:
+                for field, value in condition_metadata(original).items():
+                    row.setdefault(field, value)
+            if 'is_day' not in row:
+                flag = condition_metadata(original).get('is_day')
+                if flag is not None:
+                    row['is_day'] = flag
     # If no zone is known, do not blend ambiguous naive timestamps with explicit UTC instants.
     if any(token[0] == 'aware' for token in samples):
         samples = {token: row for token, row in samples.items() if token[0] == 'aware'}

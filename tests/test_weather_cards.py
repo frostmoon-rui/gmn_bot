@@ -102,7 +102,7 @@ class WeatherCardsTests(unittest.TestCase):
         def text(draw,xy,value,*args,**kwargs):
             if str(value) in {'10-28','10-29'}:dates[str(value)]=xy
             return original_text(draw,xy,value,*args,**kwargs)
-        with patch.object(ImageDraw.ImageDraw,'rounded_rectangle',box),patch.object(ImageDraw.ImageDraw,'text',text):
+        with patch('weather_graphics.raster_scale',return_value=1),patch.object(ImageDraw.ImageDraw,'rounded_rectangle',box),patch.object(ImageDraw.ImageDraw,'text',text):
             render_report(format_weather(data))
         self.assertEqual(len(stems),4)
         for xy,_ in stems:
