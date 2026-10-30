@@ -133,6 +133,8 @@ The existing Clash window is restored; its handoff now launches the GUI visibly.
 The local NapCat management page opens when its configured listener is ready,
 without putting its token into the URL. No second QQ, Python or proxy worker is
 started by the views. Log contents remain private on this computer.
+If QQ is awaiting authorization, its existing local QR image is also opened so
+the signed-in user can scan and approve it. This is not an automatic login bypass.
 
 Windows cannot move noninteractive boot-session windows into the desktop.
 These are live desktop views and management interfaces; the working processes

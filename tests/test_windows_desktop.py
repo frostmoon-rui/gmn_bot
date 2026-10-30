@@ -78,3 +78,12 @@ try{{
 }}finally{{$entry.Reader.Dispose()}}
 '''
         self.assertEqual(json.loads(self.run_ps(code)),{'bounded':True,'recent':True,'replaced':True})
+
+    def test_login_code_is_only_selected_while_connection_is_unavailable(self):
+        (self.root/'cache').mkdir()
+        (self.root/'cache'/'qrcode.png').write_bytes(b'fictional fixture')
+        escaped=str(self.root).replace("'","''")
+        code=self.function_scope('Get-LoginCodePath')+f'''$config=[pscustomobject]@{{NapCatDirectory='{escaped}'}}
+@{{connected=[bool](Get-LoginCodePath $true);pending=[bool](Get-LoginCodePath $false)}} | ConvertTo-Json -Compress
+'''
+        self.assertEqual(json.loads(self.run_ps(code)),{'connected':False,'pending':True})

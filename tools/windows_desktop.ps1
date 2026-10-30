@@ -54,6 +54,12 @@ function Write-DesktopLog([string]$Message){
     Add-Content -LiteralPath (Join-Path $logRoot 'desktop-views.log') -Value ((Get-Date).ToString('o')+' '+$Message) -Encoding UTF8
 }
 
+function Get-LoginCodePath([bool]$Connected){
+    if($Connected -or -not $config.NapCatDirectory){return}
+    $path=Join-Path $config.NapCatDirectory 'cache\qrcode.png'
+    if(Test-Path -LiteralPath $path){return $path}
+}
+
 function Show-ClashWindow {
     if(-not $config.ProxyExecutable){return}
     $gui=Join-Path (Split-Path $config.ProxyExecutable -Parent) 'clash-verge.exe'
@@ -142,6 +148,13 @@ if($Mode -eq 'Activate'){
         Start-Sleep -Seconds 2
     }
     if($ready){Start-Process -FilePath ('http://127.0.0.1:'+ $port) -WindowStyle Normal}
+    $connected=@([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+        Where-Object {$_.Port -eq [int]$config.NapCatPort}).Count -gt 0
+    $loginCode=Get-LoginCodePath $connected
+    if($loginCode){
+        Start-Process -FilePath $loginCode -WindowStyle Normal
+        Write-DesktopLog 'QQ authorization is pending; the existing local QR image was opened for the user.'
+    }
     Write-DesktopLog 'Desktop views opened. Closing a log window does not stop any worker.'
     exit 0
 }
