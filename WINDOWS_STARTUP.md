@@ -119,3 +119,25 @@ Avoid running two managers for the same QQ instance. To return fully to GUI oper
 the `GMN-Bot-Startup` task in Task Scheduler, verify its processes have stopped,
 then open the GUI. Restore the backed-up Startup entries if returning permanently
 to login-only startup. Keep copies of QQ, proxy and bot data before migration.
+
+## Visible controls after sign-in
+
+Run `tools/windows_desktop.ps1 -Mode Install` once in elevated PowerShell under
+the configured account. It adds an **interactive** logon task, delayed 25 seconds,
+and ensures the existing proxy handoff task is installed. No account password is
+needed and the password-based boot task/credentials are not changed.
+
+After sign-in, three visible read-only consoles follow bot, NapCat, and
+startup/proxy logs. They automatically switch to new files after a worker restart.
+The existing Clash window is restored; its handoff now launches the GUI visibly.
+The local NapCat management page opens when its configured listener is ready,
+without putting its token into the URL. No second QQ, Python or proxy worker is
+started by the views. Log contents remain private on this computer.
+
+Windows cannot move noninteractive boot-session windows into the desktop.
+These are live desktop views and management interfaces; the working processes
+continue in their existing sessions. Closing a log view does not stop a worker.
+Signing out closes the views while the pre-login boot stack remains available.
+Run `tools/windows_desktop.ps1 -Mode Activate` to reopen the views manually.
+The future sign-in/session behavior still needs an actual sign-in acceptance
+check; offline validation does not log out or reboot the computer.

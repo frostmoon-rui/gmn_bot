@@ -73,6 +73,6 @@ if ($headless.Count -gt 0) {
     Start-Sleep -Seconds 2
 }
 if (@(Get-CimInstance Win32_Process -Filter "Name='clash-verge.exe'" | Where-Object {$_.ExecutablePath -ieq $gui}).Count -eq 0) {
-    Start-Process -FilePath $gui -WindowStyle Hidden
+    Start-Process -FilePath $gui -WindowStyle Normal
 }
 Write-DesktopProxyLog 'Clash Verge launched; QQ and Python were not targeted.'
