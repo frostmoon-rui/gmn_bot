@@ -64,78 +64,101 @@ class GeographyTests(unittest.TestCase):
         self.assertIsNone(parse_command('heatmap world other-group'))
 
 
-class ConsentTests(unittest.IsolatedAsyncioTestCase):
+class GlobalMapTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.saved=[]
-        async def save(name,data):
-            self.saved.append((name,copy.deepcopy(data)))
+        async def save(name,data):self.saved.append((name,copy.deepcopy(data)))
         self.bot=SimpleNamespace(load_json_data=lambda name,default:copy.deepcopy(default),
-            save_json_data_async=save,regions_data={'10':{'location':'Sichuan','nickname':'private'}})
+            save_json_data_async=save,regions_data={
+                '10':{'location':'Sichuan','nickname':'private'},
+                '11':{'location':'France','address':'private street'},
+                '12':{'location':'Unknown City'},
+            })
         self.maps=CommunityMaps(self.bot)
-        self.ws=SimpleNamespace(send=AsyncMock(return_value=[{'user_id':i} for i in (10,11,12,13)]))
+        self.ws=SimpleNamespace(send=AsyncMock())
         self.send=AsyncMock()
 
     async def call(self,text,group=20,user=10,kind='group',addressed=True):
         return await self.maps.command(text,self.ws,kind,group,user,addressed,self.send)
 
-    async def test_no_automatic_weather_enrollment_and_explicit_withdrawal(self):
+    async def test_saved_regions_are_included_by_default_without_rewriting_bindings(self):
+        original=copy.deepcopy(self.bot.regions_data)
+        self.assertEqual(self.maps.known_records(),{'10':{'country':'CN','province':'CN-SC'},
+                                                  '11':{'country':'FR','province':''}})
         self.assertEqual(self.maps.records,{})
-        await self.call('heatmap join')
-        self.assertEqual(set(self.maps.records['20']['10']),{'country','province','consented_at'})
+        self.assertEqual(self.saved,[])
+        self.assertEqual(self.bot.regions_data,original)
+
+    async def test_optout_and_rejoin_are_global_and_self_only(self):
+        await self.call('heatmap leave')
+        self.assertNotIn('10',self.maps.known_records())
+        await self.call('heatmap join',group=21)
+        self.assertIn('10',self.maps.known_records())
+        self.assertEqual(self.maps.versions['global'],2)
         self.assertNotIn('private',json.dumps(self.saved))
-        await self.call('heatmap leave')
-        self.assertNotIn('10',self.maps.records['20'])
-        self.assertEqual(self.maps.versions['20'],2)
-
-    async def test_self_and_group_isolation(self):
-        await self.call('heatmap join France',group=21,user=11)
-        await self.call('heatmap leave')
-        self.assertIn('11',self.maps.records['21'])
         await self.call('heatmap join 1234567 Sichuan')
-        self.assertNotIn('10',self.maps.records.get('20',{}))
-        self.assertIsNone(await self.call('heatmap join France',addressed=False))
-        self.assertNotIn('10',self.maps.records.get('20',{}))
-        await self.call('heatmap join France',kind='private')
-        self.assertNotIn('10',self.maps.records.get('20',{}))
+        self.assertNotIn('1234567',self.maps.known_records())
+        await self.call('heatmap join France',addressed=False)
+        self.assertEqual(self.maps.known_records()['10']['country'],'CN')
 
-    async def test_fail_closed_without_membership_response(self):
+    async def test_same_accounts_in_legacy_groups_are_counted_once_and_weather_wins(self):
+        row={'country':'FR','province':''}
+        self.maps.records={'20':{'30':row,'10':row},'21':{'30':row}}
+        self.assertEqual(self.maps.known_records()['10']['province'],'CN-SC')
+        self.assertEqual(aggregate(self.maps.known_records(),set(self.maps.known_records()),'world'),
+                         {'CN':1,'FR':2})
+        self.assertEqual(self.maps.records['20']['30'],row)
+
+    async def test_render_uses_global_counts_and_sends_only_to_requesting_chat(self):
         self.ws.send.return_value=None
-        with patch('community_maps.render_map') as renderer:
-            answer=await self.call('heatmap world')
-            renderer.assert_not_called()
-        self.assertEqual(answer,self.maps.labels['failed'])
-        self.assertEqual(len(self.ws.send.await_args_list),1)
-
-    async def test_renderer_cannot_see_other_groups_members_or_private_fields(self):
-        for user in (10,11,12):
-            await self.call('heatmap join Sichuan',user=user)
-        for user in (30,31,32):
-            await self.call('heatmap join France',user=user,group=21)
         with patch('community_maps.render_map',return_value=b'png') as renderer:
-            self.assertEqual(await self.call('heatmap china'),'')
-        self.assertEqual(renderer.call_args.args[0],{'CN-SC':3})
-        request=json.loads(self.ws.send.await_args_list[0].args[0])
-        self.assertEqual(request,{'action':'get_group_member_list','params':{'group_id':20,'no_cache':True}})
-        output=json.loads(self.ws.send.await_args_list[-1].args[0])
-        self.assertEqual(output['params']['group_id'],20)
-        self.assertEqual(output['params']['message'][0]['type'],'image')
+            self.assertEqual(await self.call('heatmap world'),'')
+        self.assertEqual(renderer.call_args.args[0],{'CN':1,'FR':1})
+        self.assertEqual(len(self.ws.send.await_args_list),1)
+        request=json.loads(self.ws.send.await_args.args[0])
+        self.assertEqual(request['action'],'send_group_msg')
+        self.assertEqual(request['params']['group_id'],20)
+        self.assertEqual(request['params']['message'][0]['type'],'image')
+        self.ws.send.reset_mock()
+        with patch('community_maps.render_map',return_value=b'png'):
+            await self.call('heatmap world',group=21,kind='private')
+        request=json.loads(self.ws.send.await_args.args[0])
+        self.assertEqual(request['action'],'send_private_msg')
+        self.assertEqual(request['params']['user_id'],10)
 
     async def test_optout_during_render_prevents_stale_publication(self):
         async def changed(*args):
-            self.maps.versions['20']+=1
+            self.maps.versions['global']+=1
             return b'png'
         with patch('community_maps.asyncio.to_thread',side_effect=changed):
             answer=await self.call('heatmap china')
         self.assertEqual(answer,self.maps.labels['changed'])
-        self.assertEqual(len(self.ws.send.await_args_list),1)
+        self.ws.send.assert_not_awaited()
 
-    async def test_failed_save_does_not_acknowledge_or_mutate_consent(self):
+    async def test_weather_update_during_render_prevents_stale_publication(self):
+        async def changed(*args):
+            self.bot.regions_data['10']['location']='France'
+            return b'png'
+        with patch('community_maps.asyncio.to_thread',side_effect=changed):
+            answer=await self.call('heatmap china')
+        self.assertEqual(answer,self.maps.labels['changed'])
+        self.ws.send.assert_not_awaited()
+
+    async def test_failed_save_does_not_acknowledge_or_mutate_preferences(self):
         self.bot.save_json_data_async=AsyncMock(side_effect=OSError('offline'))
-        with self.assertRaises(OSError):
-            await self.call('heatmap join France')
+        with self.assertRaises(OSError):await self.call('heatmap leave')
         self.assertEqual(self.maps.records,{})
 
-    async def test_model_action_can_only_draw_current_group_not_enroll_users(self):
+    async def test_cached_geography_and_new_bindings_are_read_without_network(self):
+        self.bot.extensions=SimpleNamespace(locations={'Example City':{
+            'original':'Example City','country_code':'FR','formatted_address':'Example City, France'}})
+        self.bot.regions_data['13']={'location':'Example City'}
+        self.assertEqual(self.maps.known_records()['13']['country'],'FR')
+        self.bot.regions_data['14']={'location':'Beijing'}
+        self.assertEqual(self.maps.known_records()['14']['province'],'CN-BJ')
+        self.ws.send.assert_not_awaited()
+
+    async def test_model_action_can_draw_global_counts_but_cannot_target_a_person(self):
         action=parse_action('[BOT_ACTION: {"tool":"community_map","args":{"scope":"world"}}]')
         self.assertEqual(action,{'tool':'community_map','args':{'scope':'world'}})
         for args in ({'scope':'join'},{'scope':'world','group_id':'99'},{'scope':'world','user_id':'99'}):

@@ -1,4 +1,4 @@
-"""Opt-in, group-scoped choropleths. Rendering accepts publishable counts only."""
+"""Global coarse-region statistics with self opt-out and count-only rendering."""
 import asyncio
 import base64
 import copy
@@ -18,19 +18,19 @@ from weather_delivery import report_font
 ROOT = Path(__file__).resolve().parent
 MINIMUM = 1
 TEXT = {
-    'title': 'Group community map', 'china': 'China · provincial regions', 'world': 'World · countries / regions',
-    'privacy': 'Self opt-in only · current group members · province / country aggregates',
+    'title': 'Community region map', 'china': 'China · provincial regions', 'world': 'World · countries / regions',
+    'privacy': 'All saved regions · deduplicated members · province / country aggregates',
     'legend': 'Grey = unpublished; it does not imply zero members. No personal locations or member list.',
-    'counts': 'Region / participating members', 'empty': 'No current members have opted into a recognized region yet.',
+    'counts': 'Region / members', 'empty': 'No recognizable saved regions are available yet.',
     'footer': 'Schematic offline boundaries · Natural Earth · small islands may be simplified',
-    'joined': 'You have opted into coarse statistics for this group. Your individual region is not published. Use heatmap leave to withdraw.',
-    'left': 'You are excluded from new community maps in this group.',
+    'joined': 'Your global map participation is enabled. Individual locations are not displayed. Use heatmap leave to exclude yourself.',
+    'left': 'You are excluded from newly generated community maps in every chat.',
     'need': 'Specify one province or country: heatmap join Sichuan / heatmap join France. Only your own participation can be changed.',
-    'group': 'Community maps are available only in the current group. Mention the bot first.',
-    'failed': 'The current membership list could not be verified. No map or member records were published.',
+    'group': 'Mention the bot in groups or use the command in a private chat.',
+    'failed': 'The aggregate map could not be generated. No member records were published.',
     'changed': 'Participation changed while rendering; request a fresh map.',
-    'notice': 'Only opted-in members in this group count. Even one participant makes a region visible; no city, coordinate or member list is published. Weather bindings are not automatically enrolled. Use heatmap join [province/country] or heatmap leave.',
-    'caption': 'Aggregate community map; individual locations are not displayed.',
+    'notice': 'All recognizable saved regions are included by default across chats, once per account. Single-member regions are displayed. No city, coordinate or member list is published. Use heatmap leave to exclude yourself globally; heatmap join [province/country] restores participation or updates your coarse map region.',
+    'caption': 'Global saved-region statistics; individual locations are not displayed.',
 }
 
 
@@ -179,73 +179,105 @@ class CommunityMaps:
         self.localized = localized
         self.records = bot.load_json_data('group_heatmap.json', {})
         if not isinstance(self.records, dict):
-            raise ValueError('Invalid heatmap consent file; original file preserved')
+            raise ValueError('Invalid heatmap settings file; original file preserved')
         self.versions = Counter()
         self.lock = asyncio.Lock()
         self.busy = set()
+
+    def known_records(self):
+        """Read local bindings without changing them or requesting member lists."""
+        result = {}
+        bindings = getattr(self.bot, 'regions_data', {})
+        locations = getattr(getattr(self.bot, 'extensions', None), 'locations', {})
+        if not isinstance(bindings, dict) or not isinstance(locations, dict):
+            raise ValueError('Invalid saved location collection')
+        for uid, binding in list(bindings.items()):
+            if not str(uid).isdigit() or not isinstance(binding, dict):
+                continue
+            text = binding.get('location', '')
+            if not isinstance(text, str):
+                continue
+            hint = binding.get('google_location') or locations.get(text)
+            try:
+                result[str(uid)] = coarse_region(text, hint)
+            except (TypeError, ValueError):
+                continue
+        # Preserve useful old manual entries without counting an account twice.
+        legacy = {}
+        for group, rows in self.records.items():
+            if group == '_global' or not isinstance(rows, dict):
+                continue
+            for uid, row in rows.items():
+                if str(uid).isdigit() and isinstance(row, dict):
+                    pair = (row.get('country'), row.get('province', ''))
+                    if all(isinstance(value, str) for value in pair):
+                        legacy.setdefault(str(uid), set()).add(pair)
+        for uid, pairs in legacy.items():
+            if uid not in bindings and len(pairs) == 1:
+                country, province = next(iter(pairs))
+                result[uid] = {'country': country, 'province': province}
+        overrides = self.records.get('_global', {})
+        if not isinstance(overrides, dict):
+            raise ValueError('Invalid global map preferences')
+        for uid, row in overrides.items():
+            if not str(uid).isdigit() or not isinstance(row, dict):
+                continue
+            if row.get('enabled') is False:
+                result.pop(str(uid), None)
+            elif row.get('country'):
+                result[str(uid)] = {'country': row['country'], 'province': row.get('province', '')}
+        return result
 
     async def command(self, text, ws, kind, group, user, addressed, send):
         request = parse_command(text, self.localized)
         if not request or not addressed:
             return None
-        if kind != 'group':
-            return self.labels['group']
         operation, argument = request
-        gid, uid = str(group), str(user)
+        gid, uid = kind+':'+str(group if kind == 'group' else user), str(user)
         if operation == 'privacy':
             return self.labels['notice']
         if operation in {'join', 'leave'}:
-            value = None
-            if operation == 'join':
+            value = {'enabled': operation == 'join', 'updated_at': datetime.now(timezone.utc).isoformat()}
+            if operation == 'join' and argument:
                 binding = getattr(self.bot, 'regions_data', {}).get(uid, {})
                 try:
-                    value = coarse_region(argument or binding.get('location', ''),
-                                          None if argument else binding.get('google_location'))
+                    value.update(coarse_region(argument))
                 except ValueError:
                     return self.labels['need']
-                value['consented_at'] = datetime.now(timezone.utc).isoformat()
             async with self.lock:
                 previous = copy.deepcopy(self.records)
-                group_records = self.records.setdefault(gid, {})
+                group_records = self.records.setdefault('_global', {})
                 if not isinstance(group_records, dict):
                     raise ValueError('Invalid group consent records; file preserved')
-                if value is None:
-                    group_records.pop(uid, None)
-                else:
-                    group_records[uid] = value
+                prior = group_records.get(uid, {})
+                group_records[uid] = {**(prior if isinstance(prior, dict) else {}), **value}
                 try:
                     await self.bot.save_json_data_async('group_heatmap.json', self.records)
                 except Exception:
                     self.records = previous
                     raise
-                self.versions[gid] += 1
-            print('[Community map]: Self participation changed; no personal location logged')
-            return self.labels['left' if value is None else 'joined']
+                self.versions['global'] += 1
+            print('[Community map]: Global self preference changed; no personal location logged')
+            return self.labels['left' if operation == 'leave' else 'joined']
         if gid in self.busy or len(self.busy) >= 2:
             return self.labels['changed']
         self.busy.add(gid)
         try:
-            members = await ws.send(json.dumps({'action':'get_group_member_list',
-                'params': {'group_id':group, 'no_cache':True}}))
-            if not isinstance(members, list) or not members or any(
-                    not isinstance(row, dict) or not str(row.get('user_id', '')).isdigit() for row in members):
-                return self.labels['failed']
-            ids = {str(row['user_id']) for row in members}
-            del members
-            if uid not in ids:
-                return self.labels['failed']
             async with self.lock:
-                counts = aggregate(self.records.get(gid, {}), ids, operation)
-                version = self.versions[gid]
+                records = self.known_records()
+                counts = aggregate(records, set(records), operation)
+                version = self.versions['global']
             raw = await asyncio.to_thread(render_map, counts, operation, self.labels,
                                           'zh' if self.localized else 'en')
             async with self.lock:
-                if self.versions[gid] != version:
+                current = self.known_records()
+                if self.versions['global'] != version or counts != aggregate(current, set(current), operation):
                     return self.labels['changed']
                 message = [{'type':'image','data':{'file':'base64://'+base64.b64encode(raw).decode('ascii')}},
                            {'type':'text','data':{'text':self.labels['caption']}}]
-                await ws.send(json.dumps({'action':'send_group_msg','params':{'group_id':group,'message':message}}))
-            print('[Community map]: Published coarse opt-in counts for the requesting group')
+                await ws.send(json.dumps({'action':'send_group_msg' if kind == 'group' else 'send_private_msg',
+                    'params':{'group_id' if kind == 'group' else 'user_id':group if kind == 'group' else user,'message':message}}))
+            print('[Community map]: Global saved-region counts sent to the requesting chat')
             return ''
         except Exception as error:
             print('[Community map unavailable]:', type(error).__name__)

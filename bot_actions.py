@@ -33,7 +33,7 @@ INSTRUCTION = '''
 You may use existing bot functions when the current speaker wants a concrete action, not just describe them.
 Return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
 Tools and arguments:
-community_map {scope: china|world} for this group's opt-in aggregate map. Never infer participation, enroll anyone, publish an individual location, or select a different group.
+community_map {scope: china|world} draws global saved-region statistics, including all known accounts by default with self opt-out. Reply only to the requesting chat; never expose individual locations or modify another person's preferences.
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
 weather_map {product: temperature_24h|temperature_current|precipitation_current|precipitation_24h|precipitation_30d|precipitation_forecast|temperature_forecast} for a requested China national weather map;
 These maps are national products, not a city's weather. 30d precipitation is past accumulation, not a 30-day forecast.

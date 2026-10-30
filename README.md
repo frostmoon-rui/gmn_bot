@@ -119,6 +119,6 @@ The project has not adopted a single open-source license. Third-party material r
 
 ## Community maps and visual help
 
-Use `heatmap join Sichuan` (or a country), `heatmap china/world`, and `heatmap leave` after mentioning the bot in a group. Participation is explicit and group-scoped; weather bindings are not automatically enrolled. Regions with even one consenting current member are displayed. No individual locations or member list is published.
+Use `heatmap china/world` after mentioning the bot in a group, or directly in a private chat. All recognizable saved regions are included by default across chats, once per account; single-member regions are displayed. No individual locations or member list is published. `heatmap leave` excludes yourself globally; `heatmap join` restores participation. Existing saved weather/profile records are preserved.
 
-`help` now opens eight visual categories; `help CATEGORY` stays on one category page, and `help text CATEGORY` keeps commands copyable. Existing topic aliases remain. Official CENC post-event bulletins refresh every 30 minutes, with labelled fallback and the existing separate warning/subscription channels retained. See [privacy rules and source details](COMMUNITY_MAPS.md).
+`help` opens eight visual categories; `help CATEGORY` stays on one category page, and `help text CATEGORY` keeps commands copyable. Existing topic aliases remain. Official CENC bulletins refresh every 30 minutes; warning/subscription channels remain separate. See [map rules and source details](COMMUNITY_MAPS.md).

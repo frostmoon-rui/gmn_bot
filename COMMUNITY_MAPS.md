@@ -1,39 +1,34 @@
-# Community maps and the shallow help guide
+# Global community maps and the shallow help guide
 
-Mention the bot in a group, then use:
+Use `heatmap china` or `heatmap world` (mention the bot in groups; private chats
+work directly). Maps include **all recognizable saved regions by default across
+chats**, deduplicated by account. There is no enrollment or minimum crowd size.
+A single-member province or country is displayed. Only the requesting chat gets
+the image; there is no broadcast or group membership request.
 
-| Command | Result |
-| --- | --- |
-| `heatmap join Sichuan` | Opt yourself into province-level statistics in this group |
-| `heatmap join France` | Opt yourself into country-level statistics in this group |
-| `heatmap join` | Attempt coarse extraction from your own existing weather binding |
-| `heatmap leave` | Withdraw yourself from future maps in this group |
-| `heatmap china` / `heatmap world` | Draw the current group's aggregated map |
-| `heatmap privacy` | Explain consent and publication rules |
+`heatmap leave` excludes yourself globally. `heatmap join` restores participation;
+`heatmap join Sichuan` or `heatmap join France` sets your own map-only coarse region
+without changing your weather binding. Models can request maps but cannot change
+another account's preferences. `heatmap privacy` explains the current rules.
 
-Weather bindings are **not automatically enrolled**. There is no administrator
-command to enroll another member. Each draw verifies the current OneBot member
-list; a failed verification produces no map. Members who left are excluded.
-No personal addresses are geocoded for this feature. Ambiguous places require an
-explicit province or country rather than guessing. Stored participation contains
-only coarse region codes and a consent time, scoped by group/member identifiers.
-`group_heatmap.json` is private runtime data and must never be committed.
+The image contains only provinces/countries and counts, never member names,
+account IDs, cities, addresses or personal coordinates. Missing or ambiguous
+regions are skipped rather than guessed. Existing local geocoding metadata is
+reused without contacting a geocoding API. Newly saved regions appear on the next
+map automatically. Consistent legacy manual entries remain usable, once per
+account; current weather bindings take precedence over old group-specific entries.
 
-Every region with a consenting current member is published, **including a single participant**.
-The renderer receives region/count pairs, never names, account IDs, addresses or
-coordinates. No list of excluded members or exact excluded total is disclosed. Grey
-means unpublished, not necessarily zero. This reduces disclosure, but aggregate
-statistics are not a promise of perfect anonymity. Previously sent images cannot
-be erased merely by withdrawing consent; withdrawal affects newly generated maps.
+Global self preferences are added under `_global` in the private
+`group_heatmap.json` file. Old group entries are preserved, not rewritten into
+weather or personal profiles. Neither the settings nor bindings may be committed.
+Opt-out affects newly generated images, not images already sent.
 
-Maps render with Pillow and vendored public-domain Natural Earth outlines; no
-member data is sent to a map API. The image includes a region/count list. Small
-islands may be simplified. Images are not added to the sticker collection.
+Rendering receives count pairs only and uses offline Natural Earth boundaries.
+Images are not collected as stickers. Small islands may be simplified.
 
-`help` opens eight visual categories. `help CATEGORY` contains the entire category
-on one image, without requiring a third menu level. Old topic commands remain
-aliases; `help text CATEGORY` returns copyable text. Rendering failures fall back
-to text. Existing weather, maps, research, care and administration commands remain.
+`help` opens eight visual categories. `help CATEGORY` shows the entire category
+without a third menu level; `help text CATEGORY` returns copyable text. Old topic
+aliases and existing weather, maps, research, care and admin functions remain.
 
 ## Earthquake sources and cadence
 
