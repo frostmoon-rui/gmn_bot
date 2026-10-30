@@ -4,7 +4,10 @@ import hashlib
 import json
 import math
 import re
+import socket
+import ssl
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -12,6 +15,7 @@ TZ = timezone(timedelta(hours=8))
 OFFICIAL_URL = 'https://www.ceic.ac.cn/data/data.json'
 FALLBACK_URL = 'https://api.wolfx.jp/cenc_eqlist.json'
 REPORT_INTERVAL = 30 * 60
+OFFICIAL_TIMEOUT = 12
 SOURCES = {'cenc': ('https://api.wolfx.jp/cenc_eew.json', 'CENC warning via Wolfx'),
            'sc': ('https://api.wolfx.jp/sc_eew.json', 'Sichuan warning via Wolfx')}
 TEXT = {'official': 'CENC official post-event bulletin (China Earthquake Administration)',
@@ -19,6 +23,43 @@ TEXT = {'official': 'CENC official post-event bulletin (China Earthquake Adminis
         'warning': 'Warning reference ({source}): {time}, {location}, estimated M{magnitude}. Follow official local guidance; no reliable countdown is provided.',
         'report': 'Latest post-event report (not a real-time warning; {source}): {time}, {location}, M{magnitude}. Bulletins refresh every 30 minutes. No new warning does not establish safety.',
         'unavailable': 'Earthquake sources are unavailable; the current warning status cannot be confirmed. Check official local earthquake channels.'}
+
+
+class SourceBackoffError(RuntimeError):
+    """This specific source is still inside its retry cooldown."""
+
+
+def source_error_code(error):
+    """Stable diagnostics without upstream bodies, proxy credentials or request URLs."""
+    if isinstance(error, urllib.error.HTTPError):
+        code=error.code
+        return f'http-{code}' if isinstance(code,int) and 100<=code<=599 else 'http-error'
+    reason=error.reason if isinstance(error,urllib.error.URLError) else error
+    if isinstance(reason,ssl.SSLCertVerificationError):
+        return 'tls-certificate-verification-failed'
+    if isinstance(reason,ssl.SSLError):
+        return 'tls-eof' if getattr(reason,'reason',None)=='UNEXPECTED_EOF_WHILE_READING' else 'tls-handshake-failed'
+    if isinstance(reason,(TimeoutError,socket.timeout)):
+        return 'timeout'
+    if isinstance(reason,socket.gaierror):
+        return 'dns-failed'
+    if isinstance(reason,ConnectionRefusedError) or getattr(reason,'winerror',None)==10061:
+        return 'connection-refused'
+    if isinstance(reason,ConnectionResetError) or getattr(reason,'winerror',None)==10054:
+        return 'connection-reset'
+    if isinstance(error,json.JSONDecodeError):
+        return 'invalid-json'
+    if isinstance(error,ValueError):
+        return 'invalid-data-or-size'
+    if isinstance(error,SourceBackoffError):
+        return 'source-backoff'
+    return 'network-failed' if isinstance(error,(urllib.error.URLError,OSError)) else 'source-failed'
+
+
+def retryable_source_error(error):
+    return source_error_code(error) in {
+        'timeout','dns-failed','connection-refused','connection-reset',
+        'tls-eof','tls-handshake-failed','network-failed','http-502','http-503','http-504'}
 
 
 def timestamp(value):
@@ -101,12 +142,23 @@ class EarthquakeFeed:
 
     @staticmethod
     def _fetch(url):
-        request = urllib.request.Request(url, headers={'User-Agent': 'GmnBot/1.0'})
-        with urllib.request.urlopen(request, timeout=8) as response:
-            raw = response.read(512001)
-        if len(raw) > 512000:
-            raise ValueError('Earthquake response exceeds size limit')
-        return json.loads(raw)
+        official=url==OFFICIAL_URL
+        attempts=2 if official else 1
+        for attempt in range(attempts):
+            request = urllib.request.Request(url, headers={'User-Agent': 'GmnBot/1.0','Accept':'application/json'})
+            try:
+                with urllib.request.urlopen(request, timeout=OFFICIAL_TIMEOUT if official else 8) as response:
+                    raw = response.read(512001)
+                if len(raw) > 512000:
+                    raise ValueError('Earthquake response exceeds size limit')
+                return json.loads(raw)
+            except Exception as error:
+                if attempt+1>=attempts or not retryable_source_error(error):
+                    raise
+                # The catalogue is cached for 30 minutes; retry only transient
+                # transport failures once, without changing proxy or TLS policy.
+                print('[Earthquake official transport]:',source_error_code(error),'; retrying once')
+                time.sleep(.25)
 
     async def request(self, url, ttl=15, backoff=60):
         async with self.locks.setdefault(url, asyncio.Lock()):
@@ -115,7 +167,7 @@ class EarthquakeFeed:
     async def _request(self, url, ttl, backoff):
         failed = self.failures.get(url)
         if failed is not None and time.monotonic()-failed < backoff:
-            raise RuntimeError('Source is in backoff')
+            raise SourceBackoffError('Source is in backoff')
         saved = self.cache.get(url)
         if saved and time.monotonic()-saved[0] < ttl:
             return saved[1]
@@ -155,7 +207,8 @@ class EarthquakeFeed:
                         print('[Earthquake reports]:', source, len(results), 'rows; refresh interval 1800s')
                         break
                     except Exception as error:
-                        print('[Earthquake report source unavailable]:', source, type(error).__name__)
+                        print('[Earthquake report source unavailable]:', source, type(error).__name__,
+                              '('+source_error_code(error)+'); next refresh in 1800s')
                 self.report_cache = (time.monotonic(), sorted(results, key=lambda e:e['origin_iso'], reverse=True))
             now = datetime.now(TZ)
             return [dict(event, age_seconds=max(0, (now-timestamp(event['origin_iso'])).total_seconds()))
@@ -167,7 +220,8 @@ class EarthquakeFeed:
                 result = normalize(await self.request(url), source, True)
                 return None if result['stale'] or result['cancelled'] else result
             except Exception as error:
-                print('[Earthquake warning relay unavailable]:', source, type(error).__name__)
+                print('[Earthquake warning relay unavailable]:', source, type(error).__name__,
+                      '('+source_error_code(error)+')')
                 return None
         return [item for item in await asyncio.gather(*(one(source, spec[0]) for source, spec in SOURCES.items())) if item]
 

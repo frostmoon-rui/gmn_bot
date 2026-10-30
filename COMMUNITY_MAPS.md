@@ -40,6 +40,12 @@ refresh. Wolfx remains a clearly labelled fallback; it is not described as an
 official direct delivery channel. Source changes retain legacy delivery IDs to
 avoid repeated subscriber notifications.
 
+The official catalogue has a 12-second socket timeout and at most one retry for
+transient transport failures or HTTP 502/503/504. Certificate errors, access errors,
+rate limits and invalid payloads are not retried. Logs distinguish timeout, DNS,
+TLS and connection failures without dumping upstream bodies or credentials. The
+warning relays do not gain extra retries, and the 30-minute report cache remains.
+
 Existing CENC/Sichuan warning relays remain separate from this 30-minute bulletin
 schedule. Their short polling interval and explicit subscriber boundaries remain;
 there is no new all-group announcement. Cached event ages are recalculated.
