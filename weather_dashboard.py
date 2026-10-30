@@ -96,6 +96,19 @@ def daily_range(row):
     return (None, None) if low is not None and high is not None and low > high else (low, high)
 
 
+def temperature_sample(row, keys):
+    """Keep true bounds distinct from an hourly temperature/feels-like comparison."""
+    if any(key in keys for key in ('min_temp','max_temp')):
+        low,high=daily_range(row)
+        marks=[(key,value) for key,value in (('min_temp',low),('max_temp',high)) if value is not None]
+        marks += [(key,row[key]) for key in ('temp','feels_like') if key in keys and number(row.get(key)) is not None]
+        span=(low,high) if low is not None and high is not None else None
+    else:
+        marks=[(key,row[key]) for key in ('temp','feels_like') if key in keys and number(row.get(key)) is not None]
+        span=(min(v for _,v in marks),max(v for _,v in marks)) if len(marks)==2 else None
+    return marks,span
+
+
 class Painter:
     def __init__(self, font, labels, translate):
         self.font, self.labels, self.translate = font, labels, translate
@@ -124,6 +137,9 @@ class Painter:
         return self.labels.get(key, key)
 
     def legend(self, keys, width, daily=False):
+        if daily and any(key in keys for key in ('min_temp','max_temp')):
+            keys=tuple(key for key in ('min_temp','max_temp') if key in keys)+tuple(
+                key for key in keys if key not in {'min_temp','max_temp'})
         rows, current, used = [], [], 0
         for key in keys:
             unit = metric_unit(key)
@@ -140,8 +156,8 @@ class Painter:
 
     def panel_height(self, keys, width, daily, rows, major):
         legend = len(self.legend(keys, width-56, daily))*34
-        if daily and any(key in keys for key in ('min_temp', 'max_temp')):
-            return 124+legend+64*len(rows)
+        if any(key in keys for key in ('temp','feels_like','min_temp','max_temp')):
+            return (290 if daily and len(rows)<=3 else 430 if daily else 400 if major else 330)+legend
         return (360 if major else 306)+legend
 
     def panel(self, box, keys, rows, originals, data, kind, major):
@@ -172,51 +188,80 @@ class Painter:
                 self.draw.rounded_rectangle((xx, yy+11, xx+20, yy+17), radius=3, fill=color)
                 self.write(xx+29, yy, caption, 24, color, length-29)
         plot_top = y+115+len(legends)*34
-        if daily and any(key in keys for key in ('min_temp', 'max_temp')):
-            self.ranges(box, plot_top-10, keys, rows, originals)
+        if any(key in keys for key in ('temp','feels_like','min_temp','max_temp')):
+            self.ranges(box, plot_top, keys, rows, originals, data, daily)
         else:
             self.trends(box, plot_top, keys, rows, originals, data, daily)
 
-    def ranges(self, box, top, keys, rows, originals):
+    def ranges(self, box, top, keys, rows, originals, data, daily):
         x, _, right, bottom = box
-        pairs = [daily_range(row) for row in rows]
-        values = [value for pair in pairs for value in pair if value is not None]
-        additional=[key for key in keys if key not in {'min_temp','max_temp'}]
-        values += [row[key] for row in rows for key in additional if row.get(key) is not None]
+        samples=[temperature_sample(row,keys) for row in rows]
+        values=[value for marks,_ in samples for _,value in marks]
         if not values:
-            self.write(x+28, top, self.labels['data_unavailable'], color=MUTED)
+            self.write(x+28,top,self.labels['data_unavailable'],color=MUTED)
             return
-        low, high = scale_bounds(values, '°C')
-        left, end = x+228, right-150
-        for tick in axis_ticks(low, high, '°C'):
-            xx = left+(end-left)*(tick-low)/(high-low)
-            self.draw.line((xx, top-6, xx, bottom-45), fill='#edf1f5', width=1)
-            self.write(xx-26, bottom-36, f'{tick:g}', 22, MUTED, 84)
-        for index, ((minimum, maximum), original) in enumerate(zip(pairs, originals)):
-            yy = top+index*64+8
-            self.write(x+28, yy-9, str(original.get('date', ''))[5:10] or '—', 26, INK, 150)
-            if minimum is None and maximum is None and not any(rows[index].get(key) is not None for key in additional):
-                self.write(left, yy-9, '—', 26, MUTED)
+        low,high=scale_bounds(values,'°C')
+        left,end,base=x+105,right-52,bottom-96
+        def yy(value):
+            return base-(value-low)/(high-low)*(base-top)
+        ticks=axis_ticks(low,high,'°C')
+        if base-top<130 and len(ticks)>3:
+            ticks=[ticks[0],ticks[len(ticks)//2],ticks[-1]]
+        for tick in ticks:
+            height=yy(tick)
+            self.draw.line((left,height,end,height),fill='#e8edf2',width=1)
+            self.write(x+16,height-15,f'{tick:g}',23,MUTED,85)
+        self.write(left,top-34,'°C',22,MUTED)
+        times=[sample_time(row.get('date') or row_time(row),data) for row in originals]
+        first=next((stamp for stamp in times if stamp is not None),None)
+        elapsed=[elapsed_seconds(first,stamp) for stamp in times]
+        elapsed=[value if value is not None else index*(86400 if daily else 3600)
+                 for index,value in enumerate(elapsed)]
+        start,stop=min(elapsed),max(elapsed)
+        padding=min(80,(end-left)/max(2,len(rows))*0.45)
+        positions=[left+padding+(end-left-2*padding)*(value-start)/(stop-start)
+                   if stop>start else (left+end)/2 for value in elapsed]
+        gaps=[b-a for a,b in zip(positions,positions[1:]) if b>a]
+        bar_width=min(26 if daily else 20,(min(gaps) if gaps else 40)*.48)
+        count=min(len(rows),len(rows) if daily else 7 if end-left>1000 else 4)
+        candidates=sorted({round(i*(len(rows)-1)/max(1,count-1)) for i in range(count)})
+        labelled=[]
+        for index in candidates:
+            if not labelled or positions[index]-positions[labelled[-1]]>115:
+                labelled.append(index)
+        has_bounds=any(key in keys for key in ('min_temp','max_temp'))
+        for index,((marks,span),xx) in enumerate(zip(samples,positions)):
+            if not marks:
+                self.write(xx-10,(top+base)/2,'—',25,MUTED)
                 continue
-            positions = [left+(value-low)/(high-low)*(end-left) if value is not None else None
-                         for value in (minimum, maximum)]
-            if all(value is not None for value in positions):
-                start, stop = positions
-                self.draw.rounded_rectangle((start, yy, max(start+6, stop), yy+16), radius=8, fill='#e4c1a8')
-            for value, xx, color, leading in zip((minimum, maximum), positions,
-                                               ('#557fba', '#d66b3d'), (True, False)):
-                if value is None:
-                    continue
-                self.draw.ellipse((xx-6, yy+2, xx+6, yy+14), fill=color)
-                caption = f'{value:g}°C'
-                tx = xx-self.draw.textlength(caption, font=self.font(25))-14 if leading else xx+14
-                self.write(tx, yy-10, caption, 25, color)
-            for key in additional:
-                value=rows[index].get(key)
-                if value is None:
-                    continue
-                xx=left+(value-low)/(high-low)*(end-left)
-                self.draw.polygon([(xx,yy-2),(xx+7,yy+8),(xx,yy+18),(xx-7,yy+8)],fill=COLORS[key])
+            if span is not None:
+                upper,lower=yy(span[1]),yy(span[0])
+                self.draw.rounded_rectangle((xx-bar_width/2,upper,xx+bar_width/2,max(upper+5,lower)),
+                    radius=bar_width/2,fill='#e4c1a8' if has_bounds else '#ddd4e7')
+            for key,value in marks:
+                height=yy(value)
+                offset=7 if key=='feels_like' else 0
+                if key=='feels_like':
+                    self.draw.polygon([(xx+offset,height-7),(xx+offset+6,height),
+                                       (xx+offset,height+7),(xx+offset-6,height)],fill=COLORS[key])
+                else:
+                    self.draw.ellipse((xx-5,height-5,xx+5,height+5),fill=COLORS[key])
+            if index not in labelled:
+                continue
+            endpoints=[mark for mark in marks if mark[0] in {'min_temp','max_temp'}] if has_bounds else marks
+            endpoints=sorted(endpoints,key=lambda mark:mark[1])
+            for position,(key,value) in enumerate(endpoints):
+                below=(len(endpoints)>1 and position==0) or key=='min_temp'
+                caption=f'{value:g}°C'
+                tx=xx-self.draw.textlength(caption,font=self.font(25))/2
+                height=min(bottom-78,yy(value)+12) if below else max(top-28,yy(value)-36)
+                self.write(tx,height,caption,25,COLORS[key])
+        for index in labelled:
+            original=originals[index]
+            stamp=local_time(original.get('date') or row_time(original),data.get('timezone'))
+            caption=stamp[5:10] if daily else stamp[5:16].replace('T',' ')
+            text_width=self.draw.textlength(caption or '—',font=self.font(24))
+            self.write(positions[index]-text_width/2,bottom-42,caption or '—',24,MUTED,170)
 
     def trends(self, box, top, keys, rows, originals, data, daily):
         x, _, right, bottom = box

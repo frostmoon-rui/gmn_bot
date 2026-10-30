@@ -5,8 +5,11 @@ header, with precipitation and wind beside it. Large hourly charts precede daily
 forecasts and the existing history section. Alerts and two compact source/status
 lines remain at the bottom. The separate conversational briefing is unchanged.
 
-- Daily temperature uses floating minimum/maximum bars; any reported apparent
-  temperature is a separate diamond on the same Celsius scale.
+- Daily temperature uses vertical floating minimum/maximum columns, with dates
+  along the horizontal axis. Reported apparent temperature remains a separate
+  diamond on the Celsius scale. Hourly temperature uses the same vertical layout:
+  actual/feels-like readings keep their own endpoint colours and names, while
+  single readings remain points. These pairs are not invented hourly extrema.
 - Rainfall columns and precipitation/thunderstorm probability lines share time
   positions, with independently labelled millimetre and percentage axes. Rain,
   showers and total precipitation are not summed or stacked as independent totals.

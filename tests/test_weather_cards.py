@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 from weather_report import format_weather
 from weather_delivery import render_report
 from weather_cards import series_rows, chart_specs
-from weather_dashboard import axis_groups, connected_runs, daily_range, elapsed_seconds
+from weather_dashboard import axis_groups, connected_runs, daily_range, elapsed_seconds, temperature_sample
 
 
 class WeatherCardsTests(unittest.TestCase):
@@ -76,3 +76,37 @@ class WeatherCardsTests(unittest.TestCase):
         b=datetime.fromisoformat('2026-11-01T01:00-05:00').astimezone(zone)
         self.assertEqual(elapsed_seconds(a,b),3600)
         self.assertEqual(connected_runs([{'temp':1},{'temp':2}],'temp',[a,b]),[[0,1]])
+
+    def test_hourly_pairs_keep_their_metric_names_and_single_values_have_no_range(self):
+        marks,span=temperature_sample({'temp':5,'feels_like':8},('temp','feels_like'))
+        self.assertEqual(marks,[('temp',5),('feels_like',8)])
+        self.assertEqual(span,(5,8))
+        self.assertEqual(temperature_sample({'temp':0},('temp','feels_like')),([('temp',0)],None))
+        marks,span=temperature_sample({'min_temp':-5,'max_temp':0,'feels_like':3},
+                                      ('min_temp','max_temp','feels_like'))
+        self.assertEqual(span,(-5,0))
+        self.assertIn(('feels_like',3),marks)
+
+    def test_hourly_and_daily_temperature_stems_are_vertical_and_dates_share_a_baseline(self):
+        data={'local_date':'2026-10-28','temp':0,
+              'hours':[{'time':'2026-10-28T09:00','temp':0,'feels_like':-4},
+                       {'time':'2026-10-28T10:00','temp':2,'feels_like':-2}],
+              'days':[{'date':'2026-10-28','minTemperature':{'degrees':-3},'maxTemperature':{'degrees':8}},
+                      {'date':'2026-10-29','minTemperature':{'degrees':0},'maxTemperature':{'degrees':10}}]}
+        stems=[];dates={}
+        original_box=ImageDraw.ImageDraw.rounded_rectangle
+        original_text=ImageDraw.ImageDraw.text
+        def box(draw,xy,*args,**kwargs):
+            if kwargs.get('fill') in {'#e4c1a8','#ddd4e7'}:stems.append((xy,kwargs['fill']))
+            return original_box(draw,xy,*args,**kwargs)
+        def text(draw,xy,value,*args,**kwargs):
+            if str(value) in {'10-28','10-29'}:dates[str(value)]=xy
+            return original_text(draw,xy,value,*args,**kwargs)
+        with patch.object(ImageDraw.ImageDraw,'rounded_rectangle',box),patch.object(ImageDraw.ImageDraw,'text',text):
+            render_report(format_weather(data))
+        self.assertEqual(len(stems),4)
+        for xy,_ in stems:
+            self.assertLess(xy[2]-xy[0],50)
+            self.assertGreater(xy[3]-xy[1],xy[2]-xy[0])
+        self.assertEqual(dates['10-28'][1],dates['10-29'][1])
+        self.assertLess(dates['10-28'][0],dates['10-29'][0])
