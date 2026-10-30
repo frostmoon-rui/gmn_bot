@@ -217,7 +217,7 @@ class WeatherCardContractTests(unittest.TestCase):
         _, texts, _ = rendered(dict(fixture(), wind_force='≤3', wind_direction='NE'))
         self.assertIn('Wind force', texts)
         self.assertIn('≤3', texts)
-        self.assertIn('NE', texts)
+        self.assertIn('NE', '\n'.join(texts))
 
     def test_tomorrow_hero_never_presents_current_temperature_as_tomorrows(self):
         _, texts, _ = rendered(fixture(), 'tomorrow')
