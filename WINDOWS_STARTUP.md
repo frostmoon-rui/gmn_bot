@@ -138,7 +138,9 @@ If QQ is awaiting authorization, its existing local QR image is also opened so
 the signed-in user can scan and approve it. This is not an automatic login bypass.
 
 Windows cannot move noninteractive boot-session windows into the desktop.
-QQ stays in its existing session; Python is restarted in the desktop session.
+By default QQ stays in its existing session; Python is restarted in the desktop session.
+If `NapCatDesktopExecutable` is configured, QQ is handed over to the desktop manager
+as described below instead.
 Closing a read-only log view does not stop a worker. The separate active bot
 console controls the desktop wrapper. Signing out returns bot supervision to
 the pre-login boot task.
@@ -163,3 +165,30 @@ duplicate manual launches before loading runtime settings or personal data.
 The OS releases the lock on exit, including crashes; do not delete the lock file
 while the bot is running. A restarted boot supervisor is required to activate
 changes to its running PowerShell loop.
+
+## Desktop receiver and remote support
+
+Set the private `NapCatDesktopExecutable` to the installed desktop manager to
+prefer its native window after sign-in. Keep both its NapCat component and the
+pre-login receiver compatible with the installed QQ version. Configure the same
+account and OneBot connections in the manager, enable that account's auto-start,
+and keep the manager's independent Windows auto-launch disabled: the delayed
+desktop task orders this handoff. `windows_napcat_desktop.ps1` marks ownership,
+stops only the identified boot receiver, and opens the desktop manager. The boot
+task waits until sign-out, preventing competing QQ receivers. No browser or stale
+standalone QR image is opened when the desktop manager is configured. The Python
+manual-debugging policy remains independent.
+
+Sunlogin/AweSun must bypass the proxy by process and domain, including its
+background service before Windows sign-in. `remote_access_policy.py` supplies a
+testable policy and matching Clash Verge profile script: support traffic uses
+DIRECT, other traffic uses the current GLOBAL selection. This requires **rule**
+mode; true global mode skips these exceptions. Keep the selected global policy
+on the desired proxy and do not switch the core back to true global mode.
+Apply the same policy to the private pre-login snapshot and persistent GUI
+profile scripts, retain real DNS for support domains, and add those domains to
+the system-proxy bypass list. Validate with the installed core before hot reload;
+back up all private YAML first. Preserve existing subscription credentials,
+selected nodes, automatic-update preferences and remote-support services.
+Checking these files does not prove connectivity before sign-in; that requires
+a later reboot/sign-out acceptance check and a connection from another device.

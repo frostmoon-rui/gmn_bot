@@ -130,6 +130,10 @@ if($Mode -eq 'Install'){
 }
 
 if($Mode -eq 'Activate'){
+    if($config.NapCatDesktopExecutable){
+        & (Join-Path $PSScriptRoot 'windows_napcat_desktop.ps1') -Mode Activate -ConfigPath $ConfigPath
+        if($LASTEXITCODE -ne 0){throw 'Desktop receiver handoff failed.'}
+    }
     & (Join-Path $PSScriptRoot 'windows_bot_desktop.ps1') -Mode Activate -ConfigPath $ConfigPath
     if($LASTEXITCODE -ne 0){throw 'Desktop bot handoff failed.'}
     $exe="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -149,11 +153,11 @@ if($Mode -eq 'Activate'){
         if($ready){break}
         Start-Sleep -Seconds 2
     }
-    if($ready){Start-Process -FilePath ('http://127.0.0.1:'+ $port) -WindowStyle Normal}
+    if($ready -and -not $config.NapCatDesktopExecutable){Start-Process -FilePath ('http://127.0.0.1:'+ $port) -WindowStyle Normal}
     $connected=@([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
         Where-Object {$_.Port -eq [int]$config.NapCatPort}).Count -gt 0
     $loginCode=Get-LoginCodePath $connected
-    if($loginCode){
+    if($loginCode -and -not $config.NapCatDesktopExecutable){
         Start-Process -FilePath $loginCode -WindowStyle Normal
         Write-DesktopLog 'QQ authorization is pending; the existing local QR image was opened for the user.'
     }

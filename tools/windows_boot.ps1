@@ -90,6 +90,21 @@ function Test-DesktopBotControl {
     }catch{return $false}
 }
 
+function Test-DesktopNapCatControl {
+    $marker=Join-Path $root 'windows_napcat_desktop.local.json'
+    if(-not (Test-Path -LiteralPath $marker)){return $false}
+    try{
+        $request=Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
+        if($request.BootKey -ne $bootKey -or $request.Owner -ine $config.UserName -or [int]$request.SessionId -eq 0){return $false}
+        foreach($desktop in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'")){
+            if($desktop.SessionId -ne $request.SessionId){continue}
+            $owner=Invoke-CimMethod -InputObject $desktop -MethodName GetOwner
+            if(($owner.Domain+'\'+$owner.User) -ieq $config.UserName){return $true}
+        }
+    }catch{return $false}
+    return $false
+}
+
 function Find-Component([string]$Executable, [string]$Hint = '') {
     $leaf = [IO.Path]::GetFileName($Executable).Replace("'", "''")
     $matches = @()
@@ -246,7 +261,7 @@ try {
             }
         }
         $napReady = Test-Listening $config.NapCatPort
-        if ($proxyReady -and -not $napReady -and ($now - $lastNapCat).TotalSeconds -ge 60) {
+        if ($proxyReady -and -not $napReady -and -not (Test-DesktopNapCatControl) -and ($now - $lastNapCat).TotalSeconds -ge 60) {
             if (@(Find-SessionComponent $nativeLauncher ([string]$config.BotAccount)).Count -eq 0) {
                 # Existing QQ may be starting or require a QR login. Never inject a second copy.
                 if (@(Find-SessionComponent $config.QQExecutable).Count -eq 0) {

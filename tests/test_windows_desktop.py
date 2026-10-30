@@ -44,6 +44,14 @@ $logRoot={quote(self.root)};$config=[pscustomobject]@{{}}
         self.assertIn(b'No tasks, windows or workers were started',result.stdout)
         self.assertEqual({p.name for p in self.root.iterdir()},{'config.json'})
 
+    def test_receiver_validate_does_not_launch_or_modify_anything(self):
+        script=self.script.with_name('windows_napcat_desktop.ps1')
+        result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+            '-File',str(script),'-Mode','Validate','-ConfigPath',str(self.config)],capture_output=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(b'no processes started',result.stdout)
+        self.assertEqual({p.name for p in self.root.iterdir()},{'config.json'})
+
     def test_new_log_selected_even_when_an_old_file_has_recent_writes(self):
         (self.root/'bot-20260101-000000-000.out.log').write_text('old','utf-8')
         (self.root/'bot-20260101-000001-000.out.log').write_text('new','utf-8')
@@ -144,3 +152,21 @@ $script:local=$true;$both=@(Find-SessionComponent 'NapCatWinBootMain.exe' 'examp
 @{otherOnly=$otherOnly;both=$both} | ConvertTo-Json -Compress
 '''
         self.assertEqual(json.loads(self.run_ps(code)),{'otherOnly':0,'both':1})
+
+    def test_desktop_receiver_ownership_ends_on_signout_or_reboot(self):
+        self.script=self.script.with_name('windows_boot.ps1')
+        (self.root/'windows_napcat_desktop.local.json').write_text(json.dumps({
+            'SessionId':2,'Owner':'EXAMPLE\\owner','BootKey':'boot'}),'utf-8')
+        root=str(self.root).replace("'","''")
+        code=self.function_scope('Test-DesktopNapCatControl')+rf'''
+$root='{root}';$bootKey='boot';$config=[pscustomobject]@{{UserName='EXAMPLE\owner'}}
+$script:desktop=$true;$script:rightOwner=$true
+function Get-CimInstance {{if($script:desktop){{[pscustomobject]@{{SessionId=2}}}}}}
+function Invoke-CimMethod {{[pscustomobject]@{{Domain='EXAMPLE';User=$(if($script:rightOwner){{'owner'}}else{{'other'}})}}}}
+$active=Test-DesktopNapCatControl
+$script:rightOwner=$false;$other=Test-DesktopNapCatControl
+$script:rightOwner=$true;$script:desktop=$false;$signedOut=Test-DesktopNapCatControl
+$script:desktop=$true;$bootKey='new';$rebooted=Test-DesktopNapCatControl
+@{{active=$active;other=$other;signedOut=$signedOut;rebooted=$rebooted}} | ConvertTo-Json -Compress
+'''
+        self.assertEqual(json.loads(self.run_ps(code)),{'active':True,'other':False,'signedOut':False,'rebooted':False})
