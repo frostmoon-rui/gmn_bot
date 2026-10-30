@@ -109,3 +109,24 @@ $script:rightOwner=$true;$bootKey='new-boot';$stale=Test-DesktopBotControl
 @{{live=$live;dead=$dead;wrong=$wrong;stale=$stale}} | ConvertTo-Json -Compress
 '''
         self.assertEqual(json.loads(self.run_ps(code)),{'live':True,'dead':False,'wrong':False,'stale':False})
+
+    def test_manual_mode_waits_for_signout_instead_of_python_or_wrapper_exit(self):
+        self.script=self.script.with_name('windows_boot.ps1')
+        (self.root/'windows_bot_desktop.local.json').write_text(json.dumps({
+            'Pid':123,'SessionId':2,'Owner':'EXAMPLE\\owner','BootKey':'boot','DesktopManual':True}),'utf-8')
+        root=str(self.root).replace("'","''")
+        code=self.function_scope('Test-DesktopBotControl')+rf'''
+$root='{root}';$bootKey='boot';$config=[pscustomobject]@{{UserName='EXAMPLE\owner'}}
+$script:desktop=$true;$script:rightOwner=$true
+function Get-CimInstance {{param($Filter)
+ if($Filter -ne "Name='explorer.exe'"){{throw 'Manual mode must not inspect a wrapper or Python PID.'}}
+ if($script:desktop){{[pscustomobject]@{{SessionId=2}}}}
+}}
+function Invoke-CimMethod {{[pscustomobject]@{{Domain='EXAMPLE';User=$(if($script:rightOwner){{'owner'}}else{{'other'}})}}}}
+$active=Test-DesktopBotControl
+$script:rightOwner=$false;$other=Test-DesktopBotControl
+$script:rightOwner=$true;$script:desktop=$false;$signedOut=Test-DesktopBotControl
+$script:desktop=$true;$bootKey='new-boot';$rebooted=Test-DesktopBotControl
+@{{active=$active;other=$other;signedOut=$signedOut;rebooted=$rebooted}} | ConvertTo-Json -Compress
+'''
+        self.assertEqual(json.loads(self.run_ps(code)),{'active':True,'other':False,'signedOut':False,'rebooted':False})

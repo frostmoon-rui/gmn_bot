@@ -19,18 +19,18 @@ if($session -eq 0 -or [Security.Principal.WindowsIdentity]::GetCurrent().Name -i
 $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Use the elevated desktop task.'}
 if($Mode -eq 'Activate'){
-    Start-Process powershell.exe -WindowStyle Normal -WorkingDirectory $root -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Mode Run -ConfigPath "'+[IO.Path]::GetFullPath($ConfigPath)+'"')
+    Start-Process powershell.exe -WindowStyle Normal -WorkingDirectory $root -ArgumentList ('-NoExit -NoProfile -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Mode Run -ConfigPath "'+[IO.Path]::GetFullPath($ConfigPath)+'"')
     exit 0
 }
 $mutex=New-Object Threading.Mutex($false,('Global\'+$config.TaskName+'-DesktopBot'))
-$locked=$false
+$locked=$false;$handedOff=$false
 try{
     try{$locked=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$locked=$true}
     if(-not $locked){exit 0}
     $marker=Join-Path $root 'windows_bot_desktop.local.json'
     $bootKey=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks.ToString()
     $temporary=$marker+'.'+$PID+'.tmp'
-    @{Pid=$PID;SessionId=$session;Owner=$config.UserName;BootKey=$bootKey} | ConvertTo-Json |
+    @{Pid=$PID;SessionId=$session;Owner=$config.UserName;BootKey=$bootKey;DesktopManual=$true} | ConvertTo-Json |
         Set-Content -LiteralPath $temporary -Encoding UTF8
     Move-Item -LiteralPath $temporary -Destination $marker -Force
     # Publish ownership before stopping the boot child; its supervisor now waits.
@@ -44,6 +44,7 @@ try{
         if(-not $target.WaitForExit(10000)){throw 'Previous bot did not exit; handoff cancelled.'}
         $target.Dispose()
     }
+    $handedOff=$true
     $env:PYTHONUTF8='1';$env:PYTHONIOENCODING='utf-8'
     $env:HTTP_PROXY='http://127.0.0.1:'+ [int]$config.ProxyPort
     $env:HTTPS_PROXY=$env:HTTP_PROXY;$env:ALL_PROXY=$env:HTTP_PROXY
@@ -51,23 +52,17 @@ try{
     Set-Location -LiteralPath $root
     $Host.UI.RawUI.WindowTitle='GMN | desktop bot | active instance'
     New-Item -ItemType Directory -Path (Join-Path $root 'logs\startup') -Force | Out-Null
-    while($true){
-        $listeners=[Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
-        if(-not (@($listeners | Where-Object Port -eq $config.ProxyPort).Count -and @($listeners | Where-Object Port -eq $config.NapCatPort).Count)){
-            Write-Host 'Waiting for proxy and NapCat...';Start-Sleep -Seconds 5;continue
-        }
-        $log=Join-Path $root ('logs\startup\bot-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.out.log')
-        Write-Host 'Desktop bot owns this session. Close this window to return supervision to the boot task.'
-        # Keep native stderr non-terminating; Tee preserves visible output and local logs.
-        $ErrorActionPreference='Continue'
-        & $config.PythonExecutable -u $main 2>&1 | Tee-Object -FilePath $log
-        $ErrorActionPreference='Stop'
-        Write-Host 'Bot exited; retrying in five seconds.'
-        Start-Sleep -Seconds 5
-    }
+    Write-Host 'Desktop manual mode: Python runs once, directly in this terminal.'
+    Write-Host 'No desktop restart watchdog. The boot supervisor will wait until sign-out.'
+    Write-Host 'After stopping Python, restart here with: python -u gemini_bot.py'
+    # Direct console I/O avoids the PowerShell output pipeline obscuring errors.
+    $ErrorActionPreference='Continue'
+    & $config.PythonExecutable -u $main
+    $ErrorActionPreference='Stop'
+    Write-Host 'Bot exited. This PowerShell stays open for manual debugging.'
 }finally{
     if($locked){
-        if(Test-Path -LiteralPath $marker){Remove-Item -LiteralPath $marker -Force}
+        if(-not $handedOff -and (Test-Path -LiteralPath $marker)){Remove-Item -LiteralPath $marker -Force}
         $mutex.ReleaseMutex()
     }
     $mutex.Dispose()

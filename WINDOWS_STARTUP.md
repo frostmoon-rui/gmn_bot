@@ -149,14 +149,16 @@ check; offline validation does not log out or reboot the computer.
 
 After sign-in, the elevated desktop task publishes ownership, stops only this
 project's Python bot under the configured account, and starts a fresh instance
-in a visible console. QQ and the proxy are not restarted. Output remains visible
-and is saved in local startup logs. A failed child is restarted by the desktop
-wrapper. Closing the desktop console releases ownership; the boot supervisor
-resumes responsibility. Task credentials are unchanged.
+in a visible PowerShell console. QQ and the proxy are not restarted. Python runs
+once with direct console input/output, without a Tee pipeline or automatic
+restart. PowerShell stays open after Python exits. Restart manually with
+`python -u gemini_bot.py` from the project directory. Task credentials are unchanged.
 
-The boot supervisor accepts ownership only from a live matching desktop wrapper
-under the configured account and current boot. Stale markers do not disable
-startup. A process-held file lock in `startup_runtime/bot-instance.lock` rejects
+In desktop manual mode, the boot supervisor waits while that account's matching
+Explorer session remains signed in, even after Python or its console exits.
+It resumes after sign-out or reboot; locking the screen keeps manual mode.
+Markers from previous boots or other accounts do not disable startup.
+A process-held file lock in `startup_runtime/bot-instance.lock` rejects
 duplicate manual launches before loading runtime settings or personal data.
 The OS releases the lock on exit, including crashes; do not delete the lock file
 while the bot is running. A restarted boot supervisor is required to activate

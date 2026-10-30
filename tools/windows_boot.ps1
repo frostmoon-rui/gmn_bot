@@ -73,6 +73,14 @@ function Test-DesktopBotControl {
     try{
         $request=Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
         if($request.BootKey -ne $bootKey -or $request.Owner -ine $config.UserName -or [int]$request.SessionId -eq 0){return $false}
+        if($request.DesktopManual -eq $true){
+            foreach($desktop in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'")){
+                if($desktop.SessionId -ne $request.SessionId){continue}
+                $owner=Invoke-CimMethod -InputObject $desktop -MethodName GetOwner
+                if(($owner.Domain+'\'+$owner.User) -ieq $config.UserName){return $true}
+            }
+            return $false
+        }
         $process=Get-CimInstance Win32_Process -Filter ('ProcessId='+[int]$request.Pid)
         if(-not $process -or $process.SessionId -ne $request.SessionId -or -not $process.CommandLine){return $false}
         $expected=Join-Path $root 'tools\windows_bot_desktop.ps1'
