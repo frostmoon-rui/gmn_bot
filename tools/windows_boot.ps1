@@ -118,6 +118,11 @@ function Start-Component([string]$Label,[string]$Executable,[string[]]$Arguments
     return $process
 }
 
+function Find-SessionComponent([string]$Executable,[string]$Hint='') {
+    $session=[Diagnostics.Process]::GetCurrentProcess().SessionId
+    return @(Find-Component $Executable $Hint | Where-Object SessionId -eq $session)
+}
+
 Assert-Configuration
 if ($Mode -eq 'Validate') {
     Write-Output 'Configuration and required files are valid. No programs or tasks were started.'
@@ -242,9 +247,9 @@ try {
         }
         $napReady = Test-Listening $config.NapCatPort
         if ($proxyReady -and -not $napReady -and ($now - $lastNapCat).TotalSeconds -ge 60) {
-            if (@(Find-Component $nativeLauncher ([string]$config.BotAccount)).Count -eq 0) {
+            if (@(Find-SessionComponent $nativeLauncher ([string]$config.BotAccount)).Count -eq 0) {
                 # Existing QQ may be starting or require a QR login. Never inject a second copy.
-                if (@(Find-Component $config.QQExecutable).Count -eq 0) {
+                if (@(Find-SessionComponent $config.QQExecutable).Count -eq 0) {
                     $null = Start-Component 'napcat' $nativeLauncher @($config.QQExecutable,$env:NAPCAT_INJECT_PATH,[string]$config.BotAccount) $config.NapCatDirectory
                     $lastNapCat = $now
                 }

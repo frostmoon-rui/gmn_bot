@@ -130,3 +130,17 @@ $script:desktop=$true;$bootKey='new-boot';$rebooted=Test-DesktopBotControl
 @{{active=$active;other=$other;signedOut=$signedOut;rebooted=$rebooted}} | ConvertTo-Json -Compress
 '''
         self.assertEqual(json.loads(self.run_ps(code)),{'active':True,'other':False,'signedOut':False,'rebooted':False})
+
+    def test_desktop_qq_does_not_block_recovery_in_the_boot_session(self):
+        self.script=self.script.with_name('windows_boot.ps1')
+        code=self.function_scope('Find-SessionComponent')+'''
+$currentSession=[Diagnostics.Process]::GetCurrentProcess().SessionId
+function Find-Component {
+ [pscustomobject]@{SessionId=($currentSession+1);ProcessId=1}
+ if($script:local){[pscustomobject]@{SessionId=$currentSession;ProcessId=2}}
+}
+$script:local=$false;$otherOnly=@(Find-SessionComponent 'QQ.exe').Count
+$script:local=$true;$both=@(Find-SessionComponent 'NapCatWinBootMain.exe' 'example-account').Count
+@{otherOnly=$otherOnly;both=$both} | ConvertTo-Json -Compress
+'''
+        self.assertEqual(json.loads(self.run_ps(code)),{'otherOnly':0,'both':1})
