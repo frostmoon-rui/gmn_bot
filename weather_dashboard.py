@@ -25,6 +25,29 @@ DAILY_NAMES = {'uv':'uv_index_max', 'wind_kmph':'wind_speed_10m_max',
                'wind_gust_kmph':'wind_gusts_10m_max', 'feels_like':'apparent_temperature_max',
                'precipitation_mm':'precipitation_sum'}
 
+TEMPERATURE = {'temp', 'feels_like', 'min_temp', 'max_temp'}
+PRECIPITATION = {'precipitation_mm', 'rain_mm', 'showers_mm', 'probability', 'thunderstorm_probability'}
+WIND = {'wind_kmph', 'wind_gust_kmph', 'wind_degrees'}
+
+
+def primary_panel(keys):
+    return bool(set(keys) & (TEMPERATURE | PRECIPITATION | WIND))
+
+
+def panel_batches(specs):
+    """Keep temperatures wide, pair rain/wind, and pack secondary panels in order."""
+    batches = []
+    index = 0
+    while index < len(specs):
+        keys = set(specs[index])
+        following = set(specs[index+1]) if index+1 < len(specs) else set()
+        pair = bool(keys & PRECIPITATION and following & WIND)
+        pair = pair or (bool(following) and not primary_panel(keys) and not primary_panel(following))
+        count = 2 if pair else 1
+        batches.append(specs[index:index+count])
+        index += count
+    return batches
+
 
 def metric_unit(key):
     return '%' if key == 'probability' else METRICS[key]
@@ -130,6 +153,12 @@ class Painter:
             text += '…'
         self.draw.text((x, y), text, font=face, fill=color)
 
+    def reading(self, x, y, text, color, width):
+        size = 82
+        while size > 40 and self.draw.textlength(text, font=self.face(size,True)) > width:
+            size -= 2
+        self.write(x,y,text,size,color,width,bold=True)
+
     def wrap(self, text, width, size):
         lines, current = [], ''
         for token in re.findall(r'\S+\s*',str(text)):
@@ -155,7 +184,7 @@ class Painter:
         for key in keys:
             unit = metric_unit(key)
             caption = self.label(key, daily)+((' · '+unit) if unit else '')
-            length = min(width, self.draw.textlength(caption, font=self.font(24))+52)
+            length = min(width, self.draw.textlength(caption, font=self.font(26))+56)
             if current and used+length > width:
                 rows.append(current)
                 current, used = [], 0
@@ -166,10 +195,11 @@ class Painter:
         return rows
 
     def panel_height(self, keys, width, daily, rows, major):
-        legend = len(self.legend(keys, width-56, daily))*34
+        legend = len(self.legend(keys, width-56, daily))*38
         if any(key in keys for key in ('temp','feels_like','min_temp','max_temp')):
             return (355 if daily and len(rows)<=3 else 550 if daily else 520 if major else 445)+legend
-        return (360 if major else 306)+legend
+        bearing_band=44 if 'wind_degrees' in keys and len(keys)>1 else 0
+        return (390 if major else 330)+legend+bearing_band
 
     def panel(self, box, keys, rows, originals, data, kind, major):
         x, y, right, bottom = box
@@ -185,20 +215,20 @@ class Painter:
             if peak_values:
                 badge=self.label(peak_key,daily)+' ↑ '+f'{max(peak_values):g}'+metric_unit(peak_key)
                 badge_width=self.draw.textlength(badge,font=self.face(24,True))+32
-                if badge_width<width*.55:
+                if badge_width+self.draw.textlength(heading,font=self.face(32,True))+96<width:
                     start=right-badge_width-24
                     self.draw.rounded_rectangle((start,y+15,right-24,y+57),radius=15,fill='#f0f4f7')
                     self.write(start+16,y+21,badge,24,COLORS.get(peak_key,MUTED),bold=True)
                     title_width=start-x-52
-        self.write(x+28, y+18, heading, 30 if major else 28, width=title_width,bold=True)
+        self.write(x+28, y+18, heading, 32 if major else 30, width=title_width,bold=True)
         legends = self.legend(keys, width-56, daily)
         for row_index, line in enumerate(legends):
             for key, caption, offset, length in line:
-                xx, yy = x+28+offset, y+68+row_index*34
+                xx, yy = x+28+offset, y+68+row_index*38
                 color = COLORS.get(key, '#66798a')
                 self.draw.rounded_rectangle((xx, yy+11, xx+20, yy+17), radius=3, fill=color)
-                self.write(xx+29, yy, caption, 24, color, length-29)
-        plot_top = y+115+len(legends)*34
+                self.write(xx+29, yy, caption, 26, color, length-29)
+        plot_top = y+115+len(legends)*38
         if any(key in keys for key in ('temp','feels_like','min_temp','max_temp')):
             self.ranges(box, plot_top, keys, rows, originals, data, daily)
         else:
@@ -224,8 +254,8 @@ class Painter:
         for tick in ticks:
             height=yy(tick)
             self.draw.line((left,height,end,height),fill='#e8edf2',width=1)
-            self.write(x+16,height-15,f'{tick:g}',23,MUTED,85)
-        self.write(left,top-34,'°C',22,MUTED)
+            self.write(x+16,height-17,f'{tick:g}',28,MUTED,85)
+        self.write(left,top-37,'°C',26,MUTED)
         times=[sample_time(row.get('date') or row_time(row),data) for row in originals]
         first=next((stamp for stamp in times if stamp is not None),None)
         elapsed=[elapsed_seconds(first,stamp) for stamp in times]
@@ -250,8 +280,8 @@ class Painter:
             if not daily and len({value.date() for value in times if value})>1:
                 caption=stamp[5:16].replace('T',' ')
             xx=positions[index]
-            text_width=self.draw.textlength(caption or '—',font=self.face(25,True))
-            self.write(xx-text_width/2,band_top,caption or '—',25,INK,170,bold=True)
+            text_width=self.draw.textlength(caption or '—',font=self.face(30,True))
+            self.write(xx-text_width/2,band_top,caption or '—',30,INK,220,bold=True)
             size=34 if daily and len(rows)<=3 else 48
             weather_icon(self.draw,xx-size/2,band_top+38,size,original,daily)
             self.draw.line((xx,top-4,xx,base+5),fill='#eef2f5',width=1)
@@ -279,15 +309,15 @@ class Painter:
             for position,(key,value) in enumerate(endpoints):
                 below=(len(endpoints)>1 and position==0) or key=='min_temp'
                 caption=f'{value:g}°C'
-                tx=xx-self.draw.textlength(caption,font=self.face(28,True))/2
-                height=min(bottom-74,yy(value)+12) if below else max(top-28,yy(value)-40)
-                self.write(tx,height,caption,28,COLORS[key],bold=True)
+                tx=xx-self.draw.textlength(caption,font=self.face(34,True))/2
+                height=min(bottom-74,yy(value)+12) if below else max(top-34,yy(value)-46)
+                self.write(tx,height,caption,34,COLORS[key],bold=True)
         for index in labelled:
             wind=rows[index].get('wind_kmph')
             if wind is not None:
                 caption=f'{wind:g} km/h'
-                text_width=self.draw.textlength(caption,font=self.font(23))
-                self.write(positions[index]-text_width/2,bottom-37,caption,23,MUTED,165)
+                text_width=self.draw.textlength(caption,font=self.font(28))
+                self.write(positions[index]-text_width/2,bottom-40,caption,28,MUTED,190)
 
     def trends(self, box, top, keys, rows, originals, data, daily):
         x, _, right, bottom = box
@@ -296,7 +326,8 @@ class Painter:
             groups = [('°', ['wind_degrees'])]
         if len(groups) > 2:
             raise ValueError('A weather panel supports at most two labelled unit axes')
-        left, end, base = x+105, right-(105 if len(groups)>1 else 42), bottom-74
+        bearing_band=44 if 'wind_degrees' in keys and len(keys)>1 else 0
+        left, end, base = x+105, right-(105 if len(groups)>1 else 42), bottom-(80 if daily else 111)-bearing_band
         times = [sample_time(row.get('date') or row_time(row), data) for row in originals]
         valid = [stamp for stamp in times if stamp is not None]
         first = valid[0] if valid else None
@@ -320,8 +351,8 @@ class Painter:
                     self.draw.line((left, height, end, height), fill='#e8edf2', width=1)
                 caption = f'{tick:g}'
                 tx = x+16 if axis_index == 0 else end+18
-                self.write(tx, height-15, caption, 23, MUTED, 85)
-            self.write(left if axis_index == 0 else end-35, top-34, unit or self.label(members[0], daily), 22, MUTED, 160)
+                self.write(tx, height-17, caption, 28, MUTED, 85)
+            self.write(left if axis_index == 0 else end-35, top-37, unit or self.label(members[0], daily), 26, MUTED, 160)
             for key in members:
                 color = COLORS.get(key, '#66798a')
                 if key in RAIN or key == 'snowfall_cm':
@@ -346,37 +377,39 @@ class Painter:
                 for run in connected_runs(rows, key, times, daily):
                     points = [(positions[index], yy(rows[index][key])) for index in run]
                     if len(points)>1:
-                        self.draw.line(points, fill=color, width=5)
+                        self.draw.line(points, fill=color, width=6)
                     for xx, height in points:
                         self.draw.ellipse((xx-4, height-4, xx+4, height+4), fill=color)
                     if len(rows)<=12:
                         # Peak labels add orientation without covering every sample.
                         index = max(run, key=lambda i:rows[i][key])
-                        self.write(positions[index]+8, max(top, yy(rows[index][key])-34), f'{rows[index][key]:g}', 24, color, 110)
+                        caption=f'{rows[index][key]:g}'
+                        text_width=min(110,self.draw.textlength(caption,font=self.font(24)))
+                        label_x=max(left,min(end-text_width-4,positions[index]+8))
+                        self.write(label_x,max(top,yy(rows[index][key])-34),caption,24,color,110)
         count = min(len(rows), 7 if end-left>1000 else 4)
         indices = sorted({round(i*(len(rows)-1)/max(1,count-1)) for i in range(count)})
         for index in indices:
             value = originals[index].get('date') or row_time(originals[index])
             stamp = local_time(value, data.get('timezone'))
-            text = str(value)[5:10] if daily else stamp[5:16].replace('T',' ')
-            self.write(max(left-12,min(end-140,positions[index]-62)), base+24, text or '—', 23, MUTED, 160)
-        if 'wind_degrees' in keys:
-            if len(keys)>1:
-                for index,row in enumerate(rows):
-                    direction=row.get('wind_degrees')
-                    if direction is None:
-                        continue
-                    angle=math.radians(direction)
-                    xx, middle=positions[index],base-20
-                    dx,dy=math.sin(angle)*9,-math.cos(angle)*9
-                    self.draw.line((xx-dx,middle-dy,xx+dx,middle+dy),fill=MUTED,width=2)
-                    self.draw.ellipse((xx+dx-2,middle+dy-2,xx+dx+2,middle+dy+2),fill=MUTED)
+            text = stamp[5:10] if daily else stamp[11:16]
+            xx=max(left-12,min(end-90,positions[index]-42))
+            self.write(xx,base+23+bearing_band,text or '—',28,MUTED,115,bold=True)
+            if not daily:
+                self.write(xx,base+61+bearing_band,stamp[5:10] or '—',24,MUTED,115)
+        if bearing_band:
             for index in indices:
-                direction = rows[index].get('wind_degrees')
+                direction=rows[index].get('wind_degrees')
                 if direction is None:
                     continue
-                # Numeric bearings are preserved rather than interpolating 359° to 1°.
-                self.write(positions[index]-24, base-32, f'{direction:g}°', 21, MUTED, 100)
+                angle=math.radians(direction)
+                start=max(left-4,min(end-112,positions[index]-42))
+                xx,middle=start+13,base+31
+                dx,dy=math.sin(angle)*9,-math.cos(angle)*9
+                self.draw.line((xx-dx,middle-dy,xx+dx,middle+dy),fill=MUTED,width=2)
+                self.draw.ellipse((xx+dx-2,middle+dy-2,xx+dx+2,middle+dy+2),fill=MUTED)
+                # Numeric bearings stay discrete, outside the speed plot.
+                self.write(start+30,base+12,f'{direction:g}°',25,MUTED,90)
 
 
 def render_dashboard(data, labels, translate, font, target='today'):
@@ -408,10 +441,10 @@ def render_dashboard(data, labels, translate, font, target='today'):
         if number(hero.get(key)) is not None:
             suffix = ' ('+labels['daily_uv' if target=='tomorrow' or data.get('uv_kind')=='daily maximum' else 'current_uv']+')' if key=='uv' else ''
             details.append(labels[key]+' '+value(key,METRICS[key])+suffix)
-    support=painter.wrap('   ·   '.join(details),WIDTH-2*MARGIN,25)
+    support=painter.wrap('   ·   '.join(details),WIDTH-2*MARGIN,28)
     if data.get('capital_reference'):
-        support+=painter.wrap(labels['capital_reference'],WIDTH-2*MARGIN,23)
-    header=370+max(1,len(support))*34+22
+        support+=painter.wrap(labels['capital_reference'],WIDTH-2*MARGIN,26)
+    header=370+max(1,len(support))*38+22
     sections=[]
     y=header
     for kind, originals in [('hours',hourly),('daily',daily),('history',data.get('history_hours',[])[:24])]:
@@ -423,23 +456,14 @@ def render_dashboard(data, labels, translate, font, target='today'):
             continue
         panels=[]
         y+=64
-        index=0
-        while index<len(specs):
-            keys=specs[index]
-            major=kind!='history' and bool(set(keys)&{'temp','feels_like','min_temp','max_temp',
-                                                    'precipitation_mm','probability','wind_kmph','wind_gust_kmph'})
-            full=major or index==len(specs)-1
-            cw=WIDTH-2*MARGIN if full else (WIDTH-2*MARGIN-GAP)//2
-            batch=[keys] if full else specs[index:index+2]
-            # Never tuck a primary panel into a secondary row.
-            if len(batch)==2 and set(batch[1])&{'temp','precipitation_mm','wind_kmph'}:
-                batch=[keys];cw=WIDTH-2*MARGIN
-            heights=[painter.panel_height(group,cw,kind=='daily',rows,major) for group in batch]
+        for batch in panel_batches(specs):
+            cw=WIDTH-2*MARGIN if len(batch)==1 else (WIDTH-2*MARGIN-GAP)//2
+            heights=[painter.panel_height(group,cw,kind=='daily',rows,
+                                         kind!='history' and primary_panel(group)) for group in batch]
             for column,(group,height) in enumerate(zip(batch,heights)):
                 xx=MARGIN+column*(cw+GAP)
                 panels.append(((xx,y,xx+cw,y+max(heights)),group))
             y+=max(heights)+GAP
-            index+=len(batch)
         sections.append((kind,rows,originals,panels))
     alerts=data.get('provider_alerts',{})
     events=[]
@@ -453,9 +477,9 @@ def render_dashboard(data, labels, translate, font, target='today'):
                 events.append(text)
     notes=[]
     for text in events or [labels['empty_alerts'] if alerts else labels['unavailable_alerts']]:
-        notes+=painter.wrap(translate(text),WIDTH-2*MARGIN-48,24)
+        notes+=painter.wrap(translate(text),WIDTH-2*MARGIN-48,26)
     alert_top=y+8
-    footer=alert_top+70+len(notes)*34+24
+    footer=alert_top+70+len(notes)*38+24
     height=footer+106
     if height>30000:
         raise ValueError('Weather dashboard exceeds the safe canvas limit')
@@ -464,7 +488,7 @@ def render_dashboard(data, labels, translate, font, target='today'):
     image=Image.new('RGB',(round(WIDTH*scale),round(height*scale)),PAPER)
     painter.draw=draw=SmoothDraw(image,scale)
     title=labels['title']+(' · '+labels['tomorrow'] if target=='tomorrow' else '')
-    painter.write(MARGIN,27,title,42,width=WIDTH-2*MARGIN,bold=True)
+    painter.write(MARGIN,27,title,44,width=WIDTH-2*MARGIN,bold=True)
     subtitle=labels['forecast_day']+': '+day if target=='tomorrow' else day
     stamp=local_time(data.get('report_time'),data.get('timezone')).replace('T',' ')
     if target!='tomorrow' and stamp:
@@ -482,10 +506,13 @@ def render_dashboard(data, labels, translate, font, target='today'):
         primary=value('max_temp' if key=='temp' and target=='tomorrow' else key,unit)
         if key=='wind_kmph' and number(hero.get(key)) is None and hero.get('wind_force'):
             heading,primary=labels['wind_force'],translate(str(hero['wind_force']))
-        painter.write(xx+26,148,heading,27,INK,cw-52,bold=True)
+        painter.write(xx+26,148,heading,30,INK,cw-52,bold=True)
         has_reading=number(hero.get('max_temp' if key=='temp' and target=='tomorrow' else key)) is not None
         has_reading=has_reading or (key=='wind_kmph' and bool(hero.get('wind_force')))
-        painter.write(xx+24,182,primary,74 if has_reading else 34,color,cw-48,bold=True)
+        if has_reading:
+            painter.reading(xx+24,182,primary,color,cw-48)
+        else:
+            painter.write(xx+24,182,primary,38,color,cw-48,bold=True)
         if key=='temp':
             weather_icon(draw,xx+cw-88,151,54,original if target=='tomorrow' else hero,
                          target=='tomorrow',background='#e9dcd0')
@@ -499,21 +526,21 @@ def render_dashboard(data, labels, translate, font, target='today'):
             detail=labels['wind_gust_kmph']+' '+value('wind_gust_kmph','km/h')
             if hero.get('wind_direction'):
                 detail+='  ·  '+translate(str(hero['wind_direction']))
-        for line_index,line in enumerate(painter.wrap(detail,cw-52,24)[:2]):
-            painter.write(xx+26,279+line_index*30,line,24,MUTED,cw-52)
+        for line_index,line in enumerate(painter.wrap(detail,cw-52,26)[:2]):
+            painter.write(xx+26,279+line_index*32,line,26,MUTED,cw-52)
         xx+=cw+GAP
     for index,line in enumerate(support):
-        painter.write(MARGIN,368+index*34,line,25,MUTED)
+        painter.write(MARGIN,368+index*38,line,28,MUTED)
     for kind,rows,originals,panels in sections:
-        painter.write(MARGIN,panels[0][0][1]-52,labels[kind],32,bold=True)
+        painter.write(MARGIN,panels[0][0][1]-52,labels[kind],36,bold=True)
         for box,keys in panels:
-            painter.panel(box,keys,rows,originals,data,kind,box[2]-box[0]>1000)
+            painter.panel(box,keys,rows,originals,data,kind,kind!='history' and primary_panel(keys))
     draw.rounded_rectangle((MARGIN,alert_top,WIDTH-MARGIN,footer-16),radius=20,fill='#e7edf1')
-    painter.write(MARGIN+24,alert_top+14,labels['alerts'],27,bold=True)
+    painter.write(MARGIN+24,alert_top+14,labels['alerts'],30,bold=True)
     for index,line in enumerate(notes):
-        painter.write(MARGIN+24,alert_top+56+index*34,line,24,MUTED)
+        painter.write(MARGIN+24,alert_top+56+index*38,line,26,MUTED)
     for index,line in enumerate(footer_lines(data,labels)):
-        painter.write(MARGIN,footer+12+index*36,line,22,MUTED,WIDTH-2*MARGIN)
+        painter.write(MARGIN,footer+12+index*36,line,24,MUTED,WIDTH-2*MARGIN)
     output=BytesIO()
     if scale!=1:
         image=image.resize((WIDTH,height),Image.Resampling.LANCZOS)

@@ -110,3 +110,44 @@ class WeatherCardsTests(unittest.TestCase):
             self.assertGreater(xy[3]-xy[1],xy[2]-xy[0])
         self.assertEqual(dates['10-28'][1],dates['10-29'][1])
         self.assertLess(dates['10-28'][0],dates['10-29'][0])
+
+
+class WeatherDensityTests(unittest.TestCase):
+    def test_rain_and_wind_share_a_row_without_merging_axes_or_losing_data(self):
+        from copy import deepcopy
+        from weather_dashboard import Painter
+        data={'local_date':'2026-10-30','hours':[
+            {'time':'2026-10-30T09:00','temp':0,'precipitation_mm':0,'probability':0,
+             'wind_kmph':0,'wind_gust_kmph':10,'wind_degrees':359},
+            {'time':'2026-10-30T10:00','temp':3,'precipitation_mm':2,'probability':50,
+             'wind_kmph':5,'wind_gust_kmph':15,'wind_degrees':1}]}
+        before=deepcopy(data)
+        panels=[]
+        original=Painter.panel
+        def capture(self,box,keys,*args,**kwargs):
+            panels.append((box,keys))
+            return original(self,box,keys,*args,**kwargs)
+        with patch.object(Painter,'panel',capture):
+            render_report(format_weather(data))
+        temperature=next(box for box,keys in panels if 'temp' in keys)
+        rain,rain_keys=next((box,keys) for box,keys in panels if 'precipitation_mm' in keys)
+        wind,wind_keys=next((box,keys) for box,keys in panels if 'wind_kmph' in keys)
+        self.assertGreater(temperature[2]-temperature[0],1200)
+        self.assertEqual(rain[1],wind[1])
+        self.assertLess(rain[2],wind[0])
+        self.assertEqual({unit for unit,_ in axis_groups(rain_keys)},{'mm','%'})
+        self.assertEqual({unit for unit,_ in axis_groups(wind_keys)},{'km/h'})
+        self.assertEqual(data,before)
+
+    def test_large_reading_shrinks_to_fit_instead_of_losing_its_digits(self):
+        sizes=[]
+        original=ImageDraw.ImageDraw.text
+        def capture(draw,xy,text,*args,**kwargs):
+            if str(text)=='499.9km/h':
+                sizes.append(kwargs['font'].size)
+            return original(draw,xy,text,*args,**kwargs)
+        with patch('weather_graphics.raster_scale',return_value=1),patch.object(ImageDraw.ImageDraw,'text',capture):
+            render_report(format_weather({'local_date':'2026-10-30','wind_kmph':499.9}))
+        self.assertTrue(sizes)
+        self.assertGreaterEqual(sizes[0],40)
+        self.assertLess(sizes[0],82)

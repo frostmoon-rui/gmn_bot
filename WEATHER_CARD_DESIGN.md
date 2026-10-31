@@ -5,6 +5,21 @@ header, with precipitation and wind beside it. Large hourly charts precede daily
 forecasts and the existing history section. Alerts and two compact source/status
 lines remain at the bottom. The separate conversational briefing is unchanged.
 
+The compact layout keeps temperature full width while pairing precipitation and
+wind in separate, aligned panels. Their units and axes are never conflated.
+Secondary panels fill two-column rows without hiding any available metric.
+Temperature endpoints use 34-pixel bold type, time headers 30-pixel type and
+numeric axes 28-pixel type. Current readings start at 82 pixels and shrink to fit
+the complete value rather than truncating a large number. Hourly axes separate
+time and date onto two lines; wind bearings occupy their own compact strip.
+
+This layout uses the existing configured services. No Windy key, paid integration
+or additional weather request is enabled by this visual update. Windy's testing
+Point Forecast keys return shuffled/modified data and must not supply real weather
+reports; professional Point Forecast and Map Forecast are separate products:
+<https://api.windy.com/point-forecast/pricing> and
+<https://api.windy.com/map-forecast/pricing>.
+
 - Daily temperature uses vertical floating minimum/maximum columns, with dates
   along the horizontal axis. Reported apparent temperature remains a separate
   diamond on the Celsius scale. Hourly temperature uses the same vertical layout:
