@@ -2479,6 +2479,8 @@ async def main():
     # Resolve locations lazily when their weather or map information is requested.
     extensions.spawn(extensions.nightly())
     extensions.spawn(features.reminder_loop())
+    from runtime_maintenance import maintenance_loop
+    extensions.spawn(maintenance_loop(sys.modules[__name__],Path(__file__).resolve().parent))
     await asyncio.gather(*(asyncio.to_thread(function) for function in (
         init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))
     await prepare_stolen_emoji_store()

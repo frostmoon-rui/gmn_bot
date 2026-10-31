@@ -95,12 +95,17 @@ class VisionRecognizer:
     async def describe(self, blob, mime, question=''):
         if not blob or len(blob)>8*1024*1024:
             return ''
-        question = str(question or '')[:1500].strip()
+        from vision_reuse import normalize_request, record_stat
+        question = normalize_request(question)[:1500]
+        record_stat(self,'requests')
         digest = hashlib.sha256(blob).hexdigest()
         request_sha = hashlib.sha256(question.encode('utf-8')).hexdigest()
         key = digest + ':' + request_sha
         cached = self.cache.get(key)
         if cached and cached[0] > time.monotonic():
+            record_stat(self,'memory_hits')
+            self.cache.pop(key,None)
+            self.cache[key]=cached
             print('[Vision cache hit]: Same file and request; no model call')
             return cached[1]
         task = self.inflight.get(key)
@@ -120,30 +125,18 @@ class VisionRecognizer:
                     return
                 caption = done.result()
                 self.cache[key] = (time.monotonic() + (1800 if caption else 60), caption)
-                if len(self.cache) > 150:
+                if len(self.cache) > 256:
                     self.cache.pop(next(iter(self.cache)))
             task.add_done_callback(finished)
         else:
+            record_stat(self,'shared')
             print('[Vision request shared]: Same file and request; waiting for the existing task')
         # Cancelling one waiter does not cancel recognition shared by other groups.
         return await asyncio.shield(task)
 
     async def _cached_run(self, blob, mime, question, digest, request_sha):
-        if self.result_cache is not None:
-            try:
-                caption = await asyncio.to_thread(self.result_cache.get, digest, request_sha)
-                if caption:
-                    print('[Vision file hit]: A successful local result exists; no model call')
-                    return caption
-            except Exception as error:
-                print('[Vision cache read failed]:', type(error).__name__, 'Preserve the original cache; continue normal recognition')
-        caption = await self._run(blob, mime, question)
-        if caption and self.result_cache is not None:
-            try:
-                await asyncio.to_thread(self.result_cache.put, digest, request_sha, caption)
-            except Exception as error:
-                print('[Vision cache write failed]:', type(error).__name__, 'The current observation remains valid')
-        return caption
+        from vision_reuse import shared_recognition
+        return await shared_recognition(self,blob,mime,question,digest,request_sha)
 
     async def _run(self, blob, mime, question=''):
         try:

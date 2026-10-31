@@ -641,11 +641,18 @@ class Extensions:
         return 'I will check the sources and give you a short answer shortly.'
 
     async def python_search(self, query, mode='web', topic=''):
+        from vision_reuse import normalize_request
+        query,topic=normalize_request(query),normalize_request(topic)
         key = (query, mode, topic)
         cached = self.search_cache.get(key)
         if cached and asyncio.get_running_loop().time() - cached[0] < (60 if mode == 'latest' else 600):
             return cached[1]
         async with self.search_gate:
+            # A matching request may have finished while this one waited for the gate.
+            cached=self.search_cache.get(key)
+            if cached and asyncio.get_running_loop().time()-cached[0]<(60 if mode=='latest' else 600):
+                print('[Search cache hit]: Reusing matching retrieval; responses remain contextual')
+                return cached[1]
             result = await self._python_search_process(query, mode, topic)
             if result.get('pages'):
                 self.search_cache[key] = (asyncio.get_running_loop().time(), result)
