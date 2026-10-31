@@ -111,7 +111,7 @@ def release_expired(bot, now=None):
     return removed
 
 
-async def maintenance_loop(bot, root, interval=1800):
+async def maintenance_loop(bot, root, interval=DAY):
     # Start after initialization, and never block the event loop with filesystem I/O.
     await asyncio.sleep(60)
     while True:

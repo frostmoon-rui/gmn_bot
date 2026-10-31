@@ -1,6 +1,6 @@
 # Runtime resource maintenance
 
-The maintenance task starts 60 seconds after startup and runs every 30 minutes.
+The maintenance task starts 60 seconds after startup and runs every 24 hours.
 Only expired disposable memory entries are removed. Active recognition/search
 tasks, conversation context, personal records and sticker originals are preserved.
 Python garbage collection runs off the event loop; it is not a promise that the
