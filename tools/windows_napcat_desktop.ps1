@@ -58,8 +58,8 @@ try{
             }
         }
     }
-    # Its single-instance launcher restores an existing manager window as needed.
-    Start-Process -FilePath $config.NapCatDesktopExecutable -WindowStyle Normal
+    # Native uiModeOnStartup=tray_only controls the tray; do not close the manager.
+    Start-Process -FilePath $config.NapCatDesktopExecutable -WindowStyle Minimized
     New-Item -ItemType Directory -Path (Join-Path $root 'logs\startup') -Force | Out-Null
     Add-Content -LiteralPath (Join-Path $root 'logs\startup\desktop-views.log') -Encoding UTF8 `
         -Value ((Get-Date).ToString('o')+' Desktop manager owns the QQ receiver; boot recovery waits until sign-out.')

@@ -120,51 +120,41 @@ the `GMN-Bot-Startup` task in Task Scheduler, verify its processes have stopped,
 then open the GUI. Restore the backed-up Startup entries if returning permanently
 to login-only startup. Keep copies of QQ, proxy and bot data before migration.
 
-## Visible controls after sign-in
+## Quiet desktop startup after sign-in
 
-Run `tools/windows_desktop.ps1 -Mode Install` once in elevated PowerShell under
-the configured account. It adds an **interactive** logon task, delayed 25 seconds,
-and ensures the existing proxy handoff task is installed. No account password is
-needed and the password-based boot task/credentials are not changed.
+The existing desktop logon task reads these scripts on each sign-in. This update
+does not require re-entering the boot task password or reinstalling the task.
+For initial setup, use `tools/windows_desktop.ps1 -Mode Install` in elevated
+PowerShell under the configured account.
 
-After sign-in, three visible read-only consoles follow bot, NapCat, and
-startup/proxy logs. They automatically switch to new files after a worker restart.
-The existing Clash window is restored; its handoff now launches the GUI visibly.
-The local NapCat management page opens when its configured listener is ready,
-without putting its token into the URL. The activation also hands Python over
-to one fresh desktop instance as described below. QQ is not restarted, and the
-existing proxy handoff remains separate. Log contents stay on this computer.
-If QQ is awaiting authorization, its existing local QR image is also opened so
-the signed-in user can scan and approve it. This is not an automatic login bypass.
+Desktop activation launches one hidden Python instance. Timestamped output and
+error logs are saved as `bot-*.out.log` and `bot-*.err.log` in `logs/startup/`.
+Log consoles and the management browser no longer open automatically.
+Configure native NapCat Desktop with `uiModeOnStartup=tray_only` and
+`closeAction=tray` in its private app settings. The launcher requests a minimized
+window and leaves tray handling to the manager; it never sends a close command.
+Without a desktop manager, a pending QQ authorization QR image may still open
+for manual approval. No automatic login bypass is provided.
 
-Windows cannot move noninteractive boot-session windows into the desktop.
-By default QQ stays in its existing session; Python is restarted in the desktop session.
-If `NapCatDesktopExecutable` is configured, QQ is handed over to the desktop manager
-as described below instead.
-Closing a read-only log view does not stop a worker. The separate active bot
-console controls the desktop wrapper. Signing out returns bot supervision to
-the pre-login boot task.
-Run `tools/windows_desktop.ps1 -Mode Activate` to reopen the views manually.
-The future sign-in/session behavior still needs an actual sign-in acceptance
-check; offline validation does not log out or reboot the computer.
+To view logs manually, run `tools/windows_desktop.ps1 -Mode Monitor -Component bot`
+(or `napcat` / `startup`). Closing this monitor does not stop Python.
+For interactive debugging, run `tools/windows_bot_desktop.ps1 -Mode Run` in
+an elevated PowerShell under the configured account. It performs the same
+single-instance handoff and attaches console input/output. Do not launch an
+additional unmanaged instance.
+
 ## Desktop bot ownership
 
-After sign-in, the elevated desktop task publishes ownership, stops only this
-project's Python bot under the configured account, and starts a fresh instance
-in a visible PowerShell console. QQ and the proxy are not restarted. Python runs
-once with direct console input/output, without a Tee pipeline or automatic
-restart. PowerShell stays open after Python exits. Restart manually with
-`python -u gemini_bot.py` from the project directory. Task credentials are unchanged.
+The hidden launcher holds the ownership mutex until its child exits, with no
+automatic restart watchdog. Identity checks and the single-instance file lock
+remain enabled. The boot supervisor waits until sign-out or reboot; locking
+the screen or closing Python does not release desktop ownership. Markers from
+other accounts or previous boots do not disable startup. Do not delete
+`startup_runtime/bot-instance.lock` while Python is running.
 
-In desktop manual mode, the boot supervisor waits while that account's matching
-Explorer session remains signed in, even after Python or its console exits.
-It resumes after sign-out or reboot; locking the screen keeps manual mode.
-Markers from previous boots or other accounts do not disable startup.
-A process-held file lock in `startup_runtime/bot-instance.lock` rejects
-duplicate manual launches before loading runtime settings or personal data.
-The OS releases the lock on exit, including crashes; do not delete the lock file
-while the bot is running. A restarted boot supervisor is required to activate
-changes to its running PowerShell loop.
+Changes take effect at the next desktop activation/sign-in. Validation does not
+restart live programs. Actual sign-in is needed to verify native tray behavior.
+Task credentials and pre-login startup are unchanged.
 
 ## Desktop receiver and remote support
 
@@ -177,7 +167,7 @@ desktop task orders this handoff. `windows_napcat_desktop.ps1` marks ownership,
 stops only the identified boot receiver, and opens the desktop manager. The boot
 task waits until sign-out, preventing competing QQ receivers. No browser or stale
 standalone QR image is opened when the desktop manager is configured. The Python
-manual-debugging policy remains independent.
+background-launch and manual-debugging modes remain independent.
 
 Sunlogin/AweSun must bypass the proxy by process and domain, including its
 background service before Windows sign-in. `remote_access_policy.py` supplies a

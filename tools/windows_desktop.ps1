@@ -124,7 +124,7 @@ if($Mode -eq 'Install'){
     $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $owner -Settings $settings `
-        -Description 'After sign-in, hand Python ownership to a visible desktop instance and show component logs and management interfaces.' -Force | Out-Null
+        -Description 'After sign-in, hand Python ownership to a hidden desktop instance and use the native receiver tray.' -Force | Out-Null
     Write-Output 'Desktop views installed. The password-based boot task and its credentials were not modified.'
     exit 0
 }
@@ -136,11 +136,6 @@ if($Mode -eq 'Activate'){
     }
     & (Join-Path $PSScriptRoot 'windows_bot_desktop.ps1') -Mode Activate -ConfigPath $ConfigPath
     if($LASTEXITCODE -ne 0){throw 'Desktop bot handoff failed.'}
-    $exe="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    foreach($view in @('bot','napcat','startup')){
-        Start-Process -FilePath $exe -ArgumentList ('-NoLogo -NoProfile -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Mode Monitor -Component '+$view+' -ConfigPath "'+[IO.Path]::GetFullPath($ConfigPath)+'"') -WorkingDirectory $root -WindowStyle Normal
-    }
-    try{Show-ClashWindow}catch{Write-DesktopLog ('Clash window request failed: '+$_.Exception.GetType().Name)}
     $port=6099
     $webConfig=Join-Path $config.NapCatDirectory 'config\webui.json'
     if(Test-Path -LiteralPath $webConfig){
@@ -153,7 +148,6 @@ if($Mode -eq 'Activate'){
         if($ready){break}
         Start-Sleep -Seconds 2
     }
-    if($ready -and -not $config.NapCatDesktopExecutable){Start-Process -FilePath ('http://127.0.0.1:'+ $port) -WindowStyle Normal}
     $connected=@([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
         Where-Object {$_.Port -eq [int]$config.NapCatPort}).Count -gt 0
     $loginCode=Get-LoginCodePath $connected
@@ -161,7 +155,7 @@ if($Mode -eq 'Activate'){
         Start-Process -FilePath $loginCode -WindowStyle Normal
         Write-DesktopLog 'QQ authorization is pending; the existing local QR image was opened for the user.'
     }
-    Write-DesktopLog 'Desktop views opened. Closing a log window does not stop any worker.'
+    Write-DesktopLog 'Desktop activation complete: bot hidden with file logs; receiver uses native tray settings. Log views remain available manually.'
     exit 0
 }
 

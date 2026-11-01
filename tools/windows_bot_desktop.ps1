@@ -1,6 +1,6 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([ValidateSet('Validate','Activate','Run')][string]$Mode='Validate', [string]$ConfigPath='')
+param([ValidateSet('Validate','Activate','Run')][string]$Mode='Validate', [string]$ConfigPath='', [switch]$Background)
 $ErrorActionPreference='Stop'
 if(-not $ConfigPath){$ConfigPath=Join-Path (Split-Path $PSScriptRoot -Parent) 'windows_startup.local.json'}
 $config=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -19,7 +19,7 @@ if($session -eq 0 -or [Security.Principal.WindowsIdentity]::GetCurrent().Name -i
 $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Use the elevated desktop task.'}
 if($Mode -eq 'Activate'){
-    Start-Process powershell.exe -WindowStyle Normal -WorkingDirectory $root -ArgumentList ('-NoExit -NoProfile -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Mode Run -ConfigPath "'+[IO.Path]::GetFullPath($ConfigPath)+'"')
+    Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $root -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSCommandPath+'" -Mode Run -Background -ConfigPath "'+[IO.Path]::GetFullPath($ConfigPath)+'"')
     exit 0
 }
 $mutex=New-Object Threading.Mutex($false,('Global\'+$config.TaskName+'-DesktopBot'))
@@ -50,8 +50,18 @@ try{
     $env:HTTPS_PROXY=$env:HTTP_PROXY;$env:ALL_PROXY=$env:HTTP_PROXY
     $env:NO_PROXY='127.0.0.1,localhost,::1'
     Set-Location -LiteralPath $root
-    $Host.UI.RawUI.WindowTitle='GMN | desktop bot | active instance'
+    if(-not $Background){$Host.UI.RawUI.WindowTitle='GMN | desktop bot | active instance'}
     New-Item -ItemType Directory -Path (Join-Path $root 'logs\startup') -Force | Out-Null
+    if($Background){
+        $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+        $outLog=Join-Path $root ('logs\startup\bot-'+$stamp+'.out.log')
+        $errLog=Join-Path $root ('logs\startup\bot-'+$stamp+'.err.log')
+        # Keep the ownership mutex until the hidden child exits. No restart loop.
+        $child=Start-Process -FilePath $config.PythonExecutable -ArgumentList ('-u "'+$main+'"') `
+            -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+        try{$child.WaitForExit()}finally{$child.Dispose()}
+        exit 0
+    }
     Write-Host 'Desktop manual mode: Python runs once, directly in this terminal.'
     Write-Host 'No desktop restart watchdog. The boot supervisor will wait until sign-out.'
     Write-Host 'After stopping Python, restart here with: python -u gemini_bot.py'
