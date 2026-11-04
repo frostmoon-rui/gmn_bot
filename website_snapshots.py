@@ -111,9 +111,21 @@ def capture(page='home', language='en', theme='dark', browser_path=''):
                     tab.locator('#load-map').click()
                     tab.wait_for_function("() => !document.getElementById('load-map').disabled", timeout=20000)
                     tab.locator('#map-canvas').scroll_into_view_if_needed()
-                # Static viewport capture avoids unbounded long pages and hidden lazy images.
                 stage = 'screenshot'
-                raw = tab.screenshot(type='png', full_page=False, animations='disabled', timeout=10000)
+                width, height = tab.evaluate("""async () => {
+                    const images = [...document.images].filter(img => img.loading === 'lazy');
+                    for (const img of images) img.loading = 'eager';
+                    await Promise.race([
+                        Promise.allSettled(images.map(img => img.decode())),
+                        new Promise(resolve => setTimeout(resolve, 4000))
+                    ]);
+                    const root = document.scrollingElement || document.documentElement;
+                    return [root.scrollWidth, root.scrollHeight];
+                }""")
+                if width * height > 16_000_000 or height > 12_000:
+                    raise SnapshotError('The full page exceeds the screenshot limit',
+                                        code='page-too-large', stage=stage)
+                raw = tab.screenshot(type='png', full_page=True, animations='disabled', timeout=10000)
                 stage = 'image-validation'
                 if len(raw) > 8*1024*1024:
                     raise SnapshotError('Website screenshot exceeded the image size limit', code='image-too-large', stage=stage)

@@ -940,11 +940,12 @@ class Extensions:
                 result = await asyncio.to_thread(capture_website, page, language, theme,
                                                  setting('WEBSITE_BROWSER_PATH', '').strip())
                 segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
-                segments.extend([{'type': 'text', 'data': {'text': 'Live website screenshot: '+result['url']}},
-                                 {'type': 'image', 'data': {'file': 'base64://'+base64.b64encode(result['image']).decode('ascii')}}])
+                segments.append({'type': 'image', 'data': {
+                    'file': 'base64://' + base64.b64encode(result['image']).decode('ascii')}})
                 await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
                     'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
                                'message': segments}}, ensure_ascii=False))
+                await self.send(ws, kind, group, user, 'Open the interactive page:' + '\n' + result['url'])
                 print('[Website screenshot] Completed for the requesting chat only; not added as a sticker.')
             except SnapshotError as error:
                 print('[Website screenshot failed]', str(error))

@@ -69,8 +69,12 @@ class WebsiteCommandTests(unittest.IsolatedAsyncioTestCase):
             await ext.website_job(ws, 'group', 20, 10, 'friends', 'en', 'dark')
         message = json.loads(ws.send.call_args.args[0])
         self.assertEqual(message['params']['group_id'], 20)
-        self.assertEqual([s['type'] for s in message['params']['message']], ['at', 'text', 'image'])
+        self.assertEqual([s['type'] for s in message['params']['message']], ['at', 'image'])
         self.assertEqual(message['params']['message'][-1]['data']['file'], 'base64://'+base64.b64encode(b'example-png').decode())
+
+        ext.send.assert_awaited_once()
+        self.assertEqual(ext.send.call_args.args[1:4], ('group', 20, 10))
+        self.assertTrue(ext.send.call_args.args[-1].endswith('\n' + page_url('friends')))
 
     async def test_failure_does_not_send_stale_image(self):
         ext = self.extension()
@@ -95,6 +99,7 @@ class WebsiteBrowserTests(unittest.TestCase):
         tab = context.new_page.return_value
         tab.goto.return_value = SimpleNamespace(status=status)
         tab.url = page_url('friends', 'en')
+        tab.evaluate.return_value = [1280, 2600]
         tab.screenshot.return_value = stream.getvalue() if raw is None else raw
         runtime = SimpleNamespace(chromium=SimpleNamespace(launch=MagicMock(return_value=browser)))
         manager = MagicMock()
@@ -116,6 +121,17 @@ class WebsiteBrowserTests(unittest.TestCase):
         self.assertEqual(settings['reduced_motion'], 'reduce')
         self.assertNotIn('storage_state', settings)
         self.assertIn('communityReady', tab.wait_for_function.call_args.args[0])
+
+        self.assertTrue(tab.screenshot.call_args.kwargs['full_page'])
+
+    def test_oversized_page_is_rejected_before_rendering(self):
+        module, _, browser, tab = self.browser_fixture()
+        tab.evaluate.return_value = [1280, 18000]
+        with patch.dict('sys.modules', {'playwright.sync_api': module}), self.assertRaises(SnapshotError) as caught:
+            capture('friends', 'en')
+        self.assertEqual(caught.exception.code, 'page-too-large')
+        tab.screenshot.assert_not_called()
+        browser.close.assert_called_once()
 
     def test_missing_page_closes_browser_without_screenshot(self):
         module, _, browser, tab = self.browser_fixture(status=404)
