@@ -1892,7 +1892,8 @@ async def handle_message_event(ws, data):
     extension_reply = await extensions.command(cleaned_msg, ws, msg_type, group_id,
         user_id, is_master, is_whitelist, mentioned=addressed)
     if extension_reply is not None:
-        await extensions.send(ws, msg_type, group_id, user_id, extension_reply)
+        if extension_reply:
+            await extensions.send(ws, msg_type, group_id, user_id, extension_reply)
         return
     cmd_reply = None
 
@@ -2192,22 +2193,10 @@ async def handle_message_event(ws, data):
     is_weather_query = cleaned_msg in {'weather forecast', 'today weather', 'weather', 'weather today', 'check weather', 'weather tomorrow'}
 
     if is_weather_query:
-        target_loc = user_reg.get("location") if user_reg else None
-        if not target_loc or target_loc in ["your area", "unknown", "\u6240\u5728\u5730\u533a", "\u672a\u77e5"]:
-            cmd_reply = "I do not know which city to check yet. Use set location:your actual city to bind it, meow!"
-            target_act = "send_group_msg" if msg_type == "group" else "send_private_msg"
-            target_p = {"group_id": group_id, "message": f"[CQ:at,qq={user_id}] {cmd_reply}"} if msg_type == "group" else {"user_id": user_id, "message": cmd_reply}
-            await ws.send(json.dumps({"action": target_act, "params": target_p}))
-            return
-        else:
-            w_data = await fetch_weather_info(target_loc)
-            if w_data:
-                w_clean = extensions.weather_report(w_data, important=str(user_id) in extensions.important)
-                await extensions.send_weather(ws, msg_type, group_id, user_id, w_clean)
-                return
-
-            await extensions.send(ws, msg_type, group_id, user_id, 'Reliable weather data is temporarily unavailable. Please try again later.')
-            return
+        target = 'tomorrow' if cleaned_msg == 'weather tomorrow' else 'today'
+        if not extensions.start_forecast(ws, msg_type, group_id, user_id, target=target):
+            await extensions.send(ws, msg_type, group_id, user_id, 'That weather lookup is already running or the queue is full, meow.')
+        return
 
     # 4.2 Morning greetings, including the legacy Yuyuko fortune-command shape in English
     is_morning_greet = bool(

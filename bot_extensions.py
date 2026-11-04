@@ -411,10 +411,12 @@ class Extensions:
         from weather_report import format_weather
         return format_weather(data, target, translate=english_provider_text)
 
+    def start_forecast(self, ws, kind, group, user, location='', target='today'):
+        operation = ('weather', kind, group, location.strip(), target)
+        return self.start_user_job(user, operation, self.weather_at(ws, kind, group, user, location, target))
+
     async def send_weather(self, ws, kind, group, user, report):
-        from weather_delivery import render_report, gemini_brief
-        language = getattr(getattr(self.b, 'features', None), 'language', 'en')
-        brief_notice = 'The weather details are in the card, meow. Take care when heading out!'
+        from weather_delivery import render_report
         image_notice = 'The weather card did not render this time. Please ask me again later, meow.'
         async def deliver(segment, mention=False):
             segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' and mention else [])
@@ -430,8 +432,6 @@ class Extensions:
             return
         await deliver({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}}, True)
         print('[Weather image]: Full report sent as one PNG')
-        brief = await gemini_brief(self.b, report, language, fallback_text=brief_notice)
-        await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(brief, user)}})
 
     async def weather_map_job(self, ws, kind, group, user, product):
         from weather_map_delivery import deliver_weather_map
@@ -458,9 +458,9 @@ class Extensions:
         from bot_actions import english_weather_request as weather_request
         weather = weather_request(text)
         if weather is not None:
-            if not self.start_user_job(user, 'weather', self.weather_at(ws, kind, group, user, **weather)):
-                return 'A weather lookup is already running, meow.'
-            return 'I will check the requested place and send a weather card, meow.'
+            if not self.start_forecast(ws, kind, group, user, **weather):
+                return 'That weather lookup is already running or the queue is full, meow.'
+            return ''
         website = re.fullmatch(r'website screenshot(?:\s*:\s*(\S+))?(?:\s+(zh|en|ru|ja))?(?:\s+(dark|light))?', text, re.I)
         if (website or text in {'recommended links', 'friend application'}) and (mentioned or kind == 'private'):
             page = (website[1] or 'home').lower() if website else ('resources' if text == 'recommended links' else 'friends')
@@ -539,9 +539,9 @@ class Extensions:
             await self.b.save_json_data_async('people.json', self.people)
             return 'Got it; I will call you ' + declaration[1].strip() + '.'
         if text == 'weather tomorrow' and (mentioned or kind == 'private'):
-            if not self.start_user_job(user, 'weather', self.tomorrow(ws, kind, group, user)):
-                return 'Your weather query is still running. Please wait.'
-            return 'Checking tomorrow’s weather for your area.'
+            if not self.start_forecast(ws, kind, group, user, target='tomorrow'):
+                return 'That weather lookup is already running or the queue is full, meow.'
+            return ''
         if text == 'my maps' and (mentioned or kind == 'private'):
             if not self.start_user_job(user, 'map', self.amap_job(ws, kind, group, user, 'my maps', '')):
                 return 'Your map query is still running. Please wait.'

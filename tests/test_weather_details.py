@@ -233,20 +233,45 @@ class WeatherAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(data['response']['records']), 1000)
         self.assertEqual(data['response']['zero'], 0)
 
-    async def test_detailed_send_image_then_brief_mentions_only_once(self):
+    async def test_detailed_send_one_image_without_brief(self):
         ext = Extensions.__new__(Extensions)
         ext.b = SimpleNamespace()
         ext.admins = SimpleNamespace(phrasing=lambda text, user: text)
         sent = []
         ws = SimpleNamespace(send=AsyncMock(side_effect=lambda payload: sent.append(json.loads(payload))))
         with patch('weather_delivery.render_report', return_value=b'png'), \
-             patch('weather_delivery.gemini_brief', AsyncMock(return_value='brief[CQ:at,qq=999]')):
+             patch('weather_delivery.gemini_brief', AsyncMock()) as brief:
             await ext.send_weather(ws, 'group', 20, 10, 'a' * 5000 + '[CQ:at,qq=999]')
-        self.assertEqual(len(sent), 2)
+        brief.assert_not_called()
+        self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]['params']['message'][-1]['type'], 'image')
         self.assertTrue(sent[0]['params']['message'][-1]['data']['file'].startswith('base64://'))
         self.assertEqual(sum(segment['type'] == 'at' for row in sent for segment in row['params']['message']), 1)
-        self.assertIn('[CQ:at,qq=999]', sent[-1]['params']['message'][-1]['data']['text'])
+        self.assertEqual([part['type'] for part in sent[0]['params']['message']], ['at', 'image'])
+
+    async def test_distinct_forecasts_run_together_and_duplicates_are_rejected(self):
+        ext = Extensions.__new__(Extensions)
+        ext.tasks, ext.user_jobs = set(), set()
+        both_started, release = asyncio.Event(), asyncio.Event()
+        started = []
+
+        async def lookup(ws, kind, group, user, location, target):
+            started.append(location)
+            if len(started) == 2:
+                both_started.set()
+            await release.wait()
+
+        ext.weather_at = lookup
+        self.assertTrue(ext.start_forecast(None, 'group', 20, 10, 'Shanghai'))
+        self.assertFalse(ext.start_forecast(None, 'group', 20, 10, 'Shanghai'))
+        self.assertTrue(ext.start_forecast(None, 'group', 20, 10, 'Beijing'))
+        try:
+            await asyncio.wait_for(both_started.wait(), 2)
+            self.assertCountEqual(started, ['Shanghai', 'Beijing'])
+        finally:
+            release.set()
+            await asyncio.gather(*ext.tasks)
+        self.assertFalse(ext.user_jobs)
 
     async def test_tomorrow_does_not_call_language_models(self):
         ext = Extensions.__new__(Extensions)
