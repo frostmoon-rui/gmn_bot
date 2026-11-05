@@ -73,6 +73,14 @@ def issued_at(url):
         return None
 
 
+def product_time_usable(product, stamp, now):
+    age = now - stamp
+    # NMC can publish its next ER24 forecast slot several hours before the slot.
+    # Observations still require a timestamp at or before the current time.
+    lead = timedelta(hours=12) if product == 'precipitation_forecast' else timedelta(minutes=10)
+    return -lead <= age <= timedelta(hours=PRODUCTS[product][2])
+
+
 class ProductImages(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -104,8 +112,7 @@ def select_image(html, product, now=None):
     if len(signatures) != 1:
         raise WeatherMapError('ambiguous-product-images')
     now = now or datetime.now(timezone.utc)
-    max_age = timedelta(hours=PRODUCTS[product][2])
-    valid = [(issued_at(url), url) for url in urls if -timedelta(minutes=10) <= now-issued_at(url) <= max_age]
+    valid = [(stamp, url) for url in urls if product_time_usable(product, stamp := issued_at(url), now)]
     if not valid:
         raise WeatherMapError('product-stale-or-future')
     stamp, url = max(valid)
@@ -187,7 +194,7 @@ class WeatherMaps:
             raise WeatherMapError('unknown-product')
         now = time.monotonic()
         cached = self.cache.get(product)
-        if cached and now-cached[0] < 300 and datetime.now(timezone.utc)-cached[1].issued <= timedelta(hours=PRODUCTS[product][2]):
+        if cached and now-cached[0] < 300 and product_time_usable(product, cached[1].issued, datetime.now(timezone.utc)):
             print('[Weather map]: Cache hit', product)
             return cached[1]
         if now < self.failures.get(product, 0):

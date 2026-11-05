@@ -104,6 +104,21 @@ class WeatherMapParsingTests(unittest.TestCase):
                 select_image(html, 'temperature_current', NOW)
         self.assertEqual(select_image('<img src="'+product_url('202610280000')+'">', 'precipitation_30d', NOW)[1].day, 28)
 
+    def test_precipitation_forecast_accepts_advance_publication(self):
+        now = datetime(2026, 11, 5, 3, 3, tzinfo=timezone.utc)
+        url = ('https://image.nmc.cn/product/2026/11/05/STFC/medium/'
+               'SEVP_NMC_STFC_SFER_ER24_ACHN_L88_P9_20261105070002400.JPG')
+        html = f'<img id="imgpath" src="{url}">'
+        self.assertEqual(select_image(html, 'precipitation_forecast', now),
+                         (url, datetime(2026, 11, 5, 7, tzinfo=timezone.utc)))
+        for product, query_time in (
+            ('precipitation_current', now),
+            ('precipitation_forecast', datetime(2026, 11, 4, 18, tzinfo=timezone.utc)),
+            ('precipitation_forecast', datetime(2026, 11, 6, 8, tzinfo=timezone.utc)),
+        ):
+            with self.assertRaisesRegex(WeatherMapError, 'product-stale-or-future'):
+                select_image(html, product, query_time)
+
     def test_only_fixed_https_origins_and_safe_redirects_are_accepted(self):
         self.assertTrue(allowed_url(product_url(), True))
         self.assertTrue(allowed_url('https://www.nmc.cn'+PRODUCTS['temperature_current'][0]))
