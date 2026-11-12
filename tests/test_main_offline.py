@@ -52,6 +52,7 @@ def handler_environment():
     scope['load_json_data'] = lambda name, default: copy.deepcopy(default)
     scope['is_superadmin'] = lambda user: int(user) == scope['MASTER_QQ']
     scope['start_food_map'] = lambda root: None
+    scope['setting'] = lambda name, default='': default
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), 'exec'), scope)
     scope['features'] = Features(SimpleNamespace(**scope))
     return scope
