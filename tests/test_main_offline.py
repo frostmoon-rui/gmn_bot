@@ -81,6 +81,27 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sent, [{'text': 'Good evening, meow!'}])
         self.scope['fetch_weather_info'].assert_not_awaited()
 
+    async def test_gemini_greeting_uses_clock_instead_of_message_period(self):
+        self.scope['datetime'] = Mock()
+        self.scope['datetime'].now.side_effect = lambda tz: datetime(2026, 11, 12, 21, tzinfo=tz)
+        generate = AsyncMock(return_value=SimpleNamespace(text='Good evening! How was your day?'))
+        self.scope['client'] = SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate)))
+        self.scope['gemini_content_config'] = dict
+        await self.scope['handle_message_event'](self.ws, self.event('good morning', True))
+        self.assertEqual(self.sent, [{'text': 'Good evening! How was your day?'}])
+        self.assertIn('21:00', generate.call_args.kwargs['contents'])
+        self.assertIn('evening', generate.call_args.kwargs['contents'])
+
+    async def test_sleep_and_wake_updates_are_group_scoped(self):
+        await self.scope['handle_message_event'](self.ws, self.event("I'm going to sleep", True))
+        self.assertIn((20, 10), self.scope['features'].sleep_records)
+        other = self.event("I'm awake", True)
+        other['group_id'] = 21
+        await self.scope['handle_message_event'](self.ws, other)
+        self.assertIn((20, 10), self.scope['features'].sleep_records)
+        await self.scope['handle_message_event'](self.ws, self.event("I'm awake", True))
+        self.assertEqual(self.scope['features'].sleep_records, {})
+
     async def test_model_action_calls_weather_instead_of_sending_json(self):
         self.scope['extensions'].weather_at = AsyncMock()
         self.scope['call_gemini_with_history'] = AsyncMock(return_value='[BOT_ACTION: {"tool":"weather","args":{"location":"Madagascar"}}]')
@@ -249,8 +270,21 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.args[0] for call in calls], ['group_20', 'group_21'])
         self.assertTrue(all(call.kwargs['is_random'] for call in calls))
         self.assertEqual(len(self.sent),2)
-        self.assertTrue(all(30 < len(message['text']) <= 120 for message in self.sent))
-        self.assertTrue(all(message['text'].endswith(('。','.')) for message in self.sent))
+        self.assertTrue(all(1 <= len(message['text']) <= 10 for message in self.sent))
+        self.assertTrue(all('[SPLIT]' not in message['text'] for message in self.sent))
+
+    async def test_real_mention_of_someone_else_overrides_text_alias(self):
+        call = self.scope['call_gemini_with_history'] = AsyncMock()
+        self.scope['group_trigger_targets'][20] = 1
+        event = self.event('')
+        event['message'] = [
+            {'type': 'at', 'data': {'name': 'Member', 'qq': '11'}},
+            {'type': 'text', 'data': {'text': '@Lucky Cat good morning'}},
+        ]
+        await self.scope['handle_message_event'](self.ws, event)
+        self.assertEqual(self.sent, [])
+        call.assert_not_awaited()
+
 
     async def test_repeater_main_flow_and_no_bot_self_loop(self):
         for user in (10, 11, 12, 999):

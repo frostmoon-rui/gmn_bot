@@ -21,6 +21,18 @@ def prepare_passive_reply(text, limit=120):
     return text[:limit].rstrip()+'…'
 
 
+def compact_interjection(text, limit, fallback):
+    """Produce a single plain reaction with a strict character budget."""
+    text = prepare_passive_reply(text).split('[SPLIT]', 1)[0].splitlines()
+    line = text[0].strip() if text else ''
+    if not line:
+        return ''
+    if len(line) <= limit and '@' not in line:
+        return line
+    first = re.split(r'[。！？!?;；.]', line, maxsplit=1)[0].strip()
+    return first if 0 < len(first) <= limit and '@' not in first else fallback
+
+
 def generation_hit_limit(response):
     candidates=getattr(response,'candidates',None) or []
     reason=getattr(candidates[0],'finish_reason',None) if candidates else None

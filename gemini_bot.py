@@ -1680,7 +1680,10 @@ def quick_reply(ws, data):
     user = data.get('user_id')
     if user in BLACKLIST_QQ or user == data.get('self_id'):
         return False
+    from bot_features import mention_targets
     raw, text, mentioned = event_text(data)
+    if data.get('message_type') == 'group' and not mentioned and (mention_targets(raw) or text.startswith('@')):
+        return False
     reply = re.search(r'\[CQ:reply,id=(-?\d+)\]', raw)
     quoted = msg_cache.get(int(reply[1]), {}) if reply else {}
     replied_to_me = bool(reply and reply_belongs_to(quoted, data) and quoted.get('user_id') == data.get('self_id'))
@@ -1788,18 +1791,20 @@ async def handle_message_event(ws, data):
                 except Exception as error:
                     print('[Reference fetch failed]:', type(error).__name__)
 
-    at_others = [int(q) for q in re.findall(r"\[CQ:at,qq=(\d+)\]", raw_msg) if int(q) != self_id]
-    is_at_other = len(at_others) > 0 and not is_at_me
-
-    is_reply_to_me = bool(reply_info and reply_info["user_id"] == self_id)
-    is_reply_to_other = bool(reply_info and reply_info["user_id"] != self_id)
-
-    is_talking_to_other = is_at_other or is_reply_to_other
-    is_talking_to_me = is_at_me or is_reply_to_me
-    addressed = msg_type == 'private' or is_talking_to_me or bool(re.match(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', cleaned_msg))
+    from bot_features import mention_targets
+    targets = mention_targets(raw_msg)
+    at_others = [int(qq) for qq in targets if qq.isdigit() and qq != str(self_id)]
+    directed_elsewhere = bool(targets or cleaned_msg.startswith('@')) and not is_at_me
+    is_reply_to_me = bool(reply_info and str(reply_info.get("user_id")) == str(self_id))
+    is_reply_to_other = bool(reply_info and not is_reply_to_me)
+    is_talking_to_other = not is_at_me and (directed_elsewhere or is_reply_to_other)
+    is_talking_to_me = is_at_me or (is_reply_to_me and not directed_elsewhere)
+    addressed = msg_type == 'private' or is_talking_to_me or (not is_talking_to_other and bool(re.match(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', cleaned_msg)))
     if addressed:
         cleaned_msg = re.sub(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', '', cleaned_msg).strip()
         is_talking_to_me = True
+    if msg_type == 'group' and directed_elsewhere and not re.match(r'^set location(?:[:\s]|$)', cleaned_msg, re.I):
+        return
     if 'videos' in globals():
         videos.observe(data)
         video_reply = await videos.command(data, cleaned_msg, addressed, ws)
@@ -2214,6 +2219,11 @@ async def handle_message_event(ws, data):
     else:
         greeting = morning_greeting = daily_weather = False
 
+    if greeting:
+        from time_interactions import model_greeting
+        greeting_reply = await model_greeting(globals().get('client'), globals().get('gemini_content_config'),
+                                     AVAILABLE_CHAT_MODELS, now, period, 'en', greeting_reply)
+
     if user_reg and (daily_weather or (morning_greeting and period == 1)):
         group_key = str(group_id)
         last_greets = user_reg.get("last_greet_by_group")
@@ -2239,6 +2249,8 @@ async def handle_message_event(ws, data):
 
                 if w_data:
                     m_clean = extensions.weather_report(w_data, target='morning', important=str(user_id) in extensions.important)
+                    if greeting:
+                        await extensions.send(ws, msg_type, group_id, user_id, greeting_reply)
                     await extensions.send_weather(ws, msg_type, group_id, user_id, m_clean)
 
                     # Record and save today's greeting only after successful delivery so failed attempts can retry.
@@ -2246,6 +2258,16 @@ async def handle_message_event(ws, data):
                     user_reg["last_greet_date"] = today_str
                     save_json_data(REGIONS_FILE, regions_data)
                     return
+
+    if msg_type == 'group' and not is_talking_to_other:
+        from time_interactions import sleep_update
+        sleep_messages = ('Got it. Sleep well, meow.', 'Got it. You are awake, meow.', '{count} members said they were going to sleep.')
+        for index, pattern in enumerate((r"(?:i(?:'m| am) going to (?:sleep|bed)|i'm off to bed)", r"(?:i(?:'m| am) awake|i just woke up)", r"(?:who is asleep|sleep count)")):
+            if re.fullmatch(pattern, cleaned_msg.rstrip('。！.!~～'), re.I):
+                count = sleep_update(features, group_id, user_id, index, now.timestamp())
+                if addressed:
+                    await extensions.send(ws, msg_type, group_id, user_id, sleep_messages[index].format(count=count))
+                return
 
     if greeting or daily_weather:
         reply = greeting_reply if greeting else 'Weather is unavailable, meow. Use set location:city to bind your area.'
@@ -2349,7 +2371,8 @@ async def handle_message_event(ws, data):
             return
 
     # 6. Bubble counts: 60% one, 30% two, 10% three
-    target_splits = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
+    passive_limit = random.choices([1, 5, 10], weights=[15, 50, 35])[0] if is_random_chime else 0
+    target_splits = 1 if is_random_chime else random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     if target_splits == 1:
         split_instruct = "Use one casual sentence without any [SPLIT] marker."
     elif target_splits == 2:
@@ -2375,7 +2398,7 @@ async def handle_message_event(ws, data):
         unread_stream = "\n".join(group_unread_buffers[group_id][-20:])
         group_unread_buffers[group_id].clear()
         if is_random_chime:
-            context_prompt = f"[Unread group messages]:\n{unread_stream}\n\n(You are making a passive interjection, not answering a direct request. Use one or two short complete sentences to react casually; do not force a bubble count, initiate intimate invitations or answer technical questions. Finish the sentence rather than leaving it cut off. {split_instruct})"
+            context_prompt = f"Group context:\n{unread_stream}\nReact briefly as a bystander. Use at most {passive_limit} characters in a single reply, without mentions or answers."
         elif is_talking_to_me:
             context_prompt = f"[Unread group messages]:\n{unread_stream}\n\n({identity_tag} is addressing you: {formatted_current}. {image_notice}For casual chat: {split_instruct} Explain academic concepts briefly and accurately; if evidence is needed, return only a SEARCH_REQUEST plan. Provide complete code as requested. Reply in English even when the messages use another language.)"
         else:
@@ -2413,8 +2436,8 @@ async def handle_message_event(ws, data):
 
     # 7. Process and remove hidden background tags
     if is_random_chime:
-        from chat_style import prepare_passive_reply
-        reply_clean = prepare_passive_reply(reply_raw)
+        from chat_style import compact_interjection
+        reply_clean = compact_interjection(reply_raw, passive_limit, '…' if passive_limit == 1 else 'Heh!')
         if len(reply_clean)<len(reply_raw):
             print('[Passive reply formatting]:', len(reply_raw), '->', len(reply_clean), 'characters; prefer complete sentences')
     else:
@@ -2425,7 +2448,7 @@ async def handle_message_event(ws, data):
     # Add an optional sticker reply.
     emoji_bonus = ""
     emoji_probability = sticker_reply_probability(cleaned_msg, reply_clean, bool(sticker_img_segments), is_random_chime)
-    if not image_requested and emoji_probability > 0 and stolen_emojis and random.random() < emoji_probability:
+    if not is_random_chime and not image_requested and emoji_probability > 0 and stolen_emojis and random.random() < emoji_probability:
         emoji_bonus = await build_stolen_emoji_cq()
 
     if emoji_bonus:

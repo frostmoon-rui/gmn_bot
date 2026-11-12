@@ -181,14 +181,27 @@ def message_text(data):
     return str(data.get('raw_message') or message or '').strip()
 
 
+def mention_targets(raw):
+    """Read actual OneBot at segments, including segments with extra attributes."""
+    targets = []
+    for match in re.finditer(r"\[CQ:at,([^\]]+)\]", raw):
+        qq = re.search(r"(?:^|,)qq=(\d+|all)(?:,|$)", match[1])
+        if qq and qq[1] not in targets:
+            targets.append(qq[1])
+    return targets
+
+
 def event_text(data):
     raw = message_text(data)
     cleaned = html.unescape(re.sub(r'\[CQ:[^\]]+\]', '', raw))
     cleaned = re.sub(r'[\u200b-\u200f\ufeff]', '', cleaned).strip()
-    # Do not strip arbitrary member names or treat mentions of others as addressing the bot.
-    cleaned = re.sub(r'^@(?:Lucky Cat|Lucky|Yuyuko)(?:\s|/)+', '', cleaned).strip()
-    mentioned = bool(re.search(r'\[CQ:at,qq=' + re.escape(str(data.get('self_id'))) + r'(?:,|\])', raw))
-    mentioned = mentioned or bool(re.match(r'^@(?:Lucky Cat|Lucky|Yuyuko)(?:\s|/|$)', raw))
+    targets = mention_targets(raw)
+    mentioned = str(data.get('self_id')) in targets
+    if mentioned or not targets:
+        alias = re.match(r'^@(?:Lucky Cat|Lucky|Yuyuko)(?:[\s/,:]+|$)', cleaned, re.I)
+        if alias:
+            cleaned = cleaned[alias.end():].strip()
+            mentioned = True
     return raw, cleaned, mentioned
 
 
