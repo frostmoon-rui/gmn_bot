@@ -261,13 +261,22 @@ try {
             }
         }
         $napReady = Test-Listening $config.NapCatPort
-        if ($proxyReady -and -not $napReady -and -not (Test-DesktopNapCatControl) -and ($now - $lastNapCat).TotalSeconds -ge 60) {
-            if (@(Find-SessionComponent $nativeLauncher ([string]$config.BotAccount)).Count -eq 0) {
-                # Existing QQ may be starting or require a QR login. Never inject a second copy.
-                if (@(Find-SessionComponent $config.QQExecutable).Count -eq 0) {
-                    $null = Start-Component 'napcat' $nativeLauncher @($config.QQExecutable,$env:NAPCAT_INJECT_PATH,[string]$config.BotAccount) $config.NapCatDirectory
-                    $lastNapCat = $now
+        if ($proxyReady -and -not $napReady -and ($now - $lastNapCat).TotalSeconds -ge 60) {
+            $receiverMutex=New-Object Threading.Mutex($false,('Global\'+$config.TaskName+'-DesktopReceiver'))
+            $receiverLocked=$false
+            try {
+                try {$receiverLocked=$receiverMutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$receiverLocked=$true}
+                if ($receiverLocked -and -not (Test-DesktopNapCatControl) -and -not (Test-Listening $config.NapCatPort)) {
+                    # Existing QQ may be starting or waiting for QR authorization.
+                    if (@(Find-SessionComponent $nativeLauncher ([string]$config.BotAccount)).Count -eq 0 -and
+                        @(Find-SessionComponent $config.QQExecutable).Count -eq 0) {
+                        $null = Start-Component 'napcat' $nativeLauncher @($config.QQExecutable,$env:NAPCAT_INJECT_PATH,[string]$config.BotAccount) $config.NapCatDirectory
+                        $lastNapCat = $now
+                    }
                 }
+            } finally {
+                if ($receiverLocked) {$receiverMutex.ReleaseMutex()}
+                $receiverMutex.Dispose()
             }
         }
         if ($proxyReady -and $napReady -and -not (Test-DesktopBotControl) -and ($now - $lastBot).TotalSeconds -ge 60) {

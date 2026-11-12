@@ -17,6 +17,7 @@ if(-not $config.NapCatDesktopExecutable -or -not (Test-Path -LiteralPath $config
 }
 $mutex=New-Object Threading.Mutex($false,('Global\'+$config.TaskName+'-DesktopReceiver'))
 $locked=$false
+$published=$false
 try{
     try{$locked=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$locked=$true}
     if(-not $locked){exit 0}
@@ -26,37 +27,49 @@ try{
     @{Owner=$config.UserName;SessionId=$session;BootKey=$bootKey} | ConvertTo-Json |
         Set-Content -LiteralPath $temporary -Encoding UTF8
     Move-Item -LiteralPath $temporary -Destination $marker -Force
-    $listener=Get-NetTCPConnection -LocalPort $config.NapCatPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if($listener){
-        $server=Get-CimInstance Win32_Process -Filter ('ProcessId='+$listener.OwningProcess)
-        $owner=Invoke-CimMethod -InputObject $server -MethodName GetOwner
-        if($server.ExecutablePath -ine $config.QQExecutable -or ($owner.Domain+'\'+$owner.User) -ine $config.UserName){throw 'Receiver identity mismatch.'}
-        if($server.SessionId -ne $session){
-            $processes=@(Get-CimInstance Win32_Process)
-            $launcherPath=Join-Path $config.NapCatDirectory 'NapCatWinBootMain.exe'
-            $launchers=@($processes | Where-Object {
-                $_.SessionId -eq $server.SessionId -and $_.ExecutablePath -ieq $launcherPath -and
-                $_.CommandLine -and $_.CommandLine.Contains([string]$config.BotAccount)
-            })
-            if($launchers.Count -ne 1){throw 'Expected one boot receiver launcher.'}
-            $targets=@($launchers[0].ProcessId)
-            do{
-                $count=$targets.Count
-                foreach($item in $processes){
-                    if($item.ParentProcessId -in $targets -and $item.ProcessId -notin $targets -and $item.ExecutablePath -ieq $config.QQExecutable){
-                        $owner=Invoke-CimMethod -InputObject $item -MethodName GetOwner
-                        if(($owner.Domain+'\'+$owner.User) -ine $config.UserName){throw 'Receiver child owner mismatch.'}
-                        $targets+=$item.ProcessId
-                    }
+    $published=$true
+    # A boot receiver may still be logging in and have no listening socket.
+    $processes=@(Get-CimInstance Win32_Process -Filter "SessionId=0")
+    $launcherPath=Join-Path $config.NapCatDirectory 'NapCatWinBootMain.exe'
+    $accountPattern='(?<!\d)'+[regex]::Escape([string]$config.BotAccount)+'(?!\d)'
+    $launchers=@($processes | Where-Object {
+        $_.ExecutablePath -ieq $launcherPath -and $_.CommandLine -match $accountPattern
+    })
+    $targets=@($launchers | ForEach-Object ProcessId)
+    do{
+        $count=$targets.Count
+        $targets+=@($processes | Where-Object {
+            $_.ParentProcessId -in $targets -and $_.ProcessId -notin $targets -and
+            $_.ExecutablePath -ieq $config.QQExecutable
+        } | ForEach-Object ProcessId)
+    }while($targets.Count -gt $count)
+
+    foreach($item in $processes | Where-Object {$_.ProcessId -in $targets}){
+        $owner=Invoke-CimMethod -InputObject $item -MethodName GetOwner
+        if(($owner.Domain+'\'+$owner.User) -ine $config.UserName){throw 'Boot receiver owner mismatch.'}
+    }
+    foreach($targetId in $targets){
+        $process=Get-Process -Id $targetId -ErrorAction SilentlyContinue
+        if($process){
+            try{
+                $null=$process.Handle
+                if(-not $process.HasExited){
+                    Stop-Process -InputObject $process -ErrorAction Stop
+                    if(-not $process.WaitForExit(5000)){throw 'Boot receiver did not exit.'}
                 }
-            }while($targets.Count -gt $count)
-            if($server.ProcessId -notin $targets){throw 'Receiver is outside the configured launcher tree.'}
-            foreach($targetId in $targets){Stop-Process -Id $targetId -ErrorAction SilentlyContinue}
-            for($attempt=0;$attempt -lt 20;$attempt++){
-                if(-not (Get-NetTCPConnection -LocalPort $config.NapCatPort -State Listen -ErrorAction SilentlyContinue)){break}
-                Start-Sleep -Milliseconds 250
-            }
+            }catch [InvalidOperationException]{
+                if(-not $process.HasExited){throw}
+            }finally{$process.Dispose()}
         }
+    }
+
+    foreach($listener in @(Get-NetTCPConnection -LocalPort $config.NapCatPort -State Listen -ErrorAction SilentlyContinue)){
+        $server=Get-CimInstance Win32_Process -Filter ('ProcessId='+$listener.OwningProcess)
+        if(-not $server -or $server.SessionId -ne $session -or $server.ExecutablePath -ine $config.QQExecutable){
+            throw 'OneBot port is still owned by another process; desktop receiver was not started.'
+        }
+        $owner=Invoke-CimMethod -InputObject $server -MethodName GetOwner
+        if(($owner.Domain+'\'+$owner.User) -ine $config.UserName){throw 'Receiver identity mismatch.'}
     }
     # Native uiModeOnStartup=tray_only controls the tray; do not close the manager.
     Start-Process -FilePath $config.NapCatDesktopExecutable -WindowStyle Minimized
@@ -64,7 +77,7 @@ try{
     Add-Content -LiteralPath (Join-Path $root 'logs\startup\desktop-views.log') -Encoding UTF8 `
         -Value ((Get-Date).ToString('o')+' Desktop manager owns the QQ receiver; boot recovery waits until sign-out.')
 }catch{
-    if($marker -and (Test-Path -LiteralPath $marker)){Remove-Item -LiteralPath $marker -Force}
+    if($published -and (Test-Path -LiteralPath $marker)){Remove-Item -LiteralPath $marker -Force}
     throw
 }finally{
     if($locked){$mutex.ReleaseMutex()};$mutex.Dispose()

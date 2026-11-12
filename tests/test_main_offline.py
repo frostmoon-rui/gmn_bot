@@ -72,6 +72,15 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline
 
+    async def test_morning_greeting_at_night_replies_without_weather(self):
+        self.scope['datetime'] = Mock()
+        self.scope['datetime'].now.side_effect = lambda tz: datetime(2026, 11, 12, 21, tzinfo=tz)
+        self.scope['regions_data']['10'] = {'location': 'Test City'}
+        self.scope['fetch_weather_info'] = AsyncMock()
+        await self.scope['handle_message_event'](self.ws, self.event('good morning', True))
+        self.assertEqual(self.sent, [{'text': 'Good evening, meow!'}])
+        self.scope['fetch_weather_info'].assert_not_awaited()
+
     async def test_model_action_calls_weather_instead_of_sending_json(self):
         self.scope['extensions'].weather_at = AsyncMock()
         self.scope['call_gemini_with_history'] = AsyncMock(return_value='[BOT_ACTION: {"tool":"weather","args":{"location":"Madagascar"}}]')

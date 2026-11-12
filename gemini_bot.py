@@ -2186,7 +2186,6 @@ async def handle_message_event(ws, data):
         return
 
     # 4. Weather requests and morning greetings
-    today_str = datetime.now().strftime("%Y-%m-%d")
     user_reg = regions_data.get(str(user_id))
 
     # 4.1 Explicit weather requests
@@ -2198,17 +2197,24 @@ async def handle_message_event(ws, data):
             await extensions.send(ws, msg_type, group_id, user_id, 'That weather lookup is already running or the queue is full, meow.')
         return
 
-    # 4.2 Morning greetings, including the legacy Yuyuko fortune-command shape in English
-    is_morning_greet = bool(
-        re.search(r"^(?:(?:everyone|all|friends|group)[,\s]*)?good morning[!~\s]*$", cleaned_msg, re.I) or
-        re.search(r"^(?:morning|good morning|morning kitty|morning Lucky)[!~\s]*$", cleaned_msg, re.I) or
-        re.search(r"^(?:/)?(?:daily piggy|daily fortune)[!~\s]*$", cleaned_msg, re.I) or
-        re.search(r"(?:^|[\s/])(?:daily piggy|daily fortune)", raw_msg, re.I) or
-        re.search(r"\(?@?Yuyuko/?\)?[\s/]*(?:daily piggy|daily fortune|good morning|morning)", raw_msg, re.I)
-    )
+    # Use one clock for greetings, date/time queries, and the daily weather record.
+    from datetime import timedelta, timezone
+    now = datetime.now(timezone(timedelta(hours=8)))
+    today_str = now.date().isoformat()
+    morning_greeting = bool(re.fullmatch(r"(?:(?:everyone|all|friends|group)[,\s]*)?(?:good morning|morning(?: kitty| lucky)?)[!~\s]*", cleaned_msg, re.I))
+    greeting = morning_greeting or bool(re.fullmatch(r"(?:hello|hi|hey|good afternoon|good evening|good night)[!.~\s]*", cleaned_msg, re.I))
+    daily_weather = bool(re.fullmatch(r"(?:/|@?Yuyuko/?\s*)?(?:daily piggy|daily fortune)[!~\s]*", cleaned_msg, re.I))
+    if not is_talking_to_other or addressed:
+        if re.fullmatch(r"(?:what time is it|current time|what is today.s date|what day is it)[?.!\s]*", cleaned_msg, re.I):
+            await extensions.send(ws, msg_type, group_id, user_id, f'Beijing time (UTC+8): {now:%A, %Y-%m-%d %H:%M}.')
+            return
+        hour = now.hour
+        period = 0 if hour < 5 or hour >= 23 else 1 if hour < 11 else 2 if hour < 13 else 3 if hour < 18 else 4
+        greeting_reply = ('It is late. Rest well, meow.', 'Good morning, meow!', 'Hello, meow! Enjoy your lunch.', 'Good afternoon, meow!', 'Good evening, meow!')[period]
+    else:
+        greeting = morning_greeting = daily_weather = False
 
-    if is_morning_greet and user_reg:
-        # Greet the same person and report weather independently in each group on the same day.
+    if user_reg and (daily_weather or (morning_greeting and period == 1)):
         group_key = str(group_id)
         last_greets = user_reg.get("last_greet_by_group")
         if not isinstance(last_greets, dict):
@@ -2225,17 +2231,7 @@ async def handle_message_event(ws, data):
         if user_reg.get("last_greet_date") != today_str:
             user_reg["last_greet_date"] = ""
 
-        if last_greets.get(group_key) == today_str:
-            greet_reply = f"Morning [CQ:at,qq={user_id}]" if msg_type == "group" else "Morning!"
-            print(f"[Already greeted in this group today; short greeting]: {cleaned_msg}")
-            target_act = "send_group_msg" if msg_type == "group" else "send_private_msg"
-            target_p = {"group_id": group_id, "message": greet_reply} if msg_type == "group" else {"user_id": user_id, "message": greet_reply}
-            await ws.send(json.dumps({
-                "action": target_act,
-                "params": target_p
-            }))
-            return
-        else:
+        if last_greets.get(group_key) != today_str or daily_weather:
             loc = user_reg.get("location", "")
             if loc and loc not in ["your area", "unknown", "\u6240\u5728\u5730\u533a", "\u672a\u77e5"]:
                 # Prefer fresh weather; use the latest cache only if retrieval fails.
@@ -2250,6 +2246,11 @@ async def handle_message_event(ws, data):
                     user_reg["last_greet_date"] = today_str
                     save_json_data(REGIONS_FILE, regions_data)
                     return
+
+    if greeting or daily_weather:
+        reply = greeting_reply if greeting else 'Weather is unavailable, meow. Use set location:city to bind your area.'
+        await extensions.send(ws, msg_type, group_id, user_id, reply)
+        return
 
     # 5. Filter and trigger group messages
     hit_keyword = False
