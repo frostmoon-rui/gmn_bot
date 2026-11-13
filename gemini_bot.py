@@ -118,7 +118,8 @@ EARTHQUAKE_FILE = "notified_earthquakes.json" # Persisted earthquake notificatio
 STOLEN_EMOJIS_FILE = "stolen_emojis.json" # Collected sticker library
 MODEL_MODE_FILE = "model_mode.json"       # Current conversation backend
 
-DEFAULT_TRIGGERS = ["kitty", "cat", "kitten", "this cat", "little cat", "catboy", "silly cat", "clumsy cat", "meow", "Lucky Cat"]
+DEFAULT_TRIGGERS = ["Lucky Cat", "Lucky"]
+GENERIC_TRIGGERS = {"kitty", "cat", "kitten", "this cat", "little cat", "catboy", "silly cat", "clumsy cat", "meow"}
 
 DEFAULT_PORTRAITS = {
     "Lucky Cat": {
@@ -1726,6 +1727,21 @@ def quick_reply(ws, data):
     return True
 
 
+def is_meow_only(text):
+    return bool(re.fullmatch(r'(?:[\u55b5\u54aa]+|(?:meow|mew|nya)(?:[\s,\uff0c~\uff5e]*(?:meow|mew|nya))*)[\s!\uff01?\uff1f\u3002\u2026~\uff5e]*', text.strip(), re.I))
+
+
+def is_callable_trigger(word):
+    return bool(word.strip()) and word.casefold() not in GENERIC_TRIGGERS and not is_meow_only(word)
+
+
+def matches_trigger(text, words):
+    return any(
+        re.match(re.escape(word) + r'(?=$|[\s,\uff0c:\uff1a!\uff01?\uff1f\u3002~\uff5e])', text, re.I)
+        for word in words if is_callable_trigger(word)
+    )
+
+
 async def handle_message_event(ws, data):
     if data.get("post_type") == "notice":
         await handle_group_notice_async(ws, data)
@@ -1836,8 +1852,10 @@ async def handle_message_event(ws, data):
         await extensions.send(ws, msg_type, group_id, user_id, feature_reply)
         return
     # Quiet groups require direct requests; retain admin/naming commands and configured trigger words.
+    hit_keyword = not is_talking_to_other and matches_trigger(cleaned_msg, ACTIVE_TRIGGERS)
+    meow_only = is_meow_only(cleaned_msg)
     explicit_command = bool(re.match(r'^(?:Lucky|ask assistant[:：]|web search[:：]|search report[:：]|set location[:：\s]|important allowlist|allowlist|blocklist|notebook[:：])', cleaned_msg))
-    if msg_type == 'group' and not features.active(group_id) and not addressed and not explicit_command and not any(kw in cleaned_msg for kw in ACTIVE_TRIGGERS):
+    if msg_type == 'group' and not features.active(group_id) and not addressed and not explicit_command and not hit_keyword:
         # Passive sticker collection remains available, but ordinary photos are not analyzed.
         segments = extract_image_segments(raw_msg)
         if segments:
@@ -1864,7 +1882,7 @@ async def handle_message_event(ws, data):
     # 1. Repeat per group, independently of random interjection cooldown; record only successful sends.
     if msg_type == "group":
         if features.observe_repeat(group_id, user_id, cleaned_msg,
-                directed=is_talking_to_me or is_talking_to_other or bool(re.search(r'\[CQ:', raw_msg))):
+                directed=hit_keyword or meow_only or is_talking_to_me or is_talking_to_other or bool(re.search(r'\[CQ:', raw_msg))):
             print(f"[Member repeat] Echo -> {cleaned_msg}")
             await ws.send(json.dumps({
                 "action": "send_group_msg",
@@ -2113,15 +2131,18 @@ async def handle_message_event(ws, data):
 
     # Trigger-word management
     elif cleaned_msg == "show triggers":
-        cmd_reply = "🐾 Active trigger words:\n" + ", ".join(sorted(ACTIVE_TRIGGERS))
+        cmd_reply = "🐾 Active trigger words:\n" + ", ".join(sorted(word for word in ACTIVE_TRIGGERS if is_callable_trigger(word)))
 
     elif re.search(r"^(?:add trigger|remember keyword|call you)\s*[:：]?\s*(.+)$", cleaned_msg):
         m = re.search(r"^(?:add trigger|remember keyword|call you)\s*[:：]?\s*(.+)$", cleaned_msg)
         if is_whitelist:
             new_word = m.group(1).strip()
-            ACTIVE_TRIGGERS.add(new_word)
-            save_json_data(TRIGGER_FILE, ACTIVE_TRIGGERS)
-            cmd_reply = f"Got it! Call me [{new_word}] and I will come out! (ฅ>ω<*ฅ)"
+            if not is_callable_trigger(new_word):
+                cmd_reply = "Choose a distinct nickname. Generic cat words and meows do not trigger replies."
+            else:
+                ACTIVE_TRIGGERS.add(new_word)
+                save_json_data(TRIGGER_FILE, ACTIVE_TRIGGERS)
+                cmd_reply = f"Got it! Call me [{new_word}] and I will come out! (ฅ>ω<*ฅ)"
         else:
             cmd_reply = "You do not have permission to add trigger words, meow!"
 
@@ -2292,10 +2313,6 @@ async def handle_message_event(ws, data):
         return
 
     # 5. Filter and trigger group messages
-    hit_keyword = False
-    if not is_talking_to_other:
-        hit_keyword = any(kw in cleaned_msg for kw in ACTIVE_TRIGGERS)
-
     has_explicit_notebook = bool(re.fullmatch(r'notebook\s*[:：]\s*\S.*', cleaned_msg, re.S)) and (is_whitelist or addressed)
     is_random_chime = False
 
@@ -2379,7 +2396,7 @@ async def handle_message_event(ws, data):
         if group_id not in group_trigger_targets:
             group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
 
-        if not will_trigger and not is_talking_to_other and group_msg_counters[group_id] >= group_trigger_targets[group_id] and features.allow_passive(group_id, 'random', consume=False):
+        if not will_trigger and not meow_only and not is_talking_to_other and group_msg_counters[group_id] >= group_trigger_targets[group_id] and features.allow_passive(group_id, 'random', consume=False):
             is_random_chime = True
             group_msg_counters[group_id] = 0
             group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)

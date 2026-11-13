@@ -27,7 +27,7 @@ from sticker_store import sticker_reply_probability
 
 def handler_environment():
     source = Path(__file__).resolve().parents[1] / 'gemini_bot.py'
-    wanted = {'handle_message_event', 'quick_reply', 'strip_zero_width_chars', 'extract_image_segments',
+    wanted = {'is_meow_only', 'is_callable_trigger', 'matches_trigger', 'handle_message_event', 'quick_reply', 'strip_zero_width_chars', 'extract_image_segments',
               'is_sticker_image', 'image_mime', 'send_multiline_messages', 'claude_model_score', 'main',
               'build_system_prompt', 'get_current_time_str', 'model_system_prompt', 'portrait_reference',
               'clean_and_process_tags', 'extract_province_keyword'}
@@ -54,6 +54,9 @@ def handler_environment():
     scope['start_food_map'] = lambda root: None
     scope['setting'] = lambda name, default='': default
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), 'exec'), scope)
+    defaults = next(node for node in tree.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'GENERIC_TRIGGERS' for target in node.targets))
+    scope['GENERIC_TRIGGERS'] = ast.literal_eval(defaults.value)
     scope['features'] = Features(SimpleNamespace(**scope))
     return scope
 
@@ -311,6 +314,27 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sent, [])
         call.assert_not_awaited()
 
+
+    async def test_meows_and_generic_names_do_not_trigger_group_replies(self):
+        call = self.scope['call_gemini_with_history'] = AsyncMock()
+        self.scope['ACTIVE_TRIGGERS'].update({'meow', 'kitty'})
+        for user in (10, 11):
+            self.scope['group_trigger_targets'][20] = 1
+            event = self.event('meow')
+            event['user_id'] = user
+            await self.scope['handle_message_event'](self.ws, event)
+        self.scope['group_trigger_targets'][20] = 30
+        await self.scope['handle_message_event'](self.ws, self.event('kitty test'))
+        self.assertEqual(self.sent, [])
+        call.assert_not_awaited()
+
+    def test_custom_trigger_requires_a_leading_name_and_boundary(self):
+        match = self.scope['matches_trigger']
+        words = {'Moon Cat'}
+        self.assertTrue(match('Moon Cat', words))
+        self.assertTrue(match('Moon Cat, hello', words))
+        self.assertFalse(match('look at Moon Cat', words))
+        self.assertFalse(match('Moon Catextra', words))
 
     async def test_repeater_main_flow_and_no_bot_self_loop(self):
         for user in (10, 11, 12, 999):
