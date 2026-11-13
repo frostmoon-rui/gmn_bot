@@ -53,14 +53,40 @@ try{
     if(-not $Background){$Host.UI.RawUI.WindowTitle='GMN | desktop bot | active instance'}
     New-Item -ItemType Directory -Path (Join-Path $root 'logs\startup') -Force | Out-Null
     if($Background){
-        $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-        $outLog=Join-Path $root ('logs\startup\bot-'+$stamp+'.out.log')
-        $errLog=Join-Path $root ('logs\startup\bot-'+$stamp+'.err.log')
-        # Keep the ownership mutex until the hidden child exits. No restart loop.
-        $child=Start-Process -FilePath $config.PythonExecutable -ArgumentList ('-u "'+$main+'"') `
-            -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
-        try{$child.WaitForExit()}finally{$child.Dispose()}
-        exit 0
+        $logRoot=Join-Path $root 'logs\startup'
+        $supervisorLog=Join-Path $logRoot 'desktop-bot-supervisor.log'
+        $delay=15
+        $waiting=$false
+        while($true){
+            $listeners=[Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+            if(-not ($listeners | Where-Object {$_.Port -eq [int]$config.NapCatPort})){
+                if(-not $waiting){
+                    Add-Content -LiteralPath $supervisorLog -Value ((Get-Date).ToString('o')+' Waiting for the OneBot port. Check NapCat login if this persists.')
+                    $waiting=$true
+                }
+                Start-Sleep -Seconds 10
+                continue
+            }
+            $waiting=$false
+            $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+            $outLog=Join-Path $logRoot ('bot-'+$stamp+'.out.log')
+            $errLog=Join-Path $logRoot ('bot-'+$stamp+'.err.log')
+            $started=[Diagnostics.Stopwatch]::StartNew()
+            try{
+                $child=Start-Process -FilePath $config.PythonExecutable -ArgumentList ('-u "'+$main+'"') `
+                    -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+                try{
+                    $child.WaitForExit()
+                    $reason='Python exited with code '+$child.ExitCode
+                }finally{$child.Dispose()}
+            }catch{
+                $reason='Python launch failed: '+$_.Exception.GetType().Name
+            }
+            if($started.Elapsed.TotalMinutes -ge 5){$delay=15}
+            Add-Content -LiteralPath $supervisorLog -Value ((Get-Date).ToString('o')+" $reason. Retrying in $delay seconds.")
+            Start-Sleep -Seconds $delay
+            $delay=[Math]::Min(300,$delay*2)
+        }
     }
     Write-Host 'Desktop manual mode: Python runs once, directly in this terminal.'
     Write-Host 'No desktop restart watchdog. The boot supervisor will wait until sign-out.'

@@ -286,6 +286,19 @@ try {
             }
         }
         if (($now - $lastNotice).TotalMinutes -ge 5) {
+            if (-not $napReady -and -not (Test-DesktopNapCatControl)) {
+                $receiverLog=Get-ChildItem -LiteralPath $logRoot -Filter 'napcat-*.out.log' -File |
+                    Sort-Object Name -Descending | Select-Object -First 1
+                if($receiverLog -and $receiverLog.LastWriteTime -ge $lastNapCat -and $lastNapCat -ne [datetime]::MinValue){
+                    # Inspect only a bounded tail and never echo QR codes or login URLs.
+                    $tail=Get-Content -LiteralPath $receiverLog.FullName -Tail 100 -ErrorAction SilentlyContinue
+                    $expired='\u8eab\u4efd\u5df2\u5931\u6548|\u8bf7\u626b\u63cf|\u4e8c\u7ef4\u7801'
+                    if($tail -match $expired){
+                        Write-BootLog 'QQ authorization is required. Approve the login in NapCat Desktop after signing in.'
+                    }
+                }
+            }
+
             Write-BootLog "Proxy listener: $proxyReady; NapCat listener: $napReady. See component logs for QQ login errors."
             $lastNotice = $now
         }
