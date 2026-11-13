@@ -115,17 +115,14 @@ def write_state(path, data):
         temp.unlink(missing_ok=True)
 
 
-def existing_photos(root):
+def existing_photos(folder):
     index = {}
-    for folder in root.iterdir():
-        if not folder.is_dir() or folder.resolve().parent != root or not re.search(r"--[0-9a-f]{16}$", folder.name):
+    for path in folder.iterdir():
+        if (not path.is_file() or path.is_symlink() or path.suffix.lower() not in PHOTO_EXTENSIONS
+                or not re.fullmatch(r"[0-9a-f]{16}", path.stem)):
             continue
-        for path in folder.iterdir():
-            if (not path.is_file() or path.is_symlink() or path.suffix.lower() not in PHOTO_EXTENSIONS
-                    or not re.fullmatch(r"[0-9a-f]{16}", path.stem)):
-                continue
-            with path.open("rb") as file:
-                index.setdefault(file_digest(file), path.relative_to(root).as_posix())
+        with path.open("rb") as file:
+            index.setdefault(file_digest(file), path.name)
     return index
 
 
@@ -141,15 +138,12 @@ async def backup(ws, group, root):
     if any((p / ".git").exists() for p in (root, *root.parents)):
         raise ValueError("Album archives must be outside Git repositories")
     root.mkdir(parents=True, exist_ok=True)
-    hashes = await asyncio.to_thread(existing_photos, root)
-    references_path = root / "duplicate-references.json"
-    references = json.loads(references_path.read_text(encoding="utf-8")) if references_path.is_file() else {}
     summary = dict(albums=0, saved=0, existing=0, duplicates=0, unavailable=0, failed=0)
     seen_albums = set()
     slots = asyncio.Semaphore(3)
     write_lock = asyncio.Lock()
 
-    async def transfer(folder, key, variant):
+    async def transfer(folder, key, variant, hashes, references):
         async with slots:
             try:
                 blob, suffix = await asyncio.to_thread(
@@ -157,10 +151,10 @@ async def backup(ws, group, root):
                 digest = await asyncio.to_thread(lambda: sha256(blob).hexdigest())
                 async with write_lock:
                     if digest in hashes:
-                        references[(folder.relative_to(root) / key).as_posix()] = hashes[digest]
+                        references[key] = hashes[digest]
                         return "duplicates"
                     saved = await asyncio.to_thread(save_photo, folder, key, blob, suffix)
-                    hashes[digest] = saved.relative_to(root).as_posix()
+                    hashes[digest] = saved.name
                     return "saved"
             except (OSError, ValueError, URLError, Image.DecompressionBombError):
                 return "failed"
@@ -176,6 +170,12 @@ async def backup(ws, group, root):
             summary["albums"] += 1
             params = {"group_id": group, "album_id": album_id, "attach_info": ""}
             try:
+                hashes = await asyncio.to_thread(existing_photos, folder)
+                references_path = folder / "duplicate-references.json"
+                references = (json.loads(references_path.read_text(encoding="utf-8"))
+                              if references_path.is_file() else {})
+                if not isinstance(references, dict):
+                    raise ValueError("Invalid album duplicate references")
                 async for media in pages(ws, "get_group_album_media_list", params, "media_list",
                                          "next_has_more", "next_attach_info"):
                     jobs = {}
@@ -188,7 +188,7 @@ async def backup(ws, group, root):
                                for p in folder.glob(key + ".*")):
                             summary["existing"] += 1
                             continue
-                        saved_ref = references.get((folder.relative_to(root) / key).as_posix())
+                        saved_ref = references.get(key)
                         if saved_ref in hashes.values():
                             summary["duplicates"] += 1
                             continue
@@ -198,12 +198,12 @@ async def backup(ws, group, root):
                             jobs.setdefault(key, variant)
                         else:
                             summary["unavailable"] += 1
-                    results = await asyncio.gather(*(transfer(folder, key, variant) for key, variant in jobs.items()))
+                    results = await asyncio.gather(*(transfer(folder, key, variant, hashes, references) for key, variant in jobs.items()))
                     for status in results:
                         summary[status] += 1
                     if "duplicates" in results:
                         await asyncio.to_thread(write_state, references_path, references)
-            except (TimeoutError, RuntimeError, ValueError):
+            except (OSError, RuntimeError, ValueError):
                 summary["failed"] += 1
                 if ws.closed:
                     raise ConnectionError("OneBot disconnected during album backup")
