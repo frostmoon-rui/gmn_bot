@@ -221,32 +221,32 @@ async def daily_album_backup(get_ws, group, directory, dress_album="", dress_own
         print("[Album backup]: Destination must be outside Git repositories.")
         return
     state = root / "daily-backup.json"
+    last_run_date = None
     while True:
         now = datetime.now(BEIJING)
         today = now.date().isoformat()
         ws = get_ws()
-        if now.hour >= 4 and ws is not None and not ws.closed:
+        if last_run_date != today and ws is not None and not ws.closed:
+            last_run_date = today
             try:
-                last = json.loads(state.read_text(encoding="utf-8")) if state.is_file() else {}
-                if last.get("date") != today:
-                    root.mkdir(parents=True, exist_ok=True)
-                    await asyncio.to_thread(write_state, state, {"date": today, "status": "started"})
-                    print("[Album backup]: Daily run started.")
-                    try:
-                        summary = await backup(ws, str(group), root)
-                    except Exception as error:
-                        print("[Album backup interrupted]:", type(error).__name__)
-                        await asyncio.to_thread(write_state, state, {"date": today, "status": "interrupted"})
-                    else:
-                        await asyncio.to_thread(write_state, state, {"date": today, "status": "finished", **summary})
-                        print("[Album backup]:", json.dumps(summary))
-                        if dress_album and dress_owner:
-                            try:
-                                from dress_album import submit_album
-                                result = await asyncio.to_thread(submit_album, root, dress_album, dress_owner)
-                                print("[Dress upload]:", result)
-                            except Exception as error:
-                                print("[Dress upload failed]:", str(error) if type(error) is RuntimeError else type(error).__name__)
+                root.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(write_state, state, {"date": today, "status": "started"})
+                print("[Album backup]: Daily run started.")
+                try:
+                    summary = await backup(ws, str(group), root)
+                except Exception as error:
+                    print("[Album backup interrupted]:", type(error).__name__)
+                    await asyncio.to_thread(write_state, state, {"date": today, "status": "interrupted"})
+                else:
+                    await asyncio.to_thread(write_state, state, {"date": today, "status": "finished", **summary})
+                    print("[Album backup]:", json.dumps(summary))
+                    if dress_album and dress_owner:
+                        try:
+                            from dress_album import submit_album
+                            result = await asyncio.to_thread(submit_album, root, dress_album, dress_owner)
+                            print("[Dress upload]:", result)
+                        except Exception as error:
+                            print("[Dress upload failed]:", str(error) if type(error) is RuntimeError else type(error).__name__)
             except (OSError, ValueError) as error:
                 print("[Album backup state unavailable]:", type(error).__name__)
         await asyncio.sleep(60)
