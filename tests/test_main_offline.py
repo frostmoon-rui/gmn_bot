@@ -288,7 +288,9 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(features.chime_threshold(group, 20), cap)
 
     async def test_random_chime_works_in_each_group_and_repeat_does_not_block_it(self):
-        self.scope['call_gemini_with_history'] = AsyncMock(return_value='Today feels like a good day to sleep in.'*10)
+        self.scope['features'].language = 'en'
+        reaction = 'Sounds like the perfect day to stay under the covers.'
+        self.scope['call_gemini_with_history'] = AsyncMock(return_value=reaction)
         self.scope['features'].mark_passive(20, 'repeat')
         for group, text in ((20, 'It is raining outside'), (21, 'Have you eaten')):
             self.scope['group_trigger_targets'][group] = 1
@@ -299,7 +301,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.args[0] for call in calls], ['group_20', 'group_21'])
         self.assertTrue(all(call.kwargs['is_random'] for call in calls))
         self.assertEqual(len(self.sent),2)
-        self.assertTrue(all(1 <= len(message['text']) <= 10 for message in self.sent))
+        self.assertEqual([message['text'] for message in self.sent], [reaction, reaction])
         self.assertTrue(all('[SPLIT]' not in message['text'] for message in self.sent))
 
     async def test_real_mention_of_someone_else_overrides_text_alias(self):

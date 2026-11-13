@@ -2408,7 +2408,6 @@ async def handle_message_event(ws, data):
             return
 
     # 6. Bubble counts: 60% one, 30% two, 10% three
-    passive_limit = random.choices([1, 5, 10], weights=[15, 50, 35])[0] if is_random_chime else 0
     target_splits = 1 if is_random_chime else random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     if target_splits == 1:
         split_instruct = "Use one casual sentence without any [SPLIT] marker."
@@ -2435,7 +2434,8 @@ async def handle_message_event(ws, data):
         unread_stream = "\n".join(group_unread_buffers[group_id][-20:])
         group_unread_buffers[group_id].clear()
         if is_random_chime:
-            context_prompt = f"Group context:\n{unread_stream}\nReact briefly as a bystander. Use at most {passive_limit} characters in a single reply, without mentions or answers."
+            passive_limit = 40 if getattr(features, 'language', 'en') in {'zh', 'ja'} else 96
+            context_prompt = f"Group context:\n{unread_stream}\nPick up on the conversation like another group member. Write one complete, natural reaction, with room for a joke. Use up to {passive_limit} characters, without mentions or extended answers."
         elif is_talking_to_me:
             context_prompt = f"[Unread group messages]:\n{unread_stream}\n\n({identity_tag} is addressing you: {formatted_current}. {image_notice}For casual chat: {split_instruct} Explain academic concepts briefly and accurately; if evidence is needed, return only a SEARCH_REQUEST plan. Provide complete code as requested. Reply in English even when the messages use another language.)"
         else:
@@ -2474,7 +2474,7 @@ async def handle_message_event(ws, data):
     # 7. Process and remove hidden background tags
     if is_random_chime:
         from chat_style import compact_interjection
-        reply_clean = compact_interjection(reply_raw, passive_limit, '…' if passive_limit == 1 else 'Heh!')
+        reply_clean = compact_interjection(reply_raw, passive_limit, '')
         if len(reply_clean)<len(reply_raw):
             print('[Passive reply formatting]:', len(reply_raw), '->', len(reply_clean), 'characters; prefer complete sentences')
     else:
