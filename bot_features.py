@@ -1,3 +1,4 @@
+import random
 """On-demand tools, low-interruption preferences and opt-in reminders; no live bot import."""
 import asyncio
 import base64
@@ -270,6 +271,19 @@ class Features:
         self.reminders = bot.load_json_data('reminders.json', [])
         self.last_passive = {}
         self.repeat_states = {}
+
+    async def register_group(self, group):
+        groups = self.prefs['groups']
+        key = str(group)
+        if key not in groups:
+            groups[key] = {}
+            await self.b.save_json_data_async('bot_preferences.json', self.prefs)
+        return groups[key]
+
+    def chime_threshold(self, group, main_group):
+        extra = self.prefs['groups'].get(str(group), {}).get('chime_extra', 0)
+        secondary = random.randint(5, 10) if str(group) != str(main_group) else 0
+        return random.randint(5, 15) + secondary + extra
 
     def mode(self, group):
         return self.prefs['groups'].get(str(group), {}).get('mode', 'normal')

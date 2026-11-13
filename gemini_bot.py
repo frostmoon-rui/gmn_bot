@@ -224,7 +224,7 @@ save_json_data(REGIONS_FILE, regions_data)
 
 MAX_HISTORY_LEN = 30
 group_msg_counters = defaultdict(int)
-group_trigger_targets = defaultdict(lambda: random.randint(5, 15))
+group_trigger_targets = {}
 group_repeat_tracker = defaultdict(lambda: ["", 0])
 group_unread_buffers = defaultdict(list)
 msg_cache = {}
@@ -1645,6 +1645,10 @@ async def handle_group_notice_async(ws, data: dict):
 
     if not group_id or not user_id:
         return
+    if str(user_id) == str(data.get("self_id")):
+        if notice_type == "group_increase":
+            await features.register_group(group_id)
+        return
     if features.mode(group_id) != 'active' or not features.allow_passive(group_id, 'notice'):
         return
 
@@ -1805,6 +1809,15 @@ async def handle_message_event(ws, data):
         is_talking_to_me = True
     if msg_type == 'group' and directed_elsewhere and not re.match(r'^set location(?:[:\s]|$)', cleaned_msg, re.I):
         return
+    if msg_type == 'group':
+        group_prefs = await features.register_group(group_id)
+        if (addressed or re.search(r'\b(?:bot|robot|lucky cat)\b', cleaned_msg, re.I)) and not is_talking_to_other:
+            if re.fullmatch(r'(?:(?:the |this )?(?:bot|robot|lucky cat|you) (?:is |are )?(?:too |so |very |a bit )?(?:annoying|noisy|talkative)|(?:please )?(?:stop|quit) (?:chiming in|interrupting))[.! ]*', cleaned_msg, re.I):
+                group_prefs['chime_extra'] = group_prefs.get('chime_extra', 0) + 5
+                if group_id in group_trigger_targets:
+                    group_trigger_targets[group_id] += 5
+                await save_json_data_async('bot_preferences.json', features.prefs)
+                return
     if 'videos' in globals():
         videos.observe(data)
         video_reply = await videos.command(data, cleaned_msg, addressed, ws)
@@ -2359,14 +2372,18 @@ async def handle_message_event(ws, data):
         if cleaned_msg:
             group_msg_counters[group_id] += 1
 
+        main_group = setting('MAIN_GROUP_ID', '') or setting('ALBUM_BACKUP_GROUP_ID', '')
+        if group_id not in group_trigger_targets:
+            group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
+
         if not will_trigger and not is_talking_to_other and group_msg_counters[group_id] >= group_trigger_targets[group_id] and features.allow_passive(group_id, 'random', consume=False):
             is_random_chime = True
             group_msg_counters[group_id] = 0
-            group_trigger_targets[group_id] = random.randint(5, 15)
+            group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
             print(f"[Group {group_id}: random interjection triggered]")
         elif will_trigger:
             group_msg_counters[group_id] = 0
-            group_trigger_targets[group_id] = random.randint(5, 15)
+            group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
         else:
             return
 

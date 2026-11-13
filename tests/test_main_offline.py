@@ -259,6 +259,20 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
                          ['group_20', 'group_21', 'group_20'])
         self.assertEqual(len(self.sent), 3)
 
+    async def test_group_chime_feedback_persists_and_only_delays_that_group(self):
+        self.scope['group_trigger_targets'].update({20: 10, 21: 17})
+        self.scope['features'].b.save_json_data_async = AsyncMock()
+        self.scope['save_json_data_async'] = self.scope['features'].b.save_json_data_async
+        await self.scope['handle_message_event'](self.ws, self.event('the bot is annoying'))
+        features = self.scope['features']
+        self.assertEqual(features.prefs['groups']['20']['chime_extra'], 5)
+        self.assertEqual(self.scope['group_trigger_targets'], {20: 15, 21: 17})
+        self.assertEqual(self.sent, [])
+        features.b.save_json_data_async.assert_awaited_with('bot_preferences.json', features.prefs)
+        for _ in range(30):
+            self.assertIn(features.chime_threshold(20, 20), range(10, 21))
+            self.assertIn(features.chime_threshold(21, 20), range(10, 26))
+
     async def test_random_chime_works_in_each_group_and_repeat_does_not_block_it(self):
         self.scope['call_gemini_with_history'] = AsyncMock(return_value='Today feels like a good day to sleep in.'*10)
         self.scope['features'].mark_passive(20, 'repeat')
