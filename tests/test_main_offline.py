@@ -273,6 +273,17 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(features.chime_threshold(20, 20), range(10, 21))
             self.assertIn(features.chime_threshold(21, 20), range(10, 26))
 
+        self.scope['setting'] = lambda name, default='': '20' if name == 'MAIN_GROUP_ID' else default
+        self.scope['group_trigger_targets'].update({20: 19, 21: 29})
+        for group, cap in ((20, 20), (21, 30)):
+            features.prefs['groups'].setdefault(str(group), {})['chime_extra'] = 100
+            self.assertEqual(features.chime_threshold(group, 20), cap)
+            event = self.event('the bot is annoying')
+            event['group_id'] = group
+            await self.scope['handle_message_event'](self.ws, event)
+            self.assertEqual(self.scope['group_trigger_targets'][group], cap)
+            self.assertEqual(features.chime_threshold(group, 20), cap)
+
     async def test_random_chime_works_in_each_group_and_repeat_does_not_block_it(self):
         self.scope['call_gemini_with_history'] = AsyncMock(return_value='Today feels like a good day to sleep in.'*10)
         self.scope['features'].mark_passive(20, 'repeat')

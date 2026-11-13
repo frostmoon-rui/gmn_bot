@@ -280,10 +280,14 @@ class Features:
             await self.b.save_json_data_async('bot_preferences.json', self.prefs)
         return groups[key]
 
+    @staticmethod
+    def chime_cap(group, main_group):
+        return 20 if str(group) == str(main_group) else 30
+
     def chime_threshold(self, group, main_group):
         extra = self.prefs['groups'].get(str(group), {}).get('chime_extra', 0)
         secondary = random.randint(5, 10) if str(group) != str(main_group) else 0
-        return random.randint(5, 15) + secondary + extra
+        return min(self.chime_cap(group, main_group), random.randint(5, 15) + secondary + extra)
 
     def mode(self, group):
         return self.prefs['groups'].get(str(group), {}).get('mode', 'normal')

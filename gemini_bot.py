@@ -1810,12 +1810,16 @@ async def handle_message_event(ws, data):
     if msg_type == 'group' and directed_elsewhere and not re.match(r'^set location(?:[:\s]|$)', cleaned_msg, re.I):
         return
     if msg_type == 'group':
+        main_group = setting('MAIN_GROUP_ID', '') or setting('ALBUM_BACKUP_GROUP_ID', '')
         group_prefs = await features.register_group(group_id)
         if (addressed or re.search(r'\b(?:bot|robot|lucky cat)\b', cleaned_msg, re.I)) and not is_talking_to_other:
             if re.fullmatch(r'(?:(?:the |this )?(?:bot|robot|lucky cat|you) (?:is |are )?(?:too |so |very |a bit )?(?:annoying|noisy|talkative)|(?:please )?(?:stop|quit) (?:chiming in|interrupting))[.! ]*', cleaned_msg, re.I):
-                group_prefs['chime_extra'] = group_prefs.get('chime_extra', 0) + 5
+                cap = features.chime_cap(group_id, main_group)
+                # Keep the feedback offset bounded once every roll reaches the cap.
+                minimum = 5 if str(group_id) == str(main_group) else 10
+                group_prefs['chime_extra'] = min(cap - minimum, group_prefs.get('chime_extra', 0) + 5)
                 if group_id in group_trigger_targets:
-                    group_trigger_targets[group_id] += 5
+                    group_trigger_targets[group_id] = min(cap, group_trigger_targets[group_id] + 5)
                 await save_json_data_async('bot_preferences.json', features.prefs)
                 return
     if 'videos' in globals():
@@ -2372,7 +2376,6 @@ async def handle_message_event(ws, data):
         if cleaned_msg:
             group_msg_counters[group_id] += 1
 
-        main_group = setting('MAIN_GROUP_ID', '') or setting('ALBUM_BACKUP_GROUP_ID', '')
         if group_id not in group_trigger_targets:
             group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
 
