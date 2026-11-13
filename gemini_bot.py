@@ -2496,7 +2496,9 @@ async def main():
     extensions.spawn(maintenance_loop(sys.modules[__name__],Path(__file__).resolve().parent))
     from album_backup import daily_album_backup
     extensions.spawn(daily_album_backup(lambda: active_ws, setting('ALBUM_BACKUP_GROUP_ID', ''),
-                                       setting('ALBUM_BACKUP_DIRECTORY', '')))
+                                       setting('ALBUM_BACKUP_DIRECTORY', ''),
+                                       setting('DRESS_UPLOAD_ALBUM_TAG', ''),
+                                       setting('DRESS_UPLOAD_GITHUB_OWNER', '')))
     await asyncio.gather(*(asyncio.to_thread(function) for function in (
         init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))
     await prepare_stolen_emoji_store()

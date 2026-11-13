@@ -210,7 +210,7 @@ async def backup(ws, group, root):
     return summary
 
 
-async def daily_album_backup(get_ws, group, directory):
+async def daily_album_backup(get_ws, group, directory, dress_album="", dress_owner=""):
     if not group:
         return
     if not str(group).isdecimal() or not directory:
@@ -240,6 +240,13 @@ async def daily_album_backup(get_ws, group, directory):
                     else:
                         await asyncio.to_thread(write_state, state, {"date": today, "status": "finished", **summary})
                         print("[Album backup]:", json.dumps(summary))
+                        if dress_album and dress_owner:
+                            try:
+                                from dress_album import submit_album
+                                result = await asyncio.to_thread(submit_album, root, dress_album, dress_owner)
+                                print("[Dress upload]:", result)
+                            except Exception as error:
+                                print("[Dress upload failed]:", str(error) if type(error) is RuntimeError else type(error).__name__)
             except (OSError, ValueError) as error:
                 print("[Album backup state unavailable]:", type(error).__name__)
         await asyncio.sleep(60)
