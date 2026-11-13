@@ -430,7 +430,12 @@ class Extensions:
             print('[Weather image unavailable]:', type(error).__name__)
             await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(image_notice, user)}}, True)
             return
-        await deliver({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}}, True)
+        try:
+            await deliver({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}}, True)
+        except TimeoutError:
+            # NapCat may still deliver the image after its acknowledgement times out.
+            print('[Weather image]: Delivery unconfirmed; waiting for the original send.')
+            return
         print('[Weather image]: Full report sent as one PNG')
 
     async def weather_map_job(self, ws, kind, group, user, product):

@@ -233,6 +233,16 @@ class WeatherAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(data['response']['records']), 1000)
         self.assertEqual(data['response']['zero'], 0)
 
+    async def test_weather_image_ack_timeout_does_not_send_failure_message(self):
+        ext = Extensions.__new__(Extensions)
+        ext.b = SimpleNamespace()
+        ws = SimpleNamespace(send=AsyncMock(side_effect=TimeoutError))
+        with patch('weather_delivery.render_report', return_value=b'png'):
+            await ext.send_weather(ws, 'group', 20, 10, 'forecast')
+        ws.send.assert_awaited_once()
+        message = json.loads(ws.send.call_args.args[0])['params']['message']
+        self.assertEqual([segment['type'] for segment in message], ['at', 'image'])
+
     async def test_detailed_send_one_image_without_brief(self):
         ext = Extensions.__new__(Extensions)
         ext.b = SimpleNamespace()
