@@ -144,8 +144,9 @@ def submit_album(root, album_tag, owner):
     diff = api(f"{prefix}/compare/{quote(base, safe='')}...{owner}:{branch}")
     if sorted(item["filename"] for item in diff.get("files", [])) != sorted(paths):
         raise RuntimeError("Dress branch contains unexpected changes")
+    album_name = albums[0].name.removesuffix("--" + album_tag)
     pr = api(f"{prefix}/pulls", {
-        "title": f"Add outfit photos by {owner}", "head": owner + ":" + branch, "base": base,
+        "title": f"Add photos from {album_name}", "head": owner + ":" + branch, "base": base,
         "body": "<!-- pr-type: images -->\n\nPhoto submission from the contributor's selected album.\n\n"
                 "- [x] Images are under 1 MiB.\n- [x] High-sensitivity EXIF is removed.\n"
                 "- [x] Files are in the matching contributor folder.\n"
