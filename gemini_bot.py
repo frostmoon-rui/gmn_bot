@@ -1742,6 +1742,36 @@ def matches_trigger(text, words):
     )
 
 
+def morning_command(text):
+    text = text.strip()
+    morning = re.fullmatch(r"/?\s*(?:(?:everyone|all|friends|group)[,\s]*)?(?:good morning|morning(?: kitty| lucky)?)[!~\s]*", text, re.I)
+    daily = re.fullmatch(r"(?:/\s*|@?Yuyuko\s*/?\s*)?(?:daily piggy|daily fortune)[!~\s]*", text, re.I)
+    return bool(morning), bool(daily)
+
+
+async def sticker_morning_command(raw):
+    for attrs in re.findall(r"\[CQ:image,([^\]]+)\]", raw):
+        for label in re.findall(r"(?:^|,)(?:summary|text|alt)=([^,]*)", attrs):
+            match = morning_command(html.unescape(label).strip().strip("[]"))
+            if any(match):
+                return match
+
+    sticker = next((image for image in extract_image_segments(raw) if is_sticker_image(image)), None)
+    if sticker is None:
+        return False, False
+    try:
+        async with asyncio.timeout(8):
+            blob, mime = await download_image_as_bytes(sticker["url"])
+            if blob and is_sticker_image(sticker, mime, blob):
+                text = await describe_image_via_ai(
+                    blob, mime, question="Transcribe only the visible text verbatim. Use one line without quotes or explanation."
+                )
+                return morning_command(text or "")
+    except Exception as error:
+        print("[Sticker greeting unavailable]:", type(error).__name__)
+    return False, False
+
+
 async def handle_message_event(ws, data):
     if data.get("post_type") == "notice":
         await handle_group_notice_async(ws, data)
@@ -1823,7 +1853,11 @@ async def handle_message_event(ws, data):
     if addressed:
         cleaned_msg = re.sub(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', '', cleaned_msg).strip()
         is_talking_to_me = True
-    if msg_type == 'group' and directed_elsewhere and not re.match(r'^set location(?:[:\s]|$)', cleaned_msg, re.I):
+    morning_greeting, daily_weather = morning_command(cleaned_msg)
+    if not cleaned_msg and not (morning_greeting or daily_weather):
+        morning_greeting, daily_weather = await sticker_morning_command(raw_msg)
+    early_greeting = morning_greeting or daily_weather
+    if msg_type == 'group' and directed_elsewhere and not early_greeting and not re.match(r'^set location(?:[:\s]|$)', cleaned_msg, re.I):
         return
     if msg_type == 'group':
         main_group = setting('MAIN_GROUP_ID', '') or setting('ALBUM_BACKUP_GROUP_ID', '')
@@ -1855,7 +1889,7 @@ async def handle_message_event(ws, data):
     hit_keyword = not is_talking_to_other and matches_trigger(cleaned_msg, ACTIVE_TRIGGERS)
     meow_only = is_meow_only(cleaned_msg)
     explicit_command = bool(re.match(r'^(?:Lucky|ask assistant[:：]|web search[:：]|search report[:：]|set location[:：\s]|important allowlist|allowlist|blocklist|notebook[:：])', cleaned_msg))
-    if msg_type == 'group' and not features.active(group_id) and not addressed and not explicit_command and not hit_keyword:
+    if msg_type == 'group' and not features.active(group_id) and not addressed and not explicit_command and not early_greeting and not hit_keyword:
         # Passive sticker collection remains available, but ordinary photos are not analyzed.
         segments = extract_image_segments(raw_msg)
         if segments:
@@ -1882,7 +1916,7 @@ async def handle_message_event(ws, data):
     # 1. Repeat per group, independently of random interjection cooldown; record only successful sends.
     if msg_type == "group":
         if features.observe_repeat(group_id, user_id, cleaned_msg,
-                directed=hit_keyword or meow_only or is_talking_to_me or is_talking_to_other or bool(re.search(r'\[CQ:', raw_msg))):
+                directed=early_greeting or hit_keyword or meow_only or is_talking_to_me or is_talking_to_other or bool(re.search(r'\[CQ:', raw_msg))):
             print(f"[Member repeat] Echo -> {cleaned_msg}")
             await ws.send(json.dumps({
                 "action": "send_group_msg",
@@ -2244,18 +2278,16 @@ async def handle_message_event(ws, data):
     from datetime import timedelta, timezone
     now = datetime.now(timezone(timedelta(hours=8)))
     today_str = now.date().isoformat()
-    morning_greeting = bool(re.fullmatch(r"(?:(?:everyone|all|friends|group)[,\s]*)?(?:good morning|morning(?: kitty| lucky)?)[!~\s]*", cleaned_msg, re.I))
     greeting = morning_greeting or bool(re.fullmatch(r"(?:hello|hi|hey|good afternoon|good evening|good night)[!.~\s]*", cleaned_msg, re.I))
-    daily_weather = bool(re.fullmatch(r"(?:/|@?Yuyuko/?\s*)?(?:daily piggy|daily fortune)[!~\s]*", cleaned_msg, re.I))
     if not is_talking_to_other or addressed:
         if re.fullmatch(r"(?:what time is it|current time|what is today.s date|what day is it)[?.!\s]*", cleaned_msg, re.I):
             await extensions.send(ws, msg_type, group_id, user_id, f'Beijing time (UTC+8): {now:%A, %Y-%m-%d %H:%M}.')
             return
-        hour = now.hour
-        period = 0 if hour < 5 or hour >= 23 else 1 if hour < 11 else 2 if hour < 13 else 3 if hour < 18 else 4
-        greeting_reply = ('It is late. Rest well, meow.', 'Good morning, meow!', 'Hello, meow! Enjoy your lunch.', 'Good afternoon, meow!', 'Good evening, meow!')[period]
-    else:
-        greeting = morning_greeting = daily_weather = False
+    hour = now.hour
+    period = 0 if hour < 5 or hour >= 23 else 1 if hour < 11 else 2 if hour < 13 else 3 if hour < 18 else 4
+    greeting_reply = ('It is late. Rest well, meow.', 'Good morning, meow!', 'Hello, meow! Enjoy your lunch.', 'Good afternoon, meow!', 'Good evening, meow!')[period]
+    if is_talking_to_other and not addressed:
+        greeting = morning_greeting
 
     if greeting:
         from time_interactions import model_greeting

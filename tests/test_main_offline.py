@@ -27,7 +27,7 @@ from sticker_store import sticker_reply_probability
 
 def handler_environment():
     source = Path(__file__).resolve().parents[1] / 'gemini_bot.py'
-    wanted = {'is_meow_only', 'is_callable_trigger', 'matches_trigger', 'handle_message_event', 'quick_reply', 'strip_zero_width_chars', 'extract_image_segments',
+    wanted = {'morning_command', 'sticker_morning_command', 'is_meow_only', 'is_callable_trigger', 'matches_trigger', 'handle_message_event', 'quick_reply', 'strip_zero_width_chars', 'extract_image_segments',
               'is_sticker_image', 'image_mime', 'send_multiline_messages', 'claude_model_score', 'main',
               'build_system_prompt', 'get_current_time_str', 'model_system_prompt', 'portrait_reference',
               'clean_and_process_tags', 'extract_province_keyword'}
@@ -303,6 +303,33 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.sent),2)
         self.assertEqual([message['text'] for message in self.sent], [reaction, reaction])
         self.assertTrue(all('[SPLIT]' not in message['text'] for message in self.sent))
+
+    async def test_daily_slash_commands_work_with_other_mentions_in_quiet_groups(self):
+        self.scope['features'].prefs['groups']['20'] = {'mode': 'quiet'}
+        for command in ('/daily piggy', '/ daily fortune'):
+            event = self.event('')
+            event['message'] = [
+                {'type': 'at', 'data': {'qq': '11'}},
+                {'type': 'text', 'data': {'text': f' {command} '}},
+            ]
+            await self.scope['handle_message_event'](self.ws, event)
+        self.assertEqual(len(self.sent), 2)
+        self.assertTrue(all('set location' in message['text'] for message in self.sent))
+
+    async def test_morning_greeting_with_other_mention_and_stickers(self):
+        self.scope['features'].prefs['groups']['20'] = {'mode': 'quiet'}
+        self.scope['download_image_as_bytes'] = AsyncMock(return_value=(b'image', 'image/png'))
+        self.scope['describe_image_via_ai'] = AsyncMock(return_value='Good morning')
+        for segment in (
+            {'type': 'text', 'data': {'text': 'Good morning'}},
+            {'type': 'image', 'data': {'summary': '[' + 'Good morning' + ']'}},
+            {'type': 'image', 'data': {'url': 'https://example.invalid/sticker', 'subType': 1}},
+        ):
+            event = self.event('')
+            event['message'] = [{'type': 'at', 'data': {'qq': '11'}}, segment]
+            await self.scope['handle_message_event'](self.ws, event)
+        self.assertEqual(len(self.sent), 3)
+        self.scope['describe_image_via_ai'].assert_awaited_once()
 
     async def test_real_mention_of_someone_else_overrides_text_alias(self):
         call = self.scope['call_gemini_with_history'] = AsyncMock()
