@@ -5,6 +5,8 @@ from io import BytesIO
 from pathlib import Path
 from functools import lru_cache
 
+from corner_geometry import continuous_rectangle
+
 from PIL import Image, ImageDraw, ImageFont
 from response_visibility import visible_response_text
 
@@ -51,7 +53,7 @@ def render_report(report):
     draw = ImageDraw.Draw(image)
     for column in range(2):
         x = padding + column * (column_width + padding)
-        draw.rounded_rectangle((x - 16, 20, x + column_width + 16, height - 20), radius=20, fill='white')
+        continuous_rectangle(draw, (x - 16, 20, x + column_width + 16, height - 20), radius=24, fill='white')
     for index, line in enumerate(lines):
         column, row = divmod(index, rows)
         draw.text((padding + column * (column_width + padding), padding + row * line_height),

@@ -204,7 +204,7 @@ class Painter:
     def panel(self, box, keys, rows, originals, data, kind, major):
         x, y, right, bottom = box
         width, daily = right-x, kind == 'daily'
-        self.draw.rounded_rectangle(box, radius=26, fill='white', outline='#e4e9ed', width=1)
+        self.draw.rounded_rectangle(box, radius=24, fill='white', outline='#e4e9ed', width=1)
         heading = self.label(keys[0], daily)
         if daily and any(key in keys for key in ('min_temp', 'max_temp')):
             heading = self.labels['min_temp']+' / '+self.labels['max_temp']
@@ -217,7 +217,7 @@ class Painter:
                 badge_width=self.draw.textlength(badge,font=self.face(24,True))+32
                 if badge_width+self.draw.textlength(heading,font=self.face(32,True))+96<width:
                     start=right-badge_width-24
-                    self.draw.rounded_rectangle((start,y+15,right-24,y+57),radius=15,fill='#f0f4f7')
+                    self.draw.rounded_rectangle((start,y+15,right-24,y+57),radius=12,fill='#f0f4f7')
                     self.write(start+16,y+21,badge,24,COLORS.get(peak_key,MUTED),bold=True)
                     title_width=start-x-52
         self.write(x+28, y+18, heading, 32 if major else 30, width=title_width,bold=True)
@@ -226,7 +226,7 @@ class Painter:
             for key, caption, offset, length in line:
                 xx, yy = x+28+offset, y+68+row_index*38
                 color = COLORS.get(key, '#66798a')
-                self.draw.rounded_rectangle((xx, yy+11, xx+20, yy+17), radius=3, fill=color)
+                self.draw.rounded_rectangle((xx, yy+11, xx+20, yy+17), radius=4, fill=color)
                 self.write(xx+29, yy, caption, 26, color, length-29)
         plot_top = y+115+len(legends)*38
         if any(key in keys for key in ('temp','feels_like','min_temp','max_temp')):
@@ -366,7 +366,7 @@ class Painter:
                         if value == 0:
                             self.draw.line((xx-half, base, xx+half, base), fill=color, width=4)
                         else:
-                            self.draw.rounded_rectangle((xx-half, yy(value), xx+half, base), radius=3, fill=color)
+                            self.draw.rounded_rectangle((xx-half, yy(value), xx+half, base), radius=4, fill=color)
                     continue
                 if key == 'wind_degrees':
                     for index,row in enumerate(rows):
@@ -501,7 +501,7 @@ def render_dashboard(data, labels, translate, font, target='today'):
     for index,(key,unit) in enumerate([('temp','°C'),('precipitation_mm','mm'),('wind_kmph','km/h')]):
         cw=widths[index]
         color=COLORS[key]
-        draw.rounded_rectangle((xx,132,xx+cw,350),radius=25,fill='#e9dcd0' if index==0 else 'white')
+        draw.rounded_rectangle((xx,132,xx+cw,350),radius=24,fill='#e9dcd0' if index==0 else 'white')
         heading=labels['max_temp'] if key=='temp' and target=='tomorrow' else labels['precipitation_sum'] if key=='precipitation_mm' and target=='tomorrow' else labels[key]
         primary=value('max_temp' if key=='temp' and target=='tomorrow' else key,unit)
         if key=='wind_kmph' and number(hero.get(key)) is None and hero.get('wind_force'):
@@ -535,7 +535,7 @@ def render_dashboard(data, labels, translate, font, target='today'):
         painter.write(MARGIN,panels[0][0][1]-52,labels[kind],36,bold=True)
         for box,keys in panels:
             painter.panel(box,keys,rows,originals,data,kind,kind!='history' and primary_panel(keys))
-    draw.rounded_rectangle((MARGIN,alert_top,WIDTH-MARGIN,footer-16),radius=20,fill='#e7edf1')
+    draw.rounded_rectangle((MARGIN,alert_top,WIDTH-MARGIN,footer-16),radius=24,fill='#e7edf1')
     painter.write(MARGIN+24,alert_top+14,labels['alerts'],30,bold=True)
     for index,line in enumerate(notes):
         painter.write(MARGIN+24,alert_top+56+index*38,line,26,MUTED)

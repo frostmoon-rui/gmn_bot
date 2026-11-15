@@ -2,6 +2,8 @@
 import math
 import re
 
+from corner_geometry import continuous_rectangle
+
 from PIL import ImageDraw
 
 
@@ -29,7 +31,7 @@ class SmoothDraw:
         return result
 
     def rounded_rectangle(self, xy, **kwargs):
-        return self.draw.rounded_rectangle(self.coords(xy), **self.options(kwargs))
+        return continuous_rectangle(self.draw, self.coords(xy), **self.options(kwargs))
 
     def ellipse(self, xy, **kwargs):
         return self.draw.ellipse(self.coords(xy), **self.options(kwargs))
@@ -138,7 +140,7 @@ def weather_icon(draw, x, y, size, row, daily=False, background='white'):
         draw.ellipse(box(.12,.43,.54,.83), fill='#a6bacb')
         draw.ellipse(box(.33,.24,.79,.78), fill='#bccbd6')
         draw.ellipse(box(.60,.44,.94,.83), fill='#a6bacb')
-        draw.rounded_rectangle(box(.24,.57,.82,.83),radius=size*.1,fill='#bccbd6')
+        draw.rounded_rectangle(box(.24,.57,.82,.83),radius=4,fill='#bccbd6')
     if kind == 'unknown':
         draw.ellipse(box(.30,.25,.70,.65),outline='#c5d0da',width=max(1,size*.04))
         return

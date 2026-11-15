@@ -12,6 +12,8 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
+from corner_geometry import continuous_rectangle
+
 from PIL import Image, ImageDraw
 from weather_delivery import report_font
 
@@ -134,7 +136,7 @@ def render_map(counts, scope, labels=None, language='en'):
     draw.text((65, 38), labels['title'] + '  /  ' + labels[scope], font=report_font(40), fill=ink)
     draw.text((65, 105), labels['privacy'], font=report_font(24), fill=muted)
     box = (60, 170, width - 60, map_height + 140)
-    draw.rounded_rectangle(box, 35, fill='#ffffff')
+    continuous_rectangle(draw, box, 32, fill='#ffffff')
     west, east, south, north = (72, 136, 17, 55) if scope == 'china' else (-180, 180, -60, 86)
     scale = min((box[2]-box[0]-100)/(east-west), (box[3]-box[1]-70)/(north-south))
     ox = (width - (east-west)*scale)/2
@@ -162,7 +164,7 @@ def render_map(counts, scope, labels=None, language='en'):
         name = valid[code].get('name_'+language) or valid[code]['name_en']
         while draw.textlength(name, font=report_font(25)) > 395:
             name = name[:-2] + '…'
-        draw.rounded_rectangle((x,row_y,x+530,row_y+54), 12, fill='white')
+        continuous_rectangle(draw, (x,row_y,x+530,row_y+54), 12, fill='white')
         draw.text((x+15,row_y+9), name, font=report_font(25), fill=ink)
         draw.text((x+445,row_y+7), str(counts[code]), font=report_font(29), fill='#0d7489')
     foot = image.height - 120

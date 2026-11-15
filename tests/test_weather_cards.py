@@ -94,7 +94,8 @@ class WeatherCardsTests(unittest.TestCase):
               'days':[{'date':'2026-10-28','minTemperature':{'degrees':-3},'maxTemperature':{'degrees':8}},
                       {'date':'2026-10-29','minTemperature':{'degrees':0},'maxTemperature':{'degrees':10}}]}
         stems=[];dates={}
-        original_box=ImageDraw.ImageDraw.rounded_rectangle
+        from weather_graphics import continuous_rectangle
+        original_box=continuous_rectangle
         original_text=ImageDraw.ImageDraw.text
         def box(draw,xy,*args,**kwargs):
             if kwargs.get('fill') in {'#e4c1a8','#ddd4e7'}:stems.append((xy,kwargs['fill']))
@@ -102,7 +103,7 @@ class WeatherCardsTests(unittest.TestCase):
         def text(draw,xy,value,*args,**kwargs):
             if str(value) in {'10-28','10-29'}:dates[str(value)]=xy
             return original_text(draw,xy,value,*args,**kwargs)
-        with patch('weather_graphics.raster_scale',return_value=1),patch.object(ImageDraw.ImageDraw,'rounded_rectangle',box),patch.object(ImageDraw.ImageDraw,'text',text):
+        with patch('weather_graphics.raster_scale',return_value=1),patch('weather_graphics.continuous_rectangle',box),patch.object(ImageDraw.ImageDraw,'text',text):
             render_report(format_weather(data))
         self.assertEqual(len(stems),4)
         for xy,_ in stems:

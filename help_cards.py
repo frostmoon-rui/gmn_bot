@@ -6,6 +6,8 @@ import math
 import re
 from io import BytesIO
 
+from corner_geometry import continuous_rectangle
+
 from PIL import Image, ImageDraw
 from weather_delivery import report_font
 
@@ -76,8 +78,8 @@ def render_help(reply):
             if index >= len(cards):
                 break
             title,lines,_ = cards[index]; x = margin+col*(column+gap)
-            draw.rounded_rectangle((x,y,x+column,y+row_height),25,fill='white')
-            draw.rounded_rectangle((x+24,y+25,x+30,y+66),3,fill='#1a8b9a')
+            continuous_rectangle(draw, (x,y,x+column,y+row_height), 24, fill='white')
+            continuous_rectangle(draw, (x+24,y+25,x+30,y+66), 4, fill='#1a8b9a')
             draw.text((x+46,y+24),title,font=heading,fill='#153d51')
             for j,line in enumerate(lines):
                 draw.text((x+30,y+88+j*39),line,font=font,fill='#365669')

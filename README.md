@@ -1,5 +1,7 @@
 # Lucky Cat · gmn_bot
 
+![Lucky Cat — QQ chat, weather, and a food atlas](docs/project-cover.svg)
+
 A QQ cat companion that runs on your own computer, with chat, stickers, weather, search, and a growing food map of China.
 
 Maintained by [frostmoon-rui](https://github.com/frostmoon-rui). The food map draws on CacheTide's [A Little Inn by the Clouds](https://cachetide.top) and [blog project](https://github.com/CacheTide/cachetide.github.io). Original sources are retained; this is an independent project, not an official branch of that blog.

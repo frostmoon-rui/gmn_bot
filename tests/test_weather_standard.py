@@ -25,14 +25,15 @@ def fixture():
 def rendered(data, target='today'):
     texts, boxes = [], []
     original = ImageDraw.ImageDraw.text
-    rounded = ImageDraw.ImageDraw.rounded_rectangle
+    from weather_graphics import continuous_rectangle
+    rounded = continuous_rectangle
     def record(draw, xy, text, *args, **kwargs):
         texts.append(str(text))
         return original(draw, xy, text, *args, **kwargs)
     def panel(draw, box, *args, **kwargs):
         boxes.append(box)
         return rounded(draw, box, *args, **kwargs)
-    with patch.object(ImageDraw.ImageDraw, 'text', record), patch.object(ImageDraw.ImageDraw, 'rounded_rectangle', panel):
+    with patch.object(ImageDraw.ImageDraw, 'text', record), patch('weather_graphics.continuous_rectangle', panel), patch('weather_delivery.continuous_rectangle', panel):
         image = Image.open(BytesIO(render_report(format_weather(data, target))))
     return image, texts, boxes
 
