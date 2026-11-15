@@ -89,6 +89,14 @@ class PaidPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(paid.call_args.args[1], 'gemini-4-argon')
         bot.call_mimo_direct_question.assert_not_called()
 
+    async def test_carbon_uses_only_one_paid_request(self):
+        bot = fake_bot()
+        with patch('paid_gemini.generate_paid', AsyncMock(return_value=SimpleNamespace(text='Answer'))) as paid:
+            self.assertEqual(await generate_research(bot, 'Question', purpose='carbon-answer'), 'Answer')
+        bot.client.aio.models.generate_content.assert_not_called()
+        paid.assert_awaited_once()
+        self.assertEqual(paid.call_args.args[1], 'gemini-4-carbon')
+
     async def test_unknown_purpose_cannot_use_either_key(self):
         bot = fake_bot()
         with self.assertRaises(ValueError):
@@ -98,7 +106,7 @@ class PaidPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_paid_wrapper_rejects_disallowed_models_before_reserving(self):
         with patch('paid_gemini.reserve_paid_call') as reserve:
             for purpose, model in [('ordinary-chat', 'gemini-4-argon'), ('research-plan', 'gemini-3.1-pro-preview'),
-                                   ('argon-answer', 'gemini-3.8-flash')]:
+                                   ('argon-answer', 'gemini-3.8-flash'), ('research-plan', 'gemini-4-carbon')]:
                 with self.assertRaises(ValueError):
                     await generate_paid(fake_bot(), model, 'Question', {}, purpose)
         reserve.assert_not_called()
@@ -181,3 +189,14 @@ class DirectCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(10, ext.search_users)
         generate.assert_awaited_once()
         ext.send.assert_not_called()
+
+
+    async def test_carbon_command_and_context_are_isolated(self):
+        ext = self.extension()
+        await ext.command('use gemini4carbon:Question', None, 'group', 20, 10, False, True, mentioned=True)
+        ext.argon_job.assert_called_once_with(None, 'group', 20, 10, 'Question', model='Carbon')
+        ext.remember_model_turn('Carbon', 'group', 20, 10, 'Original question', 'Original answer')
+        self.assertIn('Original answer', ext.contextual_question('Carbon', 'group', 20, 10, 'Follow-up'))
+        self.assertEqual(ext.contextual_question('Argon', 'group', 20, 10, 'Follow-up'), 'Follow-up')
+        self.assertEqual(ext.contextual_question('Carbon', 'group', 20, 11, 'Follow-up'), 'Follow-up')
+        self.assertEqual(ext.contextual_question('Carbon', 'private', 0, 10, 'Follow-up'), 'Follow-up')

@@ -1539,21 +1539,6 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
     return 'No model reply was available this time. Please try again later.'
 
 
-async def remember_search_result(kind, group, user, query, reply):
-    """Append a short answer to the current session for follow-ups, without notebook writes or executing retrieved tags."""
-    session = f'group_{group}' if kind == 'group' else f'private_{user}'
-    question = f'[Completed background research; questioner QQ:{user}] {query}'
-    async with model_locks[session]:
-        if ACTIVE_MODEL_PROVIDER == 'gemini':
-            history = chat_histories[session]
-            history.extend([types.Content(role='user', parts=[types.Part.from_text(text=question)]),
-                types.Content(role='model', parts=[types.Part.from_text(text=reply)])])
-        else:
-            histories = {'gpt': gpt_chat_histories, 'claude': claude_chat_histories, 'deepseek': deepseek_chat_histories}
-            history = histories[ACTIVE_MODEL_PROVIDER][session]
-            history.extend([{'role': 'user', 'content': question}, {'role': 'assistant', 'content': reply}])
-        history[:] = history[-MAX_HISTORY_LEN:]
-
 # ==================== 10. Send multiple message bubbles ====================
 async def send_multiline_messages(ws, action: str, target_params: dict, full_text: str):
     if 'admins' in globals() and session_actor.get() is not None:
@@ -1613,7 +1598,9 @@ async def handle_mimo_question(ws, msg_type: str, group_id, user_id: int,
         for mimo_model in MIMO_MODEL_NAMES:
             try:
                 answer = await asyncio.wait_for(
-                    call_mimo_direct_question(question, mimo_model),
+                    call_mimo_direct_question(
+                        extensions.contextual_question(('mimo-direct', mimo_model), msg_type, group_id, user_id, question),
+                        mimo_model),
                     timeout=180.0
                 )
                 promote_runtime_model("mimo", mimo_model)
@@ -1631,6 +1618,7 @@ async def handle_mimo_question(ws, msg_type: str, group_id, user_id: int,
             {"user_id": user_id, "message": answer}
         )
         await ws.send(json.dumps({"action": action, "params": params}))
+        extensions.remember_model_turn(('mimo-direct', mimo_model), msg_type, group_id, user_id, question, answer)
         print(f"[Assistant background task]: {session_key} completed and answer sent")
     except asyncio.TimeoutError:
         print(f"[Assistant background task]: {session_key} timed out and was terminated")

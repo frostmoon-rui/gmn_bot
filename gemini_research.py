@@ -3,6 +3,8 @@ import asyncio
 import re
 import time
 
+from paid_gemini import PAID_MODELS
+
 RESEARCH_MODE = 'gemini-research'
 DIRECT_ARGON_MODE = 'gemini-argon-direct'
 MODEL_TIMEOUT = 600
@@ -43,9 +45,10 @@ def failure_code(error):
 
 
 async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answer', validator=None, json_mode=False):
-    if purpose not in {'research-plan', 'argon-answer'}:
+    if purpose not in PAID_MODELS:
         raise ValueError('Unsupported Gemini fallback purpose')
-    models = ['gemini-4-argon', 'gemini-3.8-flash'] if purpose == 'research-plan' else ['gemini-4-argon']
+    models = PAID_MODELS[purpose]
+    tiers = ('paid',) if purpose == 'carbon-answer' else ('free', 'paid')
     config = {'temperature': 0.1 if json_mode else 0.3, 'max_output_tokens': max_tokens, 'tools': [],
               'http_options': {'timeout': MODEL_TIMEOUT * 1000, 'retry_options': {'attempts': 1}}}
     if json_mode:
@@ -54,7 +57,7 @@ async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answ
     if not hasattr(bot, '_scoped_gemini_cooldowns'):
         bot._scoped_gemini_cooldowns = {}
     cooldowns = bot._scoped_gemini_cooldowns
-    for tier in ('free', 'paid'):
+    for tier in tiers:
         if tier == 'paid' and not getattr(bot, 'RESEARCH_PAID_ENABLED', False):
             break
         for model in models:

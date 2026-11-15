@@ -582,10 +582,11 @@ class Extensions:
             return 'Important allowlist updated.'
         if text == 'view important allowlist':
             return json.dumps(self.important, ensure_ascii=False) if master else 'Only the original admin can view this.'
-        match = re.fullmatch(r'(web search|search report|search|ask assistant|gemini4argon answer)\s*[:：]\s*(.+)', text, re.S | re.I)
+        match = re.fullmatch(r'(web search|search report|search|ask assistant|gemini4argon answer|use gemini4carbon)\s*[:：]\s*(.+)', text, re.S | re.I)
         if match:
             direct_argon = match[1].lower() == 'gemini4argon answer'
-            if (match[1] == 'search' or direct_argon) and kind == 'group' and not mentioned:
+            direct_carbon = match[1].lower().endswith('gemini4carbon')
+            if (match[1] == 'search' or direct_argon or direct_carbon) and kind == 'group' and not mentioned:
                 return None
             if not whitelist:
                 return 'Research reports are available only to allowlisted users.'
@@ -596,6 +597,9 @@ class Extensions:
             if len(match[2]) > 2000:
                 return 'Keep the research question within 2000 characters.'
             self.search_users.add(user)
+            if direct_carbon:
+                self.spawn(self.argon_job(ws, kind, group, user, match[2], model='Carbon'))
+                return 'Carbon is working in the background.'
             if direct_argon:
                 self.spawn(self.argon_job(ws, kind, group, user, match[2]))
                 return 'Argon is thinking in the background; an answer will follow.'
@@ -605,23 +609,40 @@ class Extensions:
                     if model == RESEARCH_MODE else 'Research is running in the background; a short conclusion will follow.')
         return None
 
-    async def argon_job(self, ws, kind, group, user, query):
+    def contextual_question(self, feature, kind, group, user, query):
+        key = (feature, kind, group if kind == 'group' else 0, user)
+        history = vars(self).setdefault('model_context', {}).get(key, [])
+        if not history:
+            return query
+        return ('Previous turns in this conversation (reference only):\n'
+                + json.dumps(history, ensure_ascii=False)
+                + '\nCurrent question: ' + query)
+
+    def remember_model_turn(self, feature, kind, group, user, query, answer):
+        key = (feature, kind, group if kind == 'group' else 0, user)
+        histories = vars(self).setdefault('model_context', {})
+        history = histories.pop(key, [])
+        histories[key] = [*history[-2:], {'question': query[:2000], 'answer': answer[:3000]}]
+        if len(histories) > 128:
+            histories.pop(next(iter(histories)))
+
+    async def argon_job(self, ws, kind, group, user, query, model='Argon'):
         from mimo_explanations import explanation_prompt, explanation_reply, reply_chunks
         try:
-            prompt = explanation_prompt(query, {'pages': []}, datetime.now(SHANGHAI).isoformat(),
+            contextual = self.contextual_question(model, kind, group, user, query)
+            prompt = explanation_prompt(contextual, {'pages': []}, datetime.now(SHANGHAI).isoformat(),
                                         'English')
-            answer = await generate_research(self.b, prompt, max_tokens=8192, purpose='argon-answer')
+            answer = await generate_research(self.b, prompt, max_tokens=8192, purpose=model.lower() + '-answer')
             report = explanation_reply(answer)
             if not report:
-                raise ValueError('Empty Argon answer')
+                raise ValueError('Empty Gemini answer')
             self.remember_sources(kind, group, user, [])
             for chunk in reply_chunks(report):
                 await self.send(ws, kind, group, user, chunk)
-            if hasattr(self.b, 'remember_search_result'):
-                await self.b.remember_search_result(kind, group, user, query, report)
+            self.remember_model_turn(model, kind, group, user, query, report)
         except Exception as error:
-            print('[Direct Argon answer failed]:', type(error).__name__)
-            await self.send(ws, kind, group, user, 'Argon is temporarily unavailable. Please try later.')
+            print('[Direct Gemini answer failed]:', model, type(error).__name__)
+            await self.send(ws, kind, group, user, f'{model} is temporarily unavailable. Please try later.')
         finally:
             self.search_users.discard(user)
 
@@ -712,6 +733,9 @@ class Extensions:
         return html.unescape(re.sub('<[^>]+>', ' ', raw))[:40000]
 
     async def search_job(self, ws, kind, group, user, query, model='mimo-v2.6-flash', mode='web', topic=''):
+        feature = (model, mode)
+        contextual = self.contextual_question(feature, kind, group, user, query)
+
         async def run():
             print('[Research]: Independent Python process started web, encyclopedia and news retrieval')
             now = datetime.now(SHANGHAI).isoformat()
@@ -734,15 +758,14 @@ class Extensions:
                 print('[Detailed research answer]: MiMo 2.6 Pro; retrieved pages:', len(pages))
                 self.remember_sources(kind, group, user, [p['url'] for p in pages if p.get('url')])
                 try:
-                    report = await explain(self.b, query, result, now, 'English')
+                    report = await explain(self.b, contextual, result, now, 'English')
                 except Exception as error:
                     print('[Detailed Pro answer failed]:', self.b.describe_api_error(error))
                     await self.send(ws, kind, group, user, 'The assistant could not complete the answer. Please try later.')
                     return
                 for chunk in reply_chunks(report):
                     await self.send(ws, kind, group, user, chunk)
-                if hasattr(self.b, 'remember_search_result'):
-                    await self.b.remember_search_result(kind, group, user, query, report)
+                self.remember_model_turn(feature, kind, group, user, query, report)
                 return
             if not pages:
                 states = {row.get('state') for row in result.get('search_diagnostics', [])}
@@ -766,7 +789,7 @@ class Extensions:
                 'For concepts and academic questions, use relevant Wikipedia definitions and explanations, retaining necessary terms and qualifications. '
                 'Wikipedia cannot verify the latest version; never infer an official latest model from a third-party product entry. '
                 'Dates listed in the data are merely dates found in text, not necessarily publication dates; verify context. '
-                'Check sources internally without piling links into the answer. Question: ' + query + '\nMaterial: ' + material[:320000])
+                'Check sources internally without piling links into the answer. Question: ' + contextual + '\nMaterial: ' + material[:320000])
             print(f'[Research]: Retrieved {len(pages)} pages, {len(material)} characters')
             try:
                 report = await asyncio.wait_for(self.b.call_mimo_direct_question(prompt, model), timeout=100)
@@ -776,8 +799,7 @@ class Extensions:
             self.remember_sources(kind, group, user, urls)
             report = compact_reply(report, 240) or 'Material was retrieved, but no reliable conclusion could be generated.'
             await self.send(ws, kind, group, user, report)
-            if hasattr(self.b, 'remember_search_result'):
-                await self.b.remember_search_result(kind, group, user, query, report)
+            self.remember_model_turn(feature, kind, group, user, query, report)
         try:
             if model == RESEARCH_MODE:
                 await run()

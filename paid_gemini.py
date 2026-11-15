@@ -7,8 +7,11 @@ import sqlite3
 
 from local_settings import setting
 
-ALLOWED_MODELS = {'gemini-4-argon', 'gemini-3.8-flash'}
-ALLOWED_PURPOSES = {'research-plan', 'argon-answer'}
+PAID_MODELS = {
+    'research-plan': ('gemini-4-argon', 'gemini-3.8-flash'),
+    'argon-answer': ('gemini-4-argon',),
+    'carbon-answer': ('gemini-4-carbon',),
+}
 
 
 def reserve_paid_call(path, limit):
@@ -29,10 +32,8 @@ def reserve_paid_call(path, limit):
 
 
 async def generate_paid(bot, model, prompt, config, purpose):
-    if purpose not in ALLOWED_PURPOSES or model not in ALLOWED_MODELS:
+    if model not in PAID_MODELS.get(purpose, ()):
         raise ValueError('Paid Gemini request outside permitted scope')
-    if purpose == 'argon-answer' and model != 'gemini-4-argon':
-        raise ValueError('Direct Argon questions cannot substitute Flash')
     if not getattr(bot, 'RESEARCH_PAID_ENABLED', False):
         raise RuntimeError('Paid research integration disabled')
     key = setting('GEMINI_RESEARCH_PAID_API_KEY', '').strip()

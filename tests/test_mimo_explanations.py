@@ -43,7 +43,8 @@ class ExplanationTests(unittest.IsolatedAsyncioTestCase):
         answer = self.ext.send.call_args.args[-1]
         self.assertGreater(len(answer), 240)
         self.assertIn('\n\n', answer)
-        self.bot.remember_search_result.assert_awaited_once()
+        self.bot.remember_search_result.assert_not_called()
+        self.assertIn('How did thinking work', self.ext.contextual_question((MODEL, 'web'), 'group', 20, 10, 'Follow-up'))
         self.assertNotIn(10, self.ext.search_users)
 
     async def test_search_exception_still_calls_pro(self):
