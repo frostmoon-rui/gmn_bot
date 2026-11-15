@@ -29,7 +29,8 @@ from bot_extensions import Extensions
 from bot_features import Features, HELP, event_text, message_text, safe_segments, reply_belongs_to
 from bot_care import care_reply
 from bot_runtime import (JsonStore, OneBotSocket, SessionDispatcher, EventDeduplicator,
-                         preferred_onebot_endpoint, yield_onebot_to_preferred)
+                         preferred_onebot_endpoint, yield_onebot_to_preferred,
+                         stop_onebot_after_logout)
 from video_summary import VideoSummaries
 from reply_style import parse_search_request, english_provider_text
 from gemini_research import is_research_model, rank_research_models, research_model_score
@@ -2556,6 +2557,7 @@ async def main():
     from album_backup import daily_album_backup
     group_account = setting('GROUP_CHAT_ACCOUNT', '')
     preferred_receiver = '127.0.0.2' if str(setting('NAPCAT_PREFER_SECONDARY', 'false')).lower() in {'true', '1'} else None
+    stop_on_logout_account = str(setting('NAPCAT_SECONDARY_STOP_ON_LOGOUT_ACCOUNT', '')).strip()
     if preferred_receiver:
         no_proxy = os.environ.get('NO_PROXY', '')
         os.environ['NO_PROXY'] = ','.join(filter(None, (no_proxy, '127.0.0.1', preferred_receiver)))
@@ -2575,7 +2577,7 @@ async def main():
     event_deduplicator = EventDeduplicator()
     while True:
         dispatcher = SessionDispatcher()
-        ws = priority_watch = None
+        ws = priority_watch = logout_watch = None
         try:
             print(f"Connecting to NapCat ({WS_URL})...")
             endpoint = await preferred_onebot_endpoint(WS_URL, preferred_receiver) if preferred_receiver else WS_URL
@@ -2585,6 +2587,8 @@ async def main():
                 ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache,
                                   image_policy=globals().get('sticker_moderation'), group_account=group_account,
                                   private_ignored=setting('PRIVATE_IGNORED_BY_ACCOUNT', {}))
+                if preferred_receiver and endpoint != WS_URL and stop_on_logout_account.isdecimal():
+                    logout_watch = asyncio.create_task(stop_onebot_after_logout(ws, stop_on_logout_account))
                 active_ws = ws
                 print(">>> Cat butler started!")
                 async for raw_data in raw_ws:
@@ -2625,9 +2629,11 @@ async def main():
         except Exception as e:
             print(f"Error: {e}; retrying in 5 seconds...")
         finally:
-            if priority_watch is not None:
-                priority_watch.cancel()
-                await asyncio.gather(priority_watch, return_exceptions=True)
+            watchers = [task for task in (priority_watch, logout_watch) if task is not None]
+            for task in watchers:
+                task.cancel()
+            if watchers:
+                await asyncio.gather(*watchers, return_exceptions=True)
             active_ws = None
             if ws is not None:
                 ws.close_pending()

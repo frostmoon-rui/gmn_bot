@@ -82,6 +82,41 @@ async def yield_onebot_to_preferred(raw, primary, preferred):
             return
 
 
+async def stop_onebot_after_logout(ws, expected_account, interval=5):
+    """Stop a verified receiver only after an observed online-to-offline transition."""
+    async def call(action):
+        return await ws.send(json.dumps({'action': action, 'params': {}}))
+
+    was_online = False
+    offline_samples = 0
+    while not ws.closed:
+        try:
+            identity = await call('get_login_info')
+            status = await call('get_status') if (
+                isinstance(identity, dict) and str(identity.get('user_id')) == str(expected_account)
+            ) else None
+        except (OSError, RuntimeError, TimeoutError):
+            status = None
+        online = status.get('online') if isinstance(status, dict) and status.get('good') is True else None
+        if online is True:
+            was_online = True
+            offline_samples = 0
+        elif online is False and was_online:
+            offline_samples += 1
+            if offline_samples >= 2:
+                print('[OneBot]: Secondary QQ logout confirmed; stopping the instance.')
+                try:
+                    # NapCat exits the process before returning the OneBot response.
+                    await call('bot_exit')
+                except (OSError, RuntimeError, TimeoutError) as error:
+                    if not ws.closed:
+                        print('[OneBot]: Secondary stop not acknowledged:', type(error).__name__)
+                return
+        else:
+            offline_samples = 0
+        await asyncio.sleep(interval)
+
+
 class OneBotSocket:
     def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None, private_ignored=None):
         self.raw = raw

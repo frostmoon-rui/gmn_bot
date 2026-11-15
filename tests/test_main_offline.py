@@ -577,3 +577,39 @@ class PreferredOneBotTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await preferred_onebot_endpoint(primary, '127.0.0.2'), 'ws://127.0.0.2:3001')
         connect.assert_awaited_with('127.0.0.2', 3001)
         writer.close.assert_called_once()
+
+
+class OneBotLogoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stops_only_after_two_consecutive_verified_offline_samples(self):
+        from bot_runtime import stop_onebot_after_logout
+
+        samples = iter([False, False, True, False, TimeoutError(), False, False])
+        actions = []
+        async def send(payload):
+            action = json.loads(payload)['action']
+            actions.append(action)
+            if action == 'get_login_info':
+                return {'user_id': 998}
+            if action == 'get_status':
+                sample = next(samples)
+                if isinstance(sample, Exception):
+                    raise sample
+                return {'online': sample, 'good': True}
+            self.assertEqual(action, 'bot_exit')
+            raise ConnectionError('receiver exited')
+
+        await stop_onebot_after_logout(SimpleNamespace(send=send, closed=False), '998', interval=0)
+        self.assertEqual(actions, ['get_login_info', 'get_status'] * 7 + ['bot_exit'])
+
+    async def test_never_checks_status_or_stops_another_account(self):
+        from bot_runtime import stop_onebot_after_logout
+
+        ws = SimpleNamespace(closed=False)
+        async def send(payload):
+            ws.closed = True
+            self.assertEqual(json.loads(payload)['action'], 'get_login_info')
+            return {'user_id': 999}
+
+        ws.send = AsyncMock(side_effect=send)
+        await stop_onebot_after_logout(ws, '998', interval=0)
+        ws.send.assert_awaited_once()
