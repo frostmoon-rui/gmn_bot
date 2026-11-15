@@ -536,6 +536,16 @@ class EnglishExtensionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AccountRoutingTests(unittest.IsolatedAsyncioTestCase):
+    def test_private_ignored_peers_are_scoped_to_receiving_account(self):
+        ws = OneBotSocket(None, {}, group_account='999', private_ignored={'998': [20, '21']})
+        event = {'post_type': 'message', 'message_type': 'private'}
+        ws.self_id = 998
+        self.assertFalse(ws.allows_event(dict(event, user_id=20)))
+        self.assertFalse(ws.allows_event(dict(event, user_id='21')))
+        self.assertTrue(ws.allows_event(dict(event, user_id=22)))
+        ws.self_id = 999
+        self.assertTrue(ws.allows_event(dict(event, user_id=20)))
+
     async def test_only_configured_account_can_handle_groups(self):
         raw = SimpleNamespace(send=AsyncMock())
         ws = OneBotSocket(raw, {}, group_account='999')

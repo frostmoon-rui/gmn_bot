@@ -83,7 +83,7 @@ async def yield_onebot_to_preferred(raw, primary, preferred):
 
 
 class OneBotSocket:
-    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None):
+    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None, private_ignored=None):
         self.raw = raw
         self.message_ids = message_ids
         self.timeout = timeout
@@ -93,6 +93,11 @@ class OneBotSocket:
         self.self_id = None
         self.image_policy = image_policy
         self.group_account = None if group_account is None else str(group_account)
+        self.private_ignored = {
+            str(account): {str(peer) for peer in peers}
+            for account, peers in (private_ignored or {}).items()
+            if isinstance(peers, list)
+        } if isinstance(private_ignored, dict) else {}
 
     @property
     def group_enabled(self):
@@ -101,10 +106,11 @@ class OneBotSocket:
         )
 
     def allows_event(self, event):
-        return self.group_enabled or (
-            event.get('post_type') == 'message' and event.get('message_type') == 'private'
-            and not event.get('group_id')
-        )
+        is_private = (event.get('post_type') == 'message' and event.get('message_type') == 'private'
+                      and not event.get('group_id'))
+        if is_private:
+            return str(event.get('user_id')) not in self.private_ignored.get(str(self.self_id), ())
+        return self.group_enabled
 
     async def send(self, payload):
         if self.closed:

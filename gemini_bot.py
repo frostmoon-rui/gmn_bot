@@ -2583,7 +2583,8 @@ async def main():
                 if preferred_receiver and endpoint == WS_URL:
                     priority_watch = asyncio.create_task(yield_onebot_to_preferred(raw_ws, WS_URL, preferred_receiver))
                 ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache,
-                                  image_policy=globals().get('sticker_moderation'), group_account=group_account)
+                                  image_policy=globals().get('sticker_moderation'), group_account=group_account,
+                                  private_ignored=setting('PRIVATE_IGNORED_BY_ACCOUNT', {}))
                 active_ws = ws
                 print(">>> Cat butler started!")
                 async for raw_data in raw_ws:
