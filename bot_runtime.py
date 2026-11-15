@@ -62,6 +62,26 @@ class JsonStore:
                     os.unlink(temporary)
 
 
+async def preferred_onebot_endpoint(primary, preferred, timeout=1):
+    if preferred is None:
+        return primary
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(preferred, 3001), timeout)
+    except (OSError, TimeoutError):
+        return primary
+    writer.close()
+    return f'ws://{preferred}:3001'
+
+
+async def yield_onebot_to_preferred(raw, primary, preferred):
+    while True:
+        await asyncio.sleep(5)
+        if await preferred_onebot_endpoint(primary, preferred) != primary:
+            print('[OneBot]: Preferred listener is available; switching connection.')
+            await raw.close()
+            return
+
+
 class OneBotSocket:
     def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None):
         self.raw = raw

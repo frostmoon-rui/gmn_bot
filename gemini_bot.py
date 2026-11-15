@@ -28,7 +28,8 @@ from contextvars import ContextVar
 from bot_extensions import Extensions
 from bot_features import Features, HELP, event_text, message_text, safe_segments, reply_belongs_to
 from bot_care import care_reply
-from bot_runtime import JsonStore, OneBotSocket, SessionDispatcher, EventDeduplicator
+from bot_runtime import (JsonStore, OneBotSocket, SessionDispatcher, EventDeduplicator,
+                         preferred_onebot_endpoint, yield_onebot_to_preferred)
 from video_summary import VideoSummaries
 from reply_style import parse_search_request, english_provider_text
 from gemini_research import is_research_model, rank_research_models, research_model_score
@@ -2554,6 +2555,11 @@ async def main():
     extensions.spawn(maintenance_loop(sys.modules[__name__],Path(__file__).resolve().parent))
     from album_backup import daily_album_backup
     group_account = setting('GROUP_CHAT_ACCOUNT', '')
+    preferred_receiver = '127.0.0.2' if str(setting('NAPCAT_PREFER_SECONDARY', 'false')).lower() in {'true', '1'} else None
+    if preferred_receiver:
+        no_proxy = os.environ.get('NO_PROXY', '')
+        os.environ['NO_PROXY'] = ','.join(filter(None, (no_proxy, '127.0.0.1', preferred_receiver)))
+
     extensions.spawn(daily_album_backup(lambda: active_ws, setting('ALBUM_BACKUP_GROUP_ID', ''),
                                        setting('ALBUM_BACKUP_DIRECTORY', ''),
                                        setting('DRESS_UPLOAD_ALBUM_TAG', ''),
@@ -2569,10 +2575,13 @@ async def main():
     event_deduplicator = EventDeduplicator()
     while True:
         dispatcher = SessionDispatcher()
-        ws = None
+        ws = priority_watch = None
         try:
             print(f"Connecting to NapCat ({WS_URL})...")
-            async with websockets.connect(WS_URL, max_size=16 * 1024 * 1024, ping_interval=20, ping_timeout=30) as raw_ws:
+            endpoint = await preferred_onebot_endpoint(WS_URL, preferred_receiver) if preferred_receiver else WS_URL
+            async with websockets.connect(endpoint, max_size=16 * 1024 * 1024, ping_interval=20, ping_timeout=30) as raw_ws:
+                if preferred_receiver and endpoint == WS_URL:
+                    priority_watch = asyncio.create_task(yield_onebot_to_preferred(raw_ws, WS_URL, preferred_receiver))
                 ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache,
                                   image_policy=globals().get('sticker_moderation'), group_account=group_account)
                 active_ws = ws
@@ -2615,6 +2624,9 @@ async def main():
         except Exception as e:
             print(f"Error: {e}; retrying in 5 seconds...")
         finally:
+            if priority_watch is not None:
+                priority_watch.cancel()
+                await asyncio.gather(priority_watch, return_exceptions=True)
             active_ws = None
             if ws is not None:
                 ws.close_pending()

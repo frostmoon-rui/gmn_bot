@@ -553,3 +553,17 @@ class AccountRoutingTests(unittest.IsolatedAsyncioTestCase):
         ws.self_id = 999
         self.assertTrue(ws.allows_event(group))
         self.assertTrue(ws.allows_event(private))
+
+
+class PreferredOneBotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prefers_secondary_only_when_listening(self):
+        from unittest.mock import patch
+        from bot_runtime import preferred_onebot_endpoint
+
+        primary = 'ws://127.0.0.1:3001'
+        writer = Mock()
+        with patch('bot_runtime.asyncio.open_connection', AsyncMock(side_effect=[OSError(), (None, writer)])) as connect:
+            self.assertEqual(await preferred_onebot_endpoint(primary, '127.0.0.2'), primary)
+            self.assertEqual(await preferred_onebot_endpoint(primary, '127.0.0.2'), 'ws://127.0.0.2:3001')
+        connect.assert_awaited_with('127.0.0.2', 3001)
+        writer.close.assert_called_once()
