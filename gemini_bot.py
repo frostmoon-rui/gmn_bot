@@ -2553,10 +2553,12 @@ async def main():
     from runtime_maintenance import maintenance_loop
     extensions.spawn(maintenance_loop(sys.modules[__name__],Path(__file__).resolve().parent))
     from album_backup import daily_album_backup
+    group_account = setting('GROUP_CHAT_ACCOUNT', '')
     extensions.spawn(daily_album_backup(lambda: active_ws, setting('ALBUM_BACKUP_GROUP_ID', ''),
                                        setting('ALBUM_BACKUP_DIRECTORY', ''),
                                        setting('DRESS_UPLOAD_ALBUM_TAG', ''),
-                                       setting('DRESS_UPLOAD_GITHUB_OWNER', '')))
+                                       setting('DRESS_UPLOAD_GITHUB_OWNER', ''),
+                                       enabled=lambda: active_ws is not None and active_ws.group_enabled))
     await asyncio.gather(*(asyncio.to_thread(function) for function in (
         init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))
     await prepare_stolen_emoji_store()
@@ -2571,7 +2573,8 @@ async def main():
         try:
             print(f"Connecting to NapCat ({WS_URL})...")
             async with websockets.connect(WS_URL, max_size=16 * 1024 * 1024, ping_interval=20, ping_timeout=30) as raw_ws:
-                ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache, image_policy=globals().get('sticker_moderation'))
+                ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache,
+                                  image_policy=globals().get('sticker_moderation'), group_account=group_account)
                 active_ws = ws
                 print(">>> Cat butler started!")
                 async for raw_data in raw_ws:
@@ -2582,7 +2585,7 @@ async def main():
                         continue
                     if not isinstance(data, dict) or ws.accept_response(data):
                         continue
-                    if data.get('post_type') not in {'message', 'notice'}:
+                    if data.get('post_type') not in {'message', 'notice', 'meta_event'}:
                         continue
                     try:
                         for field in ('user_id', 'self_id', 'group_id', 'message_id'):
@@ -2593,6 +2596,8 @@ async def main():
                         continue
                     if data.get('self_id') is not None:
                         ws.self_id = data['self_id']
+                    if data.get('post_type') == 'meta_event' or not ws.allows_event(data):
+                        continue
                     if event_deduplicator.is_duplicate(data):
                         continue
                     session = ('group_' + str(data.get('group_id'))) if data.get('group_id') else ('private_' + str(data.get('user_id')))

@@ -414,11 +414,13 @@ class Features:
         for record in list(self.reminders):
             if record.get('status') != 'pending' or record.get('due', now+1) > now or record.get('retry_at', 0) > now:
                 continue
+            ws = self.b.active_ws
+            if record['kind'] == 'group' and ws is not None and not getattr(ws, 'group_enabled', True):
+                continue
             if now - record['due'] > 86400:
                 record['status'] = 'expired'
                 print('[Reminder expired]:', record['id'], 'Offline for more than a day; record retained for review')
             else:
-                ws = self.b.active_ws
                 if ws is None:
                     continue
                 try:

@@ -63,7 +63,7 @@ class JsonStore:
 
 
 class OneBotSocket:
-    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None):
+    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None):
         self.raw = raw
         self.message_ids = message_ids
         self.timeout = timeout
@@ -72,11 +72,30 @@ class OneBotSocket:
         self.message_cache = message_cache
         self.self_id = None
         self.image_policy = image_policy
+        self.group_account = None if group_account is None else str(group_account)
+
+    @property
+    def group_enabled(self):
+        return self.group_account is None or (
+            self.self_id is not None and str(self.self_id) == self.group_account
+        )
+
+    def allows_event(self, event):
+        return self.group_enabled or (
+            event.get('post_type') == 'message' and event.get('message_type') == 'private'
+            and not event.get('group_id')
+        )
 
     async def send(self, payload):
         if self.closed:
             raise ConnectionError('NapCat connection is closed')
         data = json.loads(payload)
+        action = data.get('action', '')
+        if not self.group_enabled and (
+                'group_id' in (data.get('params') or {}) or
+                action.startswith(('send_group_', 'get_group_', 'set_group_', 'get_qun_')) or
+                (action == 'send_msg' and (data.get('params') or {}).get('message_type') == 'group')):
+            raise PermissionError('Group actions are disabled for this OneBot account')
         if self.image_policy is not None and not await self.image_policy.before_send(data):
             return {'suppressed': True}
         echo = 'gmn_' + uuid.uuid4().hex

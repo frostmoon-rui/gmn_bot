@@ -228,7 +228,7 @@ async def backup(ws, group, root):
     return summary
 
 
-async def daily_album_backup(get_ws, group, directory, dress_album="", dress_owner=""):
+async def daily_album_backup(get_ws, group, directory, dress_album="", dress_owner="", *, enabled=lambda: True):
     if not group:
         return
     if not str(group).isdecimal() or not directory:
@@ -242,6 +242,9 @@ async def daily_album_backup(get_ws, group, directory, dress_album="", dress_own
     dress_state = root / "daily-dress-upload.json"
     next_backup = next_upload = 0
     while True:
+        if not enabled():
+            await asyncio.sleep(60)
+            continue
         today = datetime.now(BEIJING).date().isoformat()
         now = asyncio.get_running_loop().time()
         ws = get_ws()

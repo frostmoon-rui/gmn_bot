@@ -457,6 +457,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             scope[name] = lambda: None
         scope['prepare_stolen_emoji_store'] = AsyncMock()
         scope['background_periodic_monitor'] = idle
+        scope['setting'] = lambda name, default='': '999' if name == 'GROUP_CHAT_ACCOUNT' else default
         main = asyncio.create_task(scope['main']())
         try:
             async with asyncio.timeout(2):
@@ -532,3 +533,23 @@ class EnglishExtensionTests(unittest.IsolatedAsyncioTestCase):
                 for node in ast.walk(by_name[name])), name)
         for name in ('call_mimo_organizer', 'call_mimo_direct_question'):
             self.assertIn('English', ast.get_source_segment(source, by_name[name]), name)
+
+
+class AccountRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_configured_account_can_handle_groups(self):
+        raw = SimpleNamespace(send=AsyncMock())
+        ws = OneBotSocket(raw, {}, group_account='999')
+        group = {'post_type': 'message', 'message_type': 'group', 'group_id': 20}
+        private = {'post_type': 'message', 'message_type': 'private'}
+        for account in (None, 998):
+            ws.self_id = account
+            self.assertFalse(ws.allows_event(group))
+            self.assertFalse(ws.allows_event({'post_type': 'notice', 'group_id': 20}))
+            self.assertTrue(ws.allows_event(private))
+            for action in ('send_group_msg', 'get_qun_album_list'):
+                with self.assertRaises(PermissionError):
+                    await ws.send(json.dumps({'action': action, 'params': {'group_id': 20}}))
+        raw.send.assert_not_called()
+        ws.self_id = 999
+        self.assertTrue(ws.allows_event(group))
+        self.assertTrue(ws.allows_event(private))

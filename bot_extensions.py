@@ -829,6 +829,9 @@ class Extensions:
                             continue
                         if self.weather_state.get(user) == date:
                             continue
+                        group = settings.get('group_id')
+                        if group and not getattr(self.b.active_ws, 'group_enabled', True):
+                            continue
                         region = self.b.regions_data.get(user, {})
                         if not region.get('location'):
                             continue
@@ -837,7 +840,6 @@ class Extensions:
                         if not data or not has_tomorrow(data):
                             continue
                         answer = self.weather_report(data, target='tomorrow', important=True)
-                        group = settings.get('group_id')
                         try:
                             await self.send_weather(self.b.active_ws, 'group' if group else 'private', group, int(user), answer)
                         except asyncio.TimeoutError:
@@ -1043,6 +1045,9 @@ class Extensions:
                                 continue
                             if not matches_province(self.b.regions_data.get(str(uid), {}), event):
                                 continue
+                            group = settings.get('group_id')
+                            if group and not getattr(ws, 'group_enabled', True):
+                                continue
                             key = str(uid)+':'+event['id']
                             aliases = [str(uid)+':'+identifier for identifier in event.get('dedup_ids', [event['id']])]
                             if any(alias in self.earthquake_deliveries for alias in aliases):
@@ -1056,7 +1061,6 @@ class Extensions:
                             if len(self.earthquake_deliveries) > 2000:
                                 self.earthquake_deliveries = dict(list(self.earthquake_deliveries.items())[-1500:])
                             await self.b.save_json_data_async('earthquake_deliveries.json', self.earthquake_deliveries)
-                            group = settings.get('group_id')
                             await self.send(ws, 'group' if group else 'private', group or 0, int(uid), message)
                             print('[Earthquake subscription]: Delivery attempted; no unrelated groups notified')
             except Exception as error:
