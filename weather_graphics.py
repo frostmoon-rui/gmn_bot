@@ -140,7 +140,7 @@ def weather_icon(draw, x, y, size, row, daily=False, background='white'):
         draw.ellipse(box(.12,.43,.54,.83), fill='#a6bacb')
         draw.ellipse(box(.33,.24,.79,.78), fill='#bccbd6')
         draw.ellipse(box(.60,.44,.94,.83), fill='#a6bacb')
-        draw.rounded_rectangle(box(.24,.57,.82,.83),radius=4,fill='#bccbd6')
+        draw.rounded_rectangle(box(.24,.57,.82,.83),radius=8,fill='#bccbd6')
     if kind == 'unknown':
         draw.ellipse(box(.30,.25,.70,.65),outline='#c5d0da',width=max(1,size*.04))
         return
