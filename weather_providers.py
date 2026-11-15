@@ -224,19 +224,31 @@ class WeatherAggregator:
 def request_json(url, payload=None, headers=None, timeout=8):
     request = urllib.request.Request(url, data=json.dumps(payload).encode() if payload is not None else None,
         headers={'User-Agent': 'GmnWeatherBot/1.0', **({'Content-Type': 'application/json'} if payload is not None else {}), **(headers or {})})
+    direct_fallback = (
+        payload is None and headers is None
+        and urllib.parse.urlsplit(url).netloc in {'api.open-meteo.com', 'geocoding-api.open-meteo.com'}
+        and urllib.parse.urlsplit(url).scheme == 'https'
+        and bool(urllib.request.getproxies().get('https'))
+    )
+    open_request = urllib.request.urlopen
     try:
         for attempt in range(2):
             try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
+                with open_request(request, timeout=timeout) as response:
                     raw = response.read(1024*1024+1)
+                if open_request is not urllib.request.urlopen:
+                    print('[Open-Meteo connection]: Direct fallback reached the service.')
                 break
             except urllib.error.HTTPError as error:
                 if attempt or payload is not None or error.code not in {502, 503, 504}:
                     raise
                 error.close()
-            except (urllib.error.URLError, TimeoutError, ConnectionError):
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
                 if attempt or payload is not None:
                     raise
+                if direct_fallback:
+                    print('[Open-Meteo proxy unavailable]:', error_code(error), '; retrying directly.')
+                    open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
             time.sleep(0.35)
     except urllib.error.HTTPError as error:
         try:

@@ -110,3 +110,19 @@ class WeatherConnectionTests(unittest.TestCase):
             open_url.side_effect = [URLError(TimeoutError()), response]
             self.assertEqual(request_json('https://example.invalid/weather'), {'ok': True})
             self.assertEqual(open_url.call_count, 2)
+
+
+    def test_open_meteo_proxy_failure_uses_direct_transport(self):
+        from unittest.mock import patch
+        from urllib.error import URLError
+        from weather_providers import request_json
+
+        with (patch('weather_providers.urllib.request.getproxies', return_value={'https': 'http://127.0.0.1:7897'}),
+              patch('weather_providers.urllib.request.urlopen', side_effect=URLError(TimeoutError())),
+              patch('weather_providers.urllib.request.build_opener') as build,
+              patch('weather_providers.time.sleep')):
+            direct = build.return_value.open
+            direct.return_value.__enter__.return_value.read.return_value = b'{"ok": true}'
+            self.assertTrue(request_json('https://api.open-meteo.com/v1/forecast')['ok'])
+            self.assertEqual(build.call_args.args[0].proxies, {})
+            direct.assert_called_once()

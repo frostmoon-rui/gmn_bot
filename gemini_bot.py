@@ -54,7 +54,7 @@ WS_URL = "ws://127.0.0.1:3001"          # NapCat WebSocket address
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_API_KEY = setting('OPENAI_API_KEY', '').strip()
 GPT_MODEL_NAMES = []
-GPT_MODEL_NAME = "gpt-4o"
+GPT_MODEL_NAME = "gpt-6-astra"
 
 # Claude: supply the key through ANTHROPIC_API_KEY.
 ANTHROPIC_API_KEY = setting('ANTHROPIC_API_KEY', '').strip()
@@ -62,7 +62,7 @@ ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"
 CLAUDE_MODEL_NAMES = [
     model.strip() for model in os.getenv(
         "ANTHROPIC_MODELS",
-        "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5"
+        "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,claude-fable-5-2"
     ).split(",") if model.strip()
 ]
 
@@ -84,7 +84,7 @@ CLAUDE_MODEL_NAME = CLAUDE_MODEL_NAMES[0] if CLAUDE_MODEL_NAMES else "claude-son
 # DeepSeek uses the OpenAI-compatible Chat Completions API.
 DEEPSEEK_API_KEY = setting('DEEPSEEK_API_KEY', '').strip()
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
-DEEPSEEK_MODEL_NAMES = ["deepseek-v4-pro", "deepseek-flash", "deepseek-reasoner", "deepseek-chat"]
+DEEPSEEK_MODEL_NAMES = ["deepseek-flash", "deepseek-v4-pro"]
 DEEPSEEK_MODEL_NAME = DEEPSEEK_MODEL_NAMES[0]
 
 # MiMo 2.5 Pro is only a notebook-organizing fallback if all Gemini Pro models fail.
@@ -528,9 +528,10 @@ def init_chat_models():
     from model_catalogs import discover
     global AVAILABLE_CHAT_MODELS, AVAILABLE_ORGANIZER_MODELS, AVAILABLE_RESEARCH_MODELS
     fallback = (list(AVAILABLE_CHAT_MODELS) + list(AVAILABLE_ORGANIZER_MODELS) +
-                ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'])
+                ['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.6-flash',
+                 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview'])
     names = discover('gemini', GEMINI_API_KEY, 'https://generativelanguage.googleapis.com/v1beta', fallback, TARGET_PROXY)
-    AVAILABLE_CHAT_MODELS = [name for name in names if ('flash' in name or 'lite' in name) and not is_research_model(name)]
+    AVAILABLE_CHAT_MODELS = [name for name in names if (name == 'gemini-4-hydrogen' or 'flash' in name or 'lite' in name) and not is_research_model(name)]
     AVAILABLE_ORGANIZER_MODELS = rank_research_models(names)
     AVAILABLE_RESEARCH_MODELS = [name for name in ('gemini-4-argon', 'gemini-3.8-flash') if name in names]
     print('[Gemini chat candidates]:', AVAILABLE_CHAT_MODELS)
@@ -578,7 +579,7 @@ def init_deepseek_models():
     from model_catalogs import discover
     global DEEPSEEK_MODEL_NAMES, DEEPSEEK_MODEL_NAME
     DEEPSEEK_MODEL_NAMES = discover('deepseek', DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_NAMES, TARGET_PROXY)
-    DEEPSEEK_MODEL_NAME = DEEPSEEK_MODEL_NAMES[0] if DEEPSEEK_MODEL_NAMES else 'deepseek-chat'
+    DEEPSEEK_MODEL_NAME = DEEPSEEK_MODEL_NAMES[0] if DEEPSEEK_MODEL_NAMES else 'deepseek-flash'
     print('[DeepSeek text candidates]:', DEEPSEEK_MODEL_NAMES)
 
 def init_mimo_models():

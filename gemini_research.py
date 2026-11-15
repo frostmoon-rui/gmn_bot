@@ -12,7 +12,7 @@ EXCLUDE = ('image', 'audio', 'tts', 'transcribe', 'live', 'embedding', 'robotics
 
 def is_research_model(name):
     value = str(name).removeprefix('models/').lower()
-    return (value.startswith('gemini-') and bool(re.search(r'-(?:pro|argon)(?:-|$)', value))
+    return (value.startswith('gemini-') and bool(re.search(r'-(?:pro|argon|carbon)(?:-|$)', value))
             and not any(word in value for word in EXCLUDE))
 
 
@@ -20,7 +20,7 @@ def research_model_score(name):
     value = name.lower()
     version = re.search(r'^gemini-(\d+)(?:\.(\d+))?(?:-|$)', value)
     major, minor = (int(version[1]), int(version[2] or 0)) if version else (0, 0)
-    return major, minor, 'argon' in value, 'preview' not in value, value.endswith('-latest'), value
+    return major, minor, 'argon' in value, 'carbon' in value, 'preview' not in value, value.endswith('-latest'), value
 
 
 def rank_research_models(names):

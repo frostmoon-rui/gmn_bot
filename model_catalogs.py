@@ -27,7 +27,7 @@ def eligible(provider, item, official=True):
         return None
     if str(item.get('lifecycle', '')).lower() in {'retired', 'shutdown', 'shut_down', 'deleted'}:
         return None
-    patterns = {'gemini': r'^gemini-.*(?:flash|lite|pro|argon)', 'openai': r'^(?:gpt-|chatgpt|o\d)',
+    patterns = {'gemini': r'^gemini-.*(?:flash|lite|pro|argon|hydrogen|carbon)', 'openai': r'^(?:gpt-|chatgpt|o\d)',
                 'claude': r'^claude-', 'deepseek': r'^deepseek-', 'mimo': r'^mimo-'}
     if not re.search(patterns[provider], name):
         return None
@@ -39,6 +39,8 @@ def eligible(provider, item, official=True):
 
 
 def model_rank(provider, name):
+    if provider == 'deepseek':
+        return (name == 'deepseek-flash', name == 'deepseek-v4-pro', name)
     version = re.search(r'(?:gpt-|gemini-|mimo-v)(\d+)(?:\.(\d+))?', name)
     if provider == 'claude':
         version = re.search(r'claude-(?:opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2})(?!\d))?', name)

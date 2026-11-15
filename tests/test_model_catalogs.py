@@ -24,6 +24,9 @@ class ModelCatalogTests(unittest.TestCase):
             item = {'name': 'models/'+name} if provider == 'gemini' else {'id': name}
             self.assertIsNone(eligible(provider, item))
         self.assertEqual(eligible('gemini', {'name':'models/gemini-4-argon'}), 'gemini-4-argon')
+        for model in ('gemini-4-hydrogen', 'gemini-4-carbon'):
+            self.assertEqual(eligible('gemini', {'name': 'models/' + model}), model)
+        self.assertGreater(model_rank('deepseek', 'deepseek-flash'), model_rank('deepseek', 'deepseek-v4-pro'))
         self.assertEqual(eligible('mimo', {'id':'mimo-v2.6-pro-ultraspeed'}), 'mimo-v2.6-pro-ultraspeed')
 
     def test_retired_official_openai_models_do_not_override_compatible_endpoints(self):
