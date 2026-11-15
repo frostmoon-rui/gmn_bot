@@ -21,6 +21,10 @@ class AlbumProtocolError(ValueError):
     pass
 
 
+class AlbumPhotoError(ValueError):
+    pass
+
+
 async def call(ws, action, params):
     data = await ws.send(json.dumps({"action": action, "params": params}))
     if not isinstance(data, dict) or data.get("result", 0) not in (0, "0", None):
@@ -55,22 +59,22 @@ def cdn_allowed(url):
 class PhotoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not cdn_allowed(newurl):
-            raise ValueError("Photo redirect left the QQ CDN")
+            raise AlbumPhotoError("Photo redirect left the QQ CDN")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def fetch_photo(url, expected):
     if not cdn_allowed(url):
-        raise ValueError("Unexpected photo URL")
+        raise AlbumPhotoError("Unexpected photo URL")
     with build_opener(PhotoRedirect()).open(url, timeout=15) as response:
         blob = response.read(LIMIT + 1)
     if len(blob) > LIMIT:
-        raise ValueError("Photo exceeds size limit")
+        raise AlbumPhotoError("Photo exceeds size limit")
     with Image.open(BytesIO(blob)) as image:
         suffix = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif", "WEBP": ".webp",
                   "BMP": ".bmp", "TIFF": ".tiff"}.get(image.format)
         if not suffix or (all(expected) and image.size != expected):
-            raise ValueError("Invalid photo format or dimensions")
+            raise AlbumPhotoError("Invalid photo format or dimensions")
         image.verify()
     return blob, suffix
 
@@ -163,7 +167,8 @@ async def backup(ws, group, root):
                     return "saved"
             except (OSError, ValueError, URLError, Image.DecompressionBombError) as error:
                 code = getattr(error, "code", None)
-                label = f"HTTP {code}" if isinstance(code, int) else type(error).__name__
+                label = str(error) if isinstance(error, AlbumPhotoError) else (
+                    f"HTTP {code}" if isinstance(code, int) else type(error).__name__)
                 if label not in transfer_errors:
                     transfer_errors.add(label)
                     print("[Album photo download failed]:", label)
@@ -240,13 +245,15 @@ async def daily_album_backup(get_ws, group, directory, dress_album="", dress_own
         today = datetime.now(BEIJING).date().isoformat()
         now = asyncio.get_running_loop().time()
         ws = get_ws()
-        if ws is not None and not ws.closed:
-            if now >= next_backup and not finished_today(backup_state, today):
-                next_backup = now + 1800
-                await run_backup(ws, str(group), root, backup_state, today)
-            if dress_album and dress_owner and now >= next_upload and not finished_today(dress_state, today):
-                next_upload = now + 1800
-                await run_dress_upload(root, dress_album, dress_owner, dress_state, today)
+        jobs = []
+        scan_due = ws is not None and not ws.closed and now >= next_backup and not finished_today(backup_state, today)
+        if scan_due:
+            next_backup = now + 1800
+            jobs.append(run_backup(ws, str(group), root, backup_state, today))
+        if dress_album and dress_owner and now >= next_upload and not finished_today(dress_state, today):
+            next_upload = now + 1800
+            jobs.append(run_dress_upload(root, dress_album, dress_owner, dress_state, today, scan_due))
+        await asyncio.gather(*jobs)
         await asyncio.sleep(60)
 
 
@@ -275,14 +282,14 @@ async def run_backup(ws, group, root, state, today):
             print("[Album backup state unavailable]:", type(state_error).__name__)
 
 
-async def run_dress_upload(root, album, owner, state, today):
+async def run_dress_upload(root, album, owner, state, today, scan_due):
     from dress_album import submit_album
 
     print("[Dress upload]: Checking the selected album.")
     try:
         result = await asyncio.to_thread(submit_album, root, album, owner)
         print("[Dress upload]:", result)
-        if result not in {"album unavailable", "no photos"}:
+        if result not in {"album unavailable", "no photos"} and not (scan_due and result == "no new photos"):
             await asyncio.to_thread(write_state, state, {"date": today, "status": "finished"})
     except Exception as error:
         label = str(error) if type(error) is RuntimeError else type(error).__name__

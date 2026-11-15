@@ -51,7 +51,7 @@ class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory() as temp:
             ws = SimpleNamespace(closed=False)
             with (patch('album_backup.backup', side_effect=ValueError),
-                  patch('dress_album.submit_album', return_value='no new photos') as upload,
+                  patch('dress_album.submit_album', return_value='an album submission is awaiting review') as upload,
                   patch('album_backup.asyncio.sleep', side_effect=InterruptedError)):
                 with self.assertRaises(InterruptedError):
                     await daily_album_backup(lambda: ws, '123', temp, 'selected', 'owner')
