@@ -95,3 +95,18 @@ class AggregatorTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WeatherConnectionTests(unittest.TestCase):
+    def test_transient_connection_failure_is_retried_once(self):
+        from unittest.mock import patch
+        from urllib.error import URLError
+        from weather_providers import request_json
+
+        with (patch('weather_providers.urllib.request.urlopen') as open_url,
+              patch('weather_providers.time.sleep')):
+            response = open_url.return_value
+            response.__enter__.return_value.read.return_value = b'{"ok": true}'
+            open_url.side_effect = [URLError(TimeoutError()), response]
+            self.assertEqual(request_json('https://example.invalid/weather'), {'ok': True})
+            self.assertEqual(open_url.call_count, 2)

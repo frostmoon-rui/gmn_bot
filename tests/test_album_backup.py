@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from album_backup import album_folder, backup, short_hash
+from album_backup import album_folder, backup, daily_album_backup, short_hash
 
 
 class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
@@ -45,3 +45,17 @@ class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(root.glob('*/*.jpg')),
                              {original, second_album / (short_hash('copy') + '.jpg')})
             self.assertEqual(json.loads(ws.send.await_args_list[2].args[0])['params']['attach_info'], 'second')
+
+
+    async def test_dress_runs_after_interrupted_backup(self):
+        with TemporaryDirectory() as temp:
+            ws = SimpleNamespace(closed=False)
+            with (patch('album_backup.backup', side_effect=ValueError),
+                  patch('dress_album.submit_album', return_value='no new photos') as upload,
+                  patch('album_backup.asyncio.sleep', side_effect=InterruptedError)):
+                with self.assertRaises(InterruptedError):
+                    await daily_album_backup(lambda: ws, '123', temp, 'selected', 'owner')
+            root = Path(temp) / '123'
+            self.assertEqual(json.loads((root / 'daily-backup.json').read_text())['status'], 'interrupted')
+            self.assertEqual(json.loads((root / 'daily-dress-upload.json').read_text())['status'], 'finished')
+            upload.assert_called_once_with(root.resolve(), 'selected', 'owner')

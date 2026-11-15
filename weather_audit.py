@@ -5,6 +5,8 @@ from functools import lru_cache
 import json
 import math
 import re
+import socket
+import ssl
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _calls = ContextVar('weather_response_audit', default=None)
@@ -60,7 +62,18 @@ def record_response(endpoint, data, status=200):
 
 def error_code(error):
     code = getattr(error, 'code', None)
-    return 'HTTP ' + str(code) if isinstance(code, int) else type(error).__name__
+    if isinstance(code, int):
+        return 'HTTP ' + str(code)
+    reason = getattr(error, 'reason', None)
+    if isinstance(reason, TimeoutError):
+        return 'connection timeout'
+    if isinstance(reason, socket.gaierror):
+        return 'DNS lookup failed'
+    if isinstance(reason, ssl.SSLError):
+        return 'TLS connection failed'
+    if isinstance(reason, ConnectionError):
+        return 'connection interrupted'
+    return type(error).__name__
 
 
 def write_diagnostic(path, data):

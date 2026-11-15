@@ -203,7 +203,7 @@ class WeatherAggregator:
                 if getattr(error, 'endpoint_status', None):
                     statuses[name] = ', '.join(endpoint + '=' + status for endpoint, status in error.endpoint_status.items() if status != 'ok')
                 failures[name] = error_code(error)
-                print('[Weather source unavailable]:', name, type(error).__name__, '; other providers remain available')
+                print('[Weather source unavailable]:', name, error_code(error), '; other providers remain available')
                 return name, None
         rows = await asyncio.gather(*(one(name, callback) for name, callback in providers))
         result = merge_weather(rows)
@@ -225,8 +225,19 @@ def request_json(url, payload=None, headers=None, timeout=8):
     request = urllib.request.Request(url, data=json.dumps(payload).encode() if payload is not None else None,
         headers={'User-Agent': 'GmnWeatherBot/1.0', **({'Content-Type': 'application/json'} if payload is not None else {}), **(headers or {})})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read(1024*1024+1)
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    raw = response.read(1024*1024+1)
+                break
+            except urllib.error.HTTPError as error:
+                if attempt or payload is not None or error.code not in {502, 503, 504}:
+                    raise
+                error.close()
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                if attempt or payload is not None:
+                    raise
+            time.sleep(0.35)
     except urllib.error.HTTPError as error:
         try:
             failure = json.loads(error.read(65536))

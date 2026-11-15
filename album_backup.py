@@ -17,6 +17,10 @@ from PIL import Image
 LIMIT = 64 * 1024 * 1024
 
 
+class AlbumProtocolError(ValueError):
+    pass
+
+
 async def call(ws, action, params):
     data = await ws.send(json.dumps({"action": action, "params": params}))
     if not isinstance(data, dict) or data.get("result", 0) not in (0, "0", None):
@@ -29,16 +33,16 @@ async def pages(ws, action, params, rows, more, cursor):
     for _ in range(500):
         data = await call(ws, action, params)
         if not isinstance(data.get(rows), list):
-            raise ValueError(f"{action}: missing list")
+            raise AlbumProtocolError(f"{action}: missing list")
         yield data[rows]
         if not data.get(more):
             return
         token = data.get(cursor)
         if not isinstance(token, str) or not token or token in seen:
-            raise ValueError(f"{action}: missing or repeated pagination cursor")
+            raise AlbumProtocolError(f"{action}: missing or repeated pagination cursor")
         seen.add(token)
         params = {**params, "attach_info": token}
-    raise ValueError(f"{action}: page limit exceeded")
+    raise AlbumProtocolError(f"{action}: page limit exceeded")
 
 
 def cdn_allowed(url):
@@ -140,6 +144,7 @@ async def backup(ws, group, root):
     root.mkdir(parents=True, exist_ok=True)
     summary = dict(albums=0, saved=0, existing=0, duplicates=0, unavailable=0, failed=0)
     seen_albums = set()
+    transfer_errors = set()
     slots = asyncio.Semaphore(3)
     write_lock = asyncio.Lock()
 
@@ -156,7 +161,12 @@ async def backup(ws, group, root):
                     saved = await asyncio.to_thread(save_photo, folder, key, blob, suffix)
                     hashes[digest] = saved.name
                     return "saved"
-            except (OSError, ValueError, URLError, Image.DecompressionBombError):
+            except (OSError, ValueError, URLError, Image.DecompressionBombError) as error:
+                code = getattr(error, "code", None)
+                label = f"HTTP {code}" if isinstance(code, int) else type(error).__name__
+                if label not in transfer_errors:
+                    transfer_errors.add(label)
+                    print("[Album photo download failed]:", label)
                 return "failed"
 
     async for albums in pages(ws, "get_qun_album_list", {"group_id": group, "attach_info": ""},
@@ -166,10 +176,10 @@ async def backup(ws, group, root):
             if album_id in seen_albums:
                 continue
             seen_albums.add(album_id)
-            folder = album_folder(root, album.get("name", ""), album_id)
             summary["albums"] += 1
             params = {"group_id": group, "album_id": album_id, "attach_info": ""}
             try:
+                folder = album_folder(root, album.get("name", ""), album_id)
                 hashes = await asyncio.to_thread(existing_photos, folder)
                 references_path = folder / "duplicate-references.json"
                 references = (json.loads(references_path.read_text(encoding="utf-8"))
@@ -203,8 +213,11 @@ async def backup(ws, group, root):
                         summary[status] += 1
                     if "duplicates" in results:
                         await asyncio.to_thread(write_state, references_path, references)
-            except (OSError, RuntimeError, ValueError):
+            except (OSError, RuntimeError, ValueError) as error:
                 summary["failed"] += 1
+                if isinstance(error, AlbumProtocolError) and str(error) not in transfer_errors:
+                    transfer_errors.add(str(error))
+                    print("[Album page failed]:", error)
                 if ws.closed:
                     raise ConnectionError("OneBot disconnected during album backup")
     return summary
@@ -220,33 +233,57 @@ async def daily_album_backup(get_ws, group, directory, dress_album="", dress_own
     if any((p / ".git").exists() for p in (root, *root.parents)):
         print("[Album backup]: Destination must be outside Git repositories.")
         return
-    state = root / "daily-backup.json"
-    last_run_date = None
+    backup_state = root / "daily-backup.json"
+    dress_state = root / "daily-dress-upload.json"
+    next_backup = next_upload = 0
     while True:
-        now = datetime.now(BEIJING)
-        today = now.date().isoformat()
+        today = datetime.now(BEIJING).date().isoformat()
+        now = asyncio.get_running_loop().time()
         ws = get_ws()
-        if last_run_date != today and ws is not None and not ws.closed:
-            last_run_date = today
-            try:
-                root.mkdir(parents=True, exist_ok=True)
-                await asyncio.to_thread(write_state, state, {"date": today, "status": "started"})
-                print("[Album backup]: Daily run started.")
-                try:
-                    summary = await backup(ws, str(group), root)
-                except Exception as error:
-                    print("[Album backup interrupted]:", type(error).__name__)
-                    await asyncio.to_thread(write_state, state, {"date": today, "status": "interrupted"})
-                else:
-                    await asyncio.to_thread(write_state, state, {"date": today, "status": "finished", **summary})
-                    print("[Album backup]:", json.dumps(summary))
-                    if dress_album and dress_owner:
-                        try:
-                            from dress_album import submit_album
-                            result = await asyncio.to_thread(submit_album, root, dress_album, dress_owner)
-                            print("[Dress upload]:", result)
-                        except Exception as error:
-                            print("[Dress upload failed]:", str(error) if type(error) is RuntimeError else type(error).__name__)
-            except (OSError, ValueError) as error:
-                print("[Album backup state unavailable]:", type(error).__name__)
+        if ws is not None and not ws.closed:
+            if now >= next_backup and not finished_today(backup_state, today):
+                next_backup = now + 1800
+                await run_backup(ws, str(group), root, backup_state, today)
+            if dress_album and dress_owner and now >= next_upload and not finished_today(dress_state, today):
+                next_upload = now + 1800
+                await run_dress_upload(root, dress_album, dress_owner, dress_state, today)
         await asyncio.sleep(60)
+
+
+def finished_today(path, today):
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(state, dict) and state.get("date") == today
+            and state.get("status") == "finished" and not state.get("failed"))
+
+
+async def run_backup(ws, group, root, state, today):
+    print("[Album backup]: Daily run started.")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        summary = await backup(ws, group, root)
+        await asyncio.to_thread(write_state, state, {"date": today, "status": "finished", **summary})
+        print("[Album backup]:", json.dumps(summary))
+    except Exception as error:
+        label = str(error) if isinstance(error, AlbumProtocolError) else type(error).__name__
+        print("[Album backup interrupted]:", label, "(retry in 30 minutes)")
+        try:
+            await asyncio.to_thread(write_state, state, {"date": today, "status": "interrupted"})
+        except OSError as state_error:
+            print("[Album backup state unavailable]:", type(state_error).__name__)
+
+
+async def run_dress_upload(root, album, owner, state, today):
+    from dress_album import submit_album
+
+    print("[Dress upload]: Checking the selected album.")
+    try:
+        result = await asyncio.to_thread(submit_album, root, album, owner)
+        print("[Dress upload]:", result)
+        if result not in {"album unavailable", "no photos"}:
+            await asyncio.to_thread(write_state, state, {"date": today, "status": "finished"})
+    except Exception as error:
+        label = str(error) if type(error) is RuntimeError else type(error).__name__
+        print("[Dress upload failed]:", label, "(retry in 30 minutes)")
