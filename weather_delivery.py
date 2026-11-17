@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from functools import lru_cache
 
-from corner_geometry import continuous_rectangle
+from corner_geometry import WEATHER_PANEL_RADIUS, continuous_rectangle
 
 from PIL import Image, ImageDraw, ImageFont
 from response_visibility import visible_response_text
@@ -53,7 +53,7 @@ def render_report(report):
     draw = ImageDraw.Draw(image)
     for column in range(2):
         x = padding + column * (column_width + padding)
-        continuous_rectangle(draw, (x - 16, 20, x + column_width + 16, height - 20), radius=32, fill='white')
+        continuous_rectangle(draw, (x - 16, 20, x + column_width + 16, height - 20), radius=WEATHER_PANEL_RADIUS, fill='white')
     for index, line in enumerate(lines):
         column, row = divmod(index, rows)
         draw.text((padding + column * (column_width + padding), padding + row * line_height),

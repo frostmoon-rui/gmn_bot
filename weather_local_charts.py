@@ -2,7 +2,7 @@
 from datetime import datetime
 from io import BytesIO
 import math
-from corner_geometry import continuous_rectangle
+from corner_geometry import WEATHER_PANEL_RADIUS, continuous_rectangle
 
 from PIL import Image, ImageDraw
 from weather_standard import number
@@ -82,7 +82,7 @@ def draw_local(series, font, labels=None):
     card_width = (width-margin*2-40)//3
     for index, (value, caption) in enumerate(cards):
         x = margin+index*(card_width+20)
-        continuous_rectangle(draw, (x, 147, x+card_width, 324), radius=32, fill='white')
+        continuous_rectangle(draw, (x, 147, x+card_width, 324), radius=WEATHER_PANEL_RADIUS, fill='white')
         text(x+25, 169, value, 49 if len(value)<18 else 33, orange if temperature else teal, card_width-50)
         text(x+25, 252, caption, 23, muted, card_width-50)
         if index == 0 and product.endswith('_current'):
@@ -94,7 +94,7 @@ def draw_local(series, font, labels=None):
     y = 366
     for key, unit, block in panels:
         box = (margin, y, width-margin, y+height_per)
-        continuous_rectangle(draw, box, radius=32, fill='white')
+        continuous_rectangle(draw, box, radius=WEATHER_PANEL_RADIUS, fill='white')
         title = labels['probability'] if key == 'precipitation_probability' else labels['temp'] if temperature else labels['daily_amount' if series['monthly'] else 'hour_amount']
         stamps = [datetime.fromisoformat(row['time']) for row in block]
         text(margin+27, y+18, title+'  ·  '+stamps[0].strftime('%m-%d %H:%M')+' — '+stamps[-1].strftime('%m-%d %H:%M'), 28)

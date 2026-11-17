@@ -4,6 +4,8 @@ from io import BytesIO
 import math
 import re
 
+from corner_geometry import WEATHER_PANEL_RADIUS
+
 from PIL import Image, ImageDraw
 from weather_report import METRICS, local_time
 from weather_standard import number, row_time, sample_time
@@ -204,7 +206,7 @@ class Painter:
     def panel(self, box, keys, rows, originals, data, kind, major):
         x, y, right, bottom = box
         width, daily = right-x, kind == 'daily'
-        self.draw.rounded_rectangle(box, radius=32, fill='white', outline='#e4e9ed', width=1)
+        self.draw.rounded_rectangle(box, radius=WEATHER_PANEL_RADIUS, fill='white', outline='#e4e9ed', width=1)
         heading = self.label(keys[0], daily)
         if daily and any(key in keys for key in ('min_temp', 'max_temp')):
             heading = self.labels['min_temp']+' / '+self.labels['max_temp']
@@ -501,7 +503,7 @@ def render_dashboard(data, labels, translate, font, target='today'):
     for index,(key,unit) in enumerate([('temp','°C'),('precipitation_mm','mm'),('wind_kmph','km/h')]):
         cw=widths[index]
         color=COLORS[key]
-        draw.rounded_rectangle((xx,132,xx+cw,350),radius=32,fill='#e9dcd0' if index==0 else 'white')
+        draw.rounded_rectangle((xx,132,xx+cw,350),radius=WEATHER_PANEL_RADIUS,fill='#e9dcd0' if index==0 else 'white')
         heading=labels['max_temp'] if key=='temp' and target=='tomorrow' else labels['precipitation_sum'] if key=='precipitation_mm' and target=='tomorrow' else labels[key]
         primary=value('max_temp' if key=='temp' and target=='tomorrow' else key,unit)
         if key=='wind_kmph' and number(hero.get(key)) is None and hero.get('wind_force'):
@@ -535,7 +537,7 @@ def render_dashboard(data, labels, translate, font, target='today'):
         painter.write(MARGIN,panels[0][0][1]-52,labels[kind],36,bold=True)
         for box,keys in panels:
             painter.panel(box,keys,rows,originals,data,kind,kind!='history' and primary_panel(keys))
-    draw.rounded_rectangle((MARGIN,alert_top,WIDTH-MARGIN,footer-16),radius=32,fill='#e7edf1')
+    draw.rounded_rectangle((MARGIN,alert_top,WIDTH-MARGIN,footer-16),radius=WEATHER_PANEL_RADIUS,fill='#e7edf1')
     painter.write(MARGIN+24,alert_top+14,labels['alerts'],30,bold=True)
     for index,line in enumerate(notes):
         painter.write(MARGIN+24,alert_top+56+index*38,line,26,MUTED)
