@@ -222,8 +222,10 @@ class WeatherAggregator:
 
 
 def request_json(url, payload=None, headers=None, timeout=8):
-    request = urllib.request.Request(url, data=json.dumps(payload).encode() if payload is not None else None,
-        headers={'User-Agent': 'GmnWeatherBot/1.0', **({'Content-Type': 'application/json'} if payload is not None else {}), **(headers or {})})
+    body = json.dumps(payload).encode() if payload is not None else None
+    request_headers = {'User-Agent': 'GmnWeatherBot/1.0',
+                       **({'Content-Type': 'application/json'} if body is not None else {}),
+                       **(headers or {})}
     direct_fallback = (
         payload is None and headers is None
         and urllib.parse.urlsplit(url).netloc in {'api.open-meteo.com', 'geocoding-api.open-meteo.com'}
@@ -233,6 +235,8 @@ def request_json(url, payload=None, headers=None, timeout=8):
     open_request = urllib.request.urlopen
     try:
         for attempt in range(2):
+            # ProxyHandler mutates the origin host and CONNECT tunnel on the Request.
+            request = urllib.request.Request(url, data=body, headers=request_headers)
             try:
                 with open_request(request, timeout=timeout) as response:
                     raw = response.read(1024*1024+1)

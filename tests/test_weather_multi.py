@@ -117,8 +117,12 @@ class WeatherConnectionTests(unittest.TestCase):
         from urllib.error import URLError
         from weather_providers import request_json
 
+        def proxy_timeout(request, **kwargs):
+            request.set_proxy('127.0.0.1:7897', 'http')
+            raise URLError(TimeoutError())
+
         with (patch('weather_providers.urllib.request.getproxies', return_value={'https': 'http://127.0.0.1:7897'}),
-              patch('weather_providers.urllib.request.urlopen', side_effect=URLError(TimeoutError())),
+              patch('weather_providers.urllib.request.urlopen', side_effect=proxy_timeout) as proxy,
               patch('weather_providers.urllib.request.build_opener') as build,
               patch('weather_providers.time.sleep')):
             direct = build.return_value.open
@@ -126,3 +130,8 @@ class WeatherConnectionTests(unittest.TestCase):
             self.assertTrue(request_json('https://api.open-meteo.com/v1/forecast')['ok'])
             self.assertEqual(build.call_args.args[0].proxies, {})
             direct.assert_called_once()
+            proxied = proxy.call_args.args[0]
+            bypassed = direct.call_args.args[0]
+            self.assertIsNot(proxied, bypassed)
+            self.assertEqual(proxied.host, '127.0.0.1:7897')
+            self.assertEqual(bypassed.host, 'api.open-meteo.com')
