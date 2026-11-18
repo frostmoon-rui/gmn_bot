@@ -2,6 +2,7 @@
 import math
 from datetime import datetime, timezone
 from io import BytesIO
+from uuid import uuid4
 
 from PIL import Image, ImageDraw
 
@@ -20,7 +21,9 @@ EN = ('Food map', 'Published venues', 'Live snapshot', 'Address unavailable',
 def load_venues(store):
     sources = FoodSources(store.root)
     try:
-        site = parse_source(fetch_public_json(SITE_SOURCE['url']), SITE_SOURCE)
+        # Use an uncached URL even if an intermediary retains the former feed policy.
+        url = SITE_SOURCE['url'] + '?fresh=' + uuid4().hex
+        site = parse_source(fetch_public_json(url), SITE_SOURCE)
         stale = False
     except Exception as error:
         print('[Food atlas feed]:', source_error_reason(error))
