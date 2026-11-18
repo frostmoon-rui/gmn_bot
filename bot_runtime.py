@@ -117,6 +117,10 @@ async def stop_onebot_after_logout(ws, expected_account, interval=5):
         await asyncio.sleep(interval)
 
 
+class OneBotActionRejected(RuntimeError):
+    """NapCat returned an explicit failed action receipt."""
+
+
 class OneBotSocket:
     def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None, private_ignored=None):
         self.raw = raw
@@ -147,7 +151,7 @@ class OneBotSocket:
             return str(event.get('user_id')) not in self.private_ignored.get(str(self.self_id), ())
         return self.group_enabled
 
-    async def send(self, payload):
+    async def send(self, payload, *, receipt_timeout=None):
         if self.closed:
             raise ConnectionError('NapCat connection is closed')
         data = json.loads(payload)
@@ -165,9 +169,9 @@ class OneBotSocket:
         self.pending[echo] = (future, data)
         try:
             await self.raw.send(json.dumps(data, ensure_ascii=False))
-            reply = await asyncio.wait_for(future, self.timeout)
+            reply = await asyncio.wait_for(future, self.timeout if receipt_timeout is None else receipt_timeout)
             if reply.get('status') != 'ok' or reply.get('retcode', 0) != 0:
-                raise RuntimeError('NapCat operation failed, retcode=' + str(reply.get('retcode', 'unknown')))
+                raise OneBotActionRejected('NapCat operation failed, retcode=' + str(reply.get('retcode', 'unknown')))
             return reply.get('data')
         except asyncio.TimeoutError:
             print('[Send receipt timed out]:', data.get('action'), 'Delivery status unknown, do not resend immediately')

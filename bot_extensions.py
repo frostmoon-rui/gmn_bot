@@ -22,6 +22,7 @@ from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
 from food_atlas_image import load_venues, render_atlas
+from bot_runtime import OneBotActionRejected
 from earthquake_feed import EarthquakeFeed, matches_province
 from community_maps import CommunityMaps
 from website_snapshots import capture as capture_website, page_url as website_page_url, SnapshotError, PAGES as WEBSITE_PAGES
@@ -108,7 +109,7 @@ class Extensions:
         task.add_done_callback(finished)
         return task
 
-    def start_user_job(self, user, operation, coro):
+    def start_user_job(self, user, operation, coro, *, timeout=120):
         key = (user, operation)
         if key in self.user_jobs or len(self.user_jobs) >= 16:
             coro.close()
@@ -116,7 +117,7 @@ class Extensions:
         self.user_jobs.add(key)
         async def run():
             try:
-                await asyncio.wait_for(coro, 120)
+                await asyncio.wait_for(coro, timeout)
             finally:
                 self.user_jobs.discard(key)
         self.spawn(run())
@@ -485,7 +486,7 @@ class Extensions:
         if (mentioned or kind == 'private') and text.lower() == 'cachetide blog':
             return 'CacheTide’s blog, Inn by the Clouds: https://cachetide.top'
         if (mentioned or kind == 'private') and text.lower() in {'food map'}:
-            if not self.start_user_job(user, 'food atlas', self.food_atlas_job(ws, kind, group, user)):
+            if not self.start_user_job(user, 'food atlas', self.food_atlas_job(ws, kind, group, user), timeout=165):
                 return 'A food map is already being generated. Please wait.'
             return 'Generating the food map.'
         match = re.fullmatch(r'superadmin add\s*[:：]\s*(\d{5,12})\|(.{1,20})', text)
@@ -1014,17 +1015,26 @@ class Extensions:
             try:
                 venues, cached = await asyncio.to_thread(load_venues, self.food.store)
                 image = await asyncio.to_thread(render_atlas, self.amap.client, venues, cached=cached)
-                if image is None:
-                    await self.send(ws, kind, group, user, 'No published food venues are available.')
-                    return
-                segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
-                segments.append({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}})
-                await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
-                    'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
-                               'message': segments}}))
             except Exception as error:
-                print('[Food atlas image]:', type(error).__name__)
+                print('[Food atlas rendering failed]:', type(error).__name__)
                 await self.send(ws, kind, group, user, 'The food map image could not be generated. Open the public map instead. https://frostmoonrui.com/food-map/')
+                return
+            if image is None:
+                await self.send(ws, kind, group, user, 'No published food venues are available.')
+                return
+            segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
+            segments.append({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}})
+            payload = json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
+                'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
+                           'message': segments}})
+            try:
+                await ws.send(payload, receipt_timeout=45)
+            except OneBotActionRejected as error:
+                print('[Food atlas delivery rejected]:', str(error))
+                await self.send(ws, kind, group, user, 'NapCat rejected delivery of the food map image. Open the public map instead. https://frostmoonrui.com/food-map/')
+            except Exception as error:
+                # An upload may finish even when its receipt is lost or arrives late.
+                print('[Food atlas delivery unconfirmed]:', type(error).__name__)
 
     async def food_job(self, ws, kind, group, user, operation, query, master):
         try:
