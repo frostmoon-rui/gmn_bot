@@ -58,6 +58,7 @@ def map_panel(client, points):
         zoom -= 1
     scale = 256*2**zoom
     center = f'{cx*360-180:.6f},{math.degrees(math.atan(math.sinh(math.pi*(1-2*cy)))):.6f}'
+    cx, cy = mercator(*map(float, center.split(',')))
     image = Image.new('RGB', (width, height), 'white')
     fallback = False
     try:
@@ -87,6 +88,43 @@ def wrap(draw, text, font, width):
     return lines+[line]
 
 
+def marker_groups(locations, radius=36):
+    """Group overlapping markers around an actual venue, without moving its anchor."""
+    groups = []
+    for number, (x, y) in locations:
+        nearby = [group for group in groups
+                  if math.hypot(x-group[0][1][0], y-group[0][1][1]) < radius]
+        if nearby:
+            nearest = min(nearby, key=lambda group: math.hypot(x-group[0][1][0], y-group[0][1][1]))
+            nearest.append((number, (x, y)))
+        else:
+            groups.append([(number, (x, y))])
+    return groups
+
+
+def marked_map(client, points, numbers, colors, fallback_label, *, prefix='G'):
+    panel, locations, fallback = map_panel(client, [points[number-1] for number in numbers])
+    panel = panel.resize((1050, 700), Image.Resampling.LANCZOS)
+    draw = ImageDraw.Draw(panel)
+    font = report_font(18)
+    groups = marker_groups(zip(numbers, ((x*1.4, y*1.4) for x,y in locations)), radius=46)
+    clustered = []
+    for group in groups:
+        number, (x,y) = group[0]
+        if len(group) > 1:
+            label = f'{prefix}{len(clustered)+1}'
+            clustered.append((label, [entry[0] for entry in group]))
+            color = '#344e63'
+        else:
+            label, color = str(number), colors[number-1]
+        half = max(12, math.ceil(draw.textlength(label, font=font)/2)+5)
+        draw.rounded_rectangle((x-half,y-12,x+half,y+12), radius=10, fill=color, outline='white', width=2)
+        draw.text((x,y),label,fill='white',font=font,anchor='mm')
+    if fallback:
+        draw.text((20,675),fallback_label,fill='#516779',font=font)
+    return panel, clustered
+
+
 def render_atlas(client, venues, *, cached=False):
     title, count, timestamp, no_address, unrated, directory, fallback_label, default, cached_label = EN
     rows = sorted(venues, key=lambda row: ((row.get('category') or default).casefold(), row['city'].casefold(), row['name'].casefold(), row['location']))
@@ -95,34 +133,10 @@ def render_atlas(client, venues, *, cached=False):
     groups = list(dict.fromkeys(row.get('category') or default for row in rows))
     colors = {group: PALETTE[i % len(PALETTE)] for i, group in enumerate(groups)}
     points = [mercator(*map(float, row['location'].split(','))) for row in rows]
-    panel, locations, fallback = map_panel(client, points)
-    panel = panel.resize((1050, 700), Image.Resampling.LANCZOS)
+    marker_colors = [colors[row.get('category') or default] for row in rows]
+    panel, clustered = marked_map(client, points, range(1,len(rows)+1), marker_colors, fallback_label)
     ink, muted = '#192f42', '#516779'
     draw = ImageDraw.Draw(panel)
-    pin_font = report_font(18)
-    used, markers = set(), []
-    for number, (row, (x, y)) in enumerate(zip(rows, locations), 1):
-        x = min(1024, max(25, round(x*1.4)))
-        y = min(642, max(24, round(y*1.4)))
-        gx, gy = round(x/38), round(y/28)
-        cell = (gx, gy)
-        if cell in used:
-            candidates = ((gx+dx, gy+dy) for ring in range(1, 30)
-                          for dx,dy in ((ring,0),(-ring,0),(0,ring),(0,-ring),(ring,ring),(-ring,-ring),(ring,-ring),(-ring,ring)))
-            cell = next((c for c in candidates if c not in used and 1 <= c[0] <= 26 and 1 <= c[1] <= 23), cell)
-        used.add(cell)
-        px, py = cell[0]*38, cell[1]*28
-        color = colors[row.get('category') or default]
-        draw.line((x,y,px,py), fill=color, width=2)
-        draw.ellipse((x-3,y-3,x+3,y+3), fill=color)
-        markers.append((number,px,py,color))
-    for number,x,y,color in markers:
-        label = str(number)
-        half = max(12, math.ceil(draw.textlength(label,font=pin_font)/2)+5)
-        draw.rounded_rectangle((x-half,y-12,x+half,y+12), radius=10, fill=color, outline='white', width=2)
-        draw.text((x,y),label,fill='white',font=pin_font,anchor='mm')
-    if fallback:
-        draw.text((20,675), fallback_label, fill=muted, font=pin_font)
 
     margin, width, gap = 45, 1140, 28
     columns = 2 if len(rows) > 14 else 1
@@ -147,7 +161,24 @@ def render_atlas(client, venues, *, cached=False):
                 legend_x, legend_y = margin, legend_y+32
             legend.append((legend_x, legend_y, line, colors[group] if index == 0 else None))
             legend_x += item_width
-    list_top = legend_y+77
+    cluster_font = report_font(19)
+    cluster_lines = []
+    cluster_y = legend_y+38
+    for label, numbers in clustered:
+        for line in wrap(draw, label+': '+', '.join(map(str,numbers)), cluster_font, 1050):
+            cluster_lines.append((cluster_y,line))
+            cluster_y += 28
+    insets = []
+    for label, numbers in sorted(clustered, key=lambda group:-len(group[1]))[:3]:
+        if len({points[number-1] for number in numbers}) <= 1:
+            continue
+        inset, inner_groups = marked_map(client, points, numbers, marker_colors, fallback_label, prefix=label+'-')
+        subtitle = ' · '.join(inner_label+': '+', '.join(map(str, members)) for inner_label,members in inner_groups)
+        lines = wrap(draw, subtitle, cluster_font, 500) if subtitle else []
+        insets.append((label,inset,lines))
+    inset_top = cluster_y+30
+    inset_heights = [max(400+28*len(item[2]) for item in insets[i:i+2]) for i in range(0,len(insets),2)]
+    list_top = inset_top+sum(inset_heights)+20
     height = list_top+sum(heights)+gap*len(heights)+20
     if height > 30000:
         raise ValueError('Food directory exceeds the single-image size limit')
@@ -162,6 +193,17 @@ def render_atlas(client, venues, *, cached=False):
         if color:
             draw.ellipse((x,y+5,x+14,y+19), fill=color)
         draw.text((x+22,y),label,font=small,fill=muted)
+    for y,line in cluster_lines:
+        draw.text((margin,y),line,font=cluster_font,fill=muted)
+    inset_y = inset_top
+    for offset,inset_height in enumerate(inset_heights):
+        for column,(label,inset,lines) in enumerate(insets[offset*2:(offset+1)*2]):
+            x = margin+column*540
+            draw.text((x,inset_y),label+' · '+'Detail map',font=heading,fill=ink)
+            image.paste(inset.resize((510,340),Image.Resampling.LANCZOS),(x,inset_y+42))
+            for i,line in enumerate(lines):
+                draw.text((x,inset_y+385+i*28),line,font=cluster_font,fill=muted)
+        inset_y += inset_height
     draw.text((margin,list_top-32),directory,font=heading,fill=ink)
     y = list_top+18
     for offset,row_height in enumerate(heights):
