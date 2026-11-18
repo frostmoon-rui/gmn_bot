@@ -1,5 +1,6 @@
 """Render a current, public food atlas as a white map and numbered directory."""
 import math
+import time
 from datetime import datetime, timezone
 from io import BytesIO
 from uuid import uuid4
@@ -43,8 +44,10 @@ def load_venues(store):
         signature = tuple(entry[key] for key in ('city', 'name', 'location'))
         if signature not in hidden:
             previous = rows.setdefault(signature, entry)
-            if previous.get('rating') is None and entry.get('rating') is not None:
-                rows[signature] = {**previous, 'rating': entry['rating']}
+            for field in ('rating', 'countryCode'):
+                if previous.get(field) is None and entry.get(field) is not None:
+                    previous = {**previous, field: entry[field]}
+                    rows[signature] = previous
     return list(rows.values()), stale or bool(cached_external)
 
 
@@ -69,6 +72,8 @@ def map_panel(client, points):
     image = Image.new('RGB', (width, height), 'white')
     fallback = False
     try:
+        if client is None:
+            raise AmapError('Map request time budget exhausted')
         data = client.request('/v3/staticmap', {'size': f'{MAP_SIZE[0]}*{MAP_SIZE[1]}', 'scale': MAP_DENSITY,
                               'location': center, 'zoom': zoom}, ttl=3600, image=True)
         with Image.open(BytesIO(data)) as base:
@@ -142,6 +147,7 @@ def render_atlas(client, venues, *, cached=False):
     colors = {group: PALETTE[i % len(PALETTE)] for i, group in enumerate(groups)}
     points = [mercator(*map(float, row['location'].split(','))) for row in rows]
     marker_colors = [colors[row.get('category') or default] for row in rows]
+    map_deadline = time.monotonic()+88
     panel, clustered, fallback = marked_map(client, points, range(1,len(rows)+1), marker_colors, fallback_label)
     ink, muted = '#192f42', '#516779'
     draw = ImageDraw.Draw(panel)
@@ -182,16 +188,29 @@ def render_atlas(client, venues, *, cached=False):
     insets = []
     inset_width = (content_width-gap)//2
     inset_image_height = round(inset_width*panel.height/panel.width)
-    pending = sorted(clustered, key=lambda group:-len(group[1]))
+    countries = {}
+    for number, row in enumerate(rows, 1):
+        code = row.get('countryCode')
+        if code and code != 'CN':
+            countries.setdefault(code, []).append(number)
+    for code, numbers in sorted(countries.items()):
+        inset, inner_groups, _ = marked_map(client if time.monotonic()<map_deadline else None,
+                                            points, numbers, marker_colors, fallback_label, prefix=code+'-')
+        subtitle = ' · '.join(label+': '+', '.join(map(str, members)) for label,members in inner_groups)
+        lines = wrap(draw, subtitle, cluster_font, inset_width) if subtitle else []
+        insets.append((code,inset.resize((inset_width,inset_image_height),Image.Resampling.LANCZOS),lines,True))
+    overseas = {number for numbers in countries.values() for number in numbers}
+    domestic = [(label, [number for number in numbers if number not in overseas]) for label, numbers in clustered]
+    pending = sorted(domestic, key=lambda group:-len(group[1]))
     for label, numbers in pending:
-        if fallback or len(insets) >= MAX_DETAIL_MAPS:
+        if fallback or time.monotonic()>=map_deadline or len(insets)-len(countries) >= MAX_DETAIL_MAPS:
             break
         if len({points[number-1] for number in numbers}) <= 1:
             continue
         inset, inner_groups, fallback = marked_map(client, points, numbers, marker_colors, fallback_label, prefix=label+'-')
         subtitle = ' · '.join(inner_label+': '+', '.join(map(str, members)) for inner_label,members in inner_groups)
         lines = wrap(draw, subtitle, cluster_font, inset_width) if subtitle else []
-        insets.append((label,inset,lines))
+        insets.append((label,inset.resize((inset_width,inset_image_height),Image.Resampling.LANCZOS),lines,False))
         pending.extend(group for group in inner_groups if 1 < len(group[1]) < len(numbers))
     inset_top = cluster_y+102
     inset_heights = [max(inset_image_height+206+96*len(item[2]) for item in insets[i:i+2]) for i in range(0,len(insets),2)]
@@ -214,10 +233,10 @@ def render_atlas(client, venues, *, cached=False):
         draw.text((margin,y),line,font=cluster_font,fill=muted)
     inset_y = inset_top
     for offset,inset_height in enumerate(inset_heights):
-        for column,(label,inset,lines) in enumerate(insets[offset*2:(offset+1)*2]):
+        for column,(label,inset,lines,country) in enumerate(insets[offset*2:(offset+1)*2]):
             x = margin+column*(inset_width+gap)
-            draw.text((x,inset_y),label+' · '+'Detail map',font=heading,fill=ink)
-            image.paste(inset.resize((inset_width,inset_image_height),Image.Resampling.LANCZOS),(x,inset_y+144))
+            draw.text((x,inset_y),label+' · '+('Country / region' if country else 'Detail map'),font=heading,fill=ink)
+            image.paste(inset,(x,inset_y+144))
             for i,line in enumerate(lines):
                 draw.text((x,inset_y+inset_image_height+154+i*96),line,font=cluster_font,fill=muted)
         inset_y += inset_height
