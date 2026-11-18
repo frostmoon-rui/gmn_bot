@@ -13,6 +13,8 @@ from weather_delivery import report_font
 
 
 SITE_SOURCE = {'id': 'frostmoon', 'name': 'Frostmoon', 'url': 'https://frostmoonrui.com/food-map/index.json'}
+# Amap scale=1 static images use a 512-pixel world at zoom zero, measured with native labels.
+AMAP_WORLD_PIXELS = 512
 PALETTE = ('#2166a3', '#1a795b', '#a55221', '#8343a0', '#ac4363', '#62621c', '#097580', '#4d58a5')
 EN = ('Food map', 'Published venues', 'Live snapshot', 'Address unavailable',
       'Unrated', 'Venue directory', 'Coordinate overview · basemap unavailable', 'Food', 'Includes cached data')
@@ -52,11 +54,11 @@ def map_panel(client, points):
     xs, ys = zip(*points)
     cx, cy = (min(xs)+max(xs))/2, (min(ys)+max(ys))/2
     zoom = 17
-    while zoom > 1 and (max(xs)-min(xs))*256*2**zoom > width-130:
+    while zoom > 1 and (max(xs)-min(xs))*AMAP_WORLD_PIXELS*2**zoom > width-130:
         zoom -= 1
-    while zoom > 1 and (max(ys)-min(ys))*256*2**zoom > height-130:
+    while zoom > 1 and (max(ys)-min(ys))*AMAP_WORLD_PIXELS*2**zoom > height-130:
         zoom -= 1
-    scale = 256*2**zoom
+    scale = AMAP_WORLD_PIXELS*2**zoom
     center = f'{cx*360-180:.6f},{math.degrees(math.atan(math.sinh(math.pi*(1-2*cy)))):.6f}'
     cx, cy = mercator(*map(float, center.split(',')))
     image = Image.new('RGB', (width, height), 'white')
