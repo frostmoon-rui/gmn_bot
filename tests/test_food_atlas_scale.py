@@ -34,5 +34,5 @@ class FoodAtlasScaleTests(unittest.TestCase):
         rows = [dict(city='Beijing', name='Fixture venue', location='116.397,39.908')]
         output = render_atlas(AmapFixture(), rows)
         with Image.open(BytesIO(output)) as image:
-            self.assertEqual(image.width, 2228)
-            self.assertGreater(image.height, 2000)
+            self.assertEqual(image.width, 3840)
+            self.assertGreater(image.height, 3000)
