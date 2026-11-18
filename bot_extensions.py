@@ -21,6 +21,7 @@ from gemini_research import RESEARCH_MODE, generate_research
 from amap_service import AmapMaps, AmapError, OPERATIONS, domestic_hint
 from admin_registry import AdminRegistry
 from food_map import FoodCommands
+from food_atlas_image import load_venues, render_atlas
 from earthquake_feed import EarthquakeFeed, matches_province
 from community_maps import CommunityMaps
 from website_snapshots import capture as capture_website, page_url as website_page_url, SnapshotError, PAGES as WEBSITE_PAGES
@@ -86,6 +87,7 @@ class Extensions:
         self.amap = AmapMaps(Path(__file__).resolve().parent)
         self.amap_gate = asyncio.Semaphore(2)
         self.website_gate = asyncio.Semaphore(1)
+        self.food_atlas_gate = asyncio.Semaphore(1)
         self.website_times = {}
         root = Path(__file__).resolve().parent
         self.admins = getattr(bot, 'admins', None) or AdminRegistry(root, getattr(bot, 'MASTER_QQ', int(setting('MASTER_QQ', 0))))
@@ -480,10 +482,12 @@ class Extensions:
                 return 'Your website screenshot is already running. Please wait.'
             self.website_times[user] = now
             return 'Opening the public website for a live background screenshot, without owner sessions or private records.'
-        if (mentioned or kind == 'private') and text in {'food map', 'CacheTide blog'}:
-            if text == 'CacheTide blog':
-                return 'CacheTide’s blog, Inn by the Clouds: https://cachetide.top'
-            return 'The food map runs on the bot host: http://127.0.0.1:8788 (accessible only on that machine). Submit with submit food:city|full venue name|full address|category|reason. Submissions become public after approval.'
+        if (mentioned or kind == 'private') and text.lower() == 'cachetide blog':
+            return 'CacheTide’s blog, Inn by the Clouds: https://cachetide.top'
+        if (mentioned or kind == 'private') and text.lower() in {'food map'}:
+            if not self.start_user_job(user, 'food atlas', self.food_atlas_job(ws, kind, group, user)):
+                return 'A food map is already being generated. Please wait.'
+            return 'Generating the food map.'
         match = re.fullmatch(r'superadmin add\s*[:：]\s*(\d{5,12})\|(.{1,20})', text)
         if match and (mentioned or kind == 'private'):
             try:
@@ -1004,6 +1008,23 @@ class Extensions:
             except Exception as error:
                 print('[Amap query error]:', type(error).__name__)
                 await self.send(ws, kind, group, user, 'The map query did not complete. Please try later; details are recorded locally.')
+
+    async def food_atlas_job(self, ws, kind, group, user):
+        async with self.food_atlas_gate:
+            try:
+                venues, cached = await asyncio.to_thread(load_venues, self.food.store)
+                image = await asyncio.to_thread(render_atlas, self.amap.client, venues, cached=cached)
+                if image is None:
+                    await self.send(ws, kind, group, user, 'No published food venues are available.')
+                    return
+                segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
+                segments.append({'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(image).decode('ascii')}})
+                await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
+                    'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
+                               'message': segments}}))
+            except Exception as error:
+                print('[Food atlas image]:', type(error).__name__)
+                await self.send(ws, kind, group, user, 'The food map image could not be generated. Open the public map instead. https://frostmoonrui.com/food-map/')
 
     async def food_job(self, ws, kind, group, user, operation, query, master):
         try:

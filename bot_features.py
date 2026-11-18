@@ -118,7 +118,7 @@ HELP = {'local-weather': 'Local high-resolution weather charts\n'
                   'Coordinates default to GCJ-02, longitude first; do not mix Google/GPS '
                   'coordinates. Provider permissions and quotas apply. Paid services are not '
                   'enabled automatically.',
- 'food map': '🍜 Cat Food Map (run locally first)\n'
+ 'food map': '🍜 Food map image\nMention the bot and send food map, or use it in a direct message. The image lists published venues by category with addresses and ratings.\n'
              'Open http://127.0.0.1:8788 on the host.\n'
              'submit food:city|full venue name|full address|category|reason\n'
              'Optionally append |original HTTPS recommendation URL. Approved submissions become '

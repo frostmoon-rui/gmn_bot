@@ -25,10 +25,13 @@ def parse_source(document, source):
                 continue
             article = source_url(item.get('articleUrl') or source['url'])
             identifier = hashlib.sha256((source['id']+'\0'+name+'\0'+location).encode()).hexdigest()[:16]
+            rating = item.get('rating')
             rows.append({'id': identifier, 'name': name, 'city': city, 'location': location,
                          'address': str(item.get('address', ''))[:160], 'category': str(item.get('category') or 'Food')[:60],
                          'note': 'Location record from an external public map; consult the original source for details.', 'source_url': article,
                          'source_name': source['name'], 'updated': 0})
+            if type(rating) in (int, float) and 0 <= rating <= 5:
+                rows[-1]['rating'] = rating
         except (ValueError, TypeError, KeyError):
             continue
     return rows
@@ -40,6 +43,8 @@ def export_document(rows):
         lon, lat = map(float, coordinates(row['location']).split(','))
         spots.append({'id': row['id'], 'name': row['name'], 'city': row['city'], 'category': row['category'],
             'address': row['address'], 'lng': lon, 'lat': lat, 'coordinateSystem': 'GCJ-02', 'articleUrl': row['source_url']})
+        if row.get('rating') is not None:
+            spots[-1]['rating'] = row['rating']
     return {'schemaVersion': 1, 'coordinateSystem': 'GCJ-02', 'spots': spots}
 
 

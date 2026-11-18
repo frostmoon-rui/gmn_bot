@@ -6,6 +6,12 @@
       "name": "CacheTide food map",
       "url": "https://cachetide.top/food-map/index.json",
       "enabled": true
+    },
+    {
+      "id": "frostmoon",
+      "name": "Frostmoon",
+      "url": "https://frostmoonrui.com/food-map/index.json",
+      "enabled": true
     }
   ]
 }
