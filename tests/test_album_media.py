@@ -9,10 +9,34 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 from album_backup import (AlbumPhotoError, backup, cdn_allowed, fetch_photo, fetch_video,
-                          media_variant, media_variants, secure_cdn_url)
+                          media_variant, media_variants, secure_cdn_url, album_folder, short_hash)
 
 
 class MediaTests(unittest.IsolatedAsyncioTestCase):
+    def test_restored_album_directories_resume_without_deleting_either_archive(self):
+        with TemporaryDirectory() as temp:
+            root=Path(temp).resolve()
+            tag=short_hash('stable-album')
+            old=root/('Old--'+tag);new=root/('Renamed--'+tag)
+            old.mkdir();new.mkdir()
+            (old/'a.jpg').write_bytes(b'old')
+            (new/'b.jpg').write_bytes(b'new')
+            (new/'c.mp4').write_bytes(b'video')
+            selected=album_folder(root,'New title','stable-album')
+            self.assertEqual(selected,new)
+            self.assertEqual((old/'a.jpg').read_bytes(),b'old')
+            self.assertEqual((new/'b.jpg').read_bytes(),b'new')
+
+    def test_mpo_original_container_is_preserved(self):
+        out=BytesIO()
+        Image.new('RGB',(20,20),'blue').save(out,'MPO',save_all=True,
+            append_images=[Image.new('RGB',(20,20),'red')])
+        data=out.getvalue()
+        with patch('album_backup.build_opener',return_value=SimpleNamespace(open=lambda *a,**k:BytesIO(data))):
+            blob,suffix=fetch_photo('https://a1.qpic.cn/a',(20,20))
+        self.assertEqual(blob,data)
+        self.assertEqual(suffix,'.mpo')
+
     def test_cdn_redirect_policy_and_http_upgrade(self):
         for url in ('https://qungz.photo.store.qq.com/a', 'https://a1.qpic.cn/a',
                     'https://groupvideo.photo.qq.com/a', 'https://ugc.video.gtimg.com/a'):

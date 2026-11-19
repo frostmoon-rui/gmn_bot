@@ -93,7 +93,7 @@ def fetch_photo(url, expected):
     with Image.open(BytesIO(blob)) as image:
         suffix = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif", "WEBP": ".webp",
                   "BMP": ".bmp", "TIFF": ".tiff", "AVIF": ".avif", "HEIF": ".heif",
-                  "JPEG2000": ".jp2"}.get(image.format)
+                  "JPEG2000": ".jp2", "MPO": ".mpo"}.get(image.format)
         if not suffix or min(image.size) <= 0:
             raise AlbumPhotoError('Unsupported image format: ' + str(image.format))
         if all(expected) and image.size != expected:
@@ -162,9 +162,13 @@ def short_hash(text):
 def album_folder(root, name, album_id):
     label = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name)).strip(" .")[:64].rstrip(" .")
     tag = short_hash(album_id)
-    previous = [p for p in root.glob(f"*--{tag}") if p.is_dir() and p.resolve().parent == root]
+    previous = [p for p in root.glob(f"*--{tag}") if p.is_dir() and not p.is_symlink() and p.resolve().parent == root]
     if len(previous) > 1:
-        raise ValueError("Multiple folders for the same album")
+        # A restored/renamed album can have two archives with the same stable ID.
+        # Resume the largest existing archive; never move, delete or overwrite its sibling.
+        previous.sort(key=lambda folder: (-sum(1 for item in folder.iterdir()
+                      if item.is_file() and not item.is_symlink() and item.suffix.lower() in MEDIA_EXTENSIONS), folder.name))
+        print('[Album directory]: Repeated stable ID; resuming the largest archive and preserving all folders')
     path = previous[0] if previous else root / f"{label or 'Album'}--{tag}"
     if path.resolve().parent != root or path.is_symlink():
         raise ValueError("Unsafe album directory")
@@ -185,7 +189,7 @@ def save_photo(folder, key, blob, suffix):
     return target
 
 
-PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", '.avif', '.heif', '.jp2'}
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", '.avif', '.heif', '.jp2', '.mpo'}
 MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | {'.mp4', '.mov', '.webm', '.avi'}
 BEIJING = timezone(timedelta(hours=8))
 
