@@ -1488,12 +1488,15 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
     if ACTIVE_MODEL_PROVIDER == "deepseek":
         return await call_deepseek_with_history(session_id, prompt_text, is_random, image_parts)
 
+    from bot_actions import function_declarations, function_action
+    tool_options = {} if is_random else {'tools': [{'function_declarations': function_declarations()}]}
     token_limit = 256 if is_random else 2048
     temp = 0.9 if is_random else 0.75
     config = gemini_content_config(
         system_instruction=model_system_prompt(is_random),
         temperature=temp,
-        max_output_tokens=token_limit
+        max_output_tokens=token_limit,
+        **tool_options
     )
 
     parts = [types.Part.from_text(text=prompt_text)]
@@ -1523,7 +1526,7 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
             from chat_style import generation_hit_limit
             if generation_hit_limit(response):
                 print('[Model output limit]:', model_id, 'MAX_TOKENS')
-            reply_text = visible_response_text(response)
+            reply_text = (function_action(response) if not is_random else None) or visible_response_text(response)
             if reply_text:
                 promote_runtime_model("gemini", model_id)
                 chat_histories[session_id].append(

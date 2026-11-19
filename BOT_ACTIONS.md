@@ -1,6 +1,6 @@
 # Model-directed bot actions
 
-The normal conversation model can return one validated `BOT_ACTION` JSON marker. Python dispatches it through the existing bot implementation; the model does not run code, select API keys, browse with provider tools, or choose arbitrary commands or recipients. Passive/random interjections cannot execute actions. Malformed requests are not posted as raw JSON.
+Gemini ordinary conversations receive native function declarations generated from the validated action registry. A single native function call is converted into the same checked action used by the existing dispatcher. Text-only providers retain the validated `BOT_ACTION` JSON marker. Python dispatches it through the existing bot implementation; the model does not run code, select API keys, browse with provider tools, or choose arbitrary commands or recipients. Passive/random interjections cannot execute actions. Malformed requests are not posted as raw JSON.
 
 Available actions: weather, ordinary search, detailed research, public website screenshots, read-only map/place/route/traffic queries, video summaries, image generation, saved stickers, help, status, earthquake reports, food map screenshots, recent sources, and the current speaker's reminders. Existing native commands remain available, including administrative commands; they are not arbitrary model tools. Existing whitelist, ownership, queue and rate checks remain in force. Detailed research still uses the configured scoped planning policy and MiMo synthesis.
 
@@ -17,3 +17,5 @@ Examples of internal model outputs:
 ```
 
 These markers are model output, not user commands. Only the current event supplies the actor, group, privilege flags and reply context. One action is executed per model turn; the model cannot create tool loops or use unread/quoted content as authorization.
+
+Reminder commands accept relative delays and absolute dates. The private localized adapter accepts compact commands and a trailing relative-time suffix. Natural reminder requests without a time pass to the ordinary model for clarification. Native function arguments use explicit durations such as `10 minutes`, or `YYYY-MM-DD HH:MM` in Beijing time. The food-map action uses the current high-resolution atlas.

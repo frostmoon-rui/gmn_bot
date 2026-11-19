@@ -26,12 +26,12 @@ SCHEMAS = {
     'reminder': {'when': (str, 60), 'content': (str, 300)}, 'reminders': {},
     'cancel_reminder': {'id': (str, 8)}}
 COMMANDS = {'help':'help', 'status':'bot status', 'earthquake':'latest earthquake',
-    'food_map':'food map screenshot', 'sources':'view sources', 'video':'summarize video',
+    'food_map':'food map', 'sources':'view sources', 'video':'summarize video',
     'research':'ask assistant', 'reminder':'remind me', 'reminders':'my reminders', 'cancel_reminder':'cancel reminder',
     'map':'amap map', 'places':'search places', 'nearby':'search nearby', 'route':'route', 'traffic':'road traffic'}
 INSTRUCTION = '''
 You may use existing bot functions when the current speaker wants a concrete action, not just describe them.
-Return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
+Use a declared function when function tools are available. Otherwise return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
 Tools and arguments:
 community_map {scope: china|world} draws global saved-region statistics, including all known accounts by default with self opt-out. Reply only to the requesting chat; never expose individual locations or modify another person's preferences.
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
@@ -44,7 +44,10 @@ website {page: home|about|friends|resources|food|projects, language: zh|en|ru|ja
 map {operation: map|places|nearby|route|traffic, query: native place/route specification};
 video {url: explicit video URL or empty for quoted video}; image {prompt};
 help {}; status {}; earthquake {}; food_map {}; sources {}; sticker {};
-reminder {when: explicit reminder time, content}; reminders {}; cancel_reminder {id}.
+reminder {when: explicit reminder time, content};
+For reminders with no explicit time, ask the speaker when to remind them. Do not guess a delay.
+Accept relative timing such as in 10 minutes and local-language equivalents; preserve the requested content.
+ reminders {}; cancel_reminder {id}.
 Extract the requested location regardless of word order or language. Do not replace an explicit place with the saved home area.
 For time-sensitive local services such as heating schedules, use latest search with the explicit jurisdiction and year.
 Prefer local government and utility notices, preserve local-language place names, and do not require Wikipedia articles.
@@ -108,6 +111,83 @@ def parse_action(text):
     return value
 
 
+REQUIRED = {
+    'search': ('query',), 'research': ('query',), 'image': ('prompt',),
+    'weather_map': ('product',), 'weather_chart': ('product',),
+    'map': ('operation', 'query'), 'reminder': ('when', 'content'),
+    'cancel_reminder': ('id',)
+}
+TOOL_DESCRIPTIONS = {
+    'community_map': 'Draw anonymous saved-region community counts.',
+    'weather': 'Get detailed weather for an explicit location or the current speaker.',
+    'weather_map': 'Send a national weather map.',
+    'weather_chart': 'Draw local weather time series.',
+    'search': 'Retrieve current web information for the question.',
+    'research': 'Run detailed background research.',
+    'website': 'Capture a public website page.',
+    'map': 'Look up places, routes, traffic or a map.',
+    'video': 'Summarize a shared video using its URL or the current reply.',
+    'image': 'Generate a requested image.',
+    'help': 'Show the available bot commands.',
+    'status': 'Show bot status.',
+    'earthquake': 'Get recent earthquake reports.',
+    'food_map': 'Generate the current high-resolution food atlas.',
+    'sources': 'Show recent research sources in this conversation.',
+    'sticker': 'Send a saved sticker.',
+    'reminder': 'Schedule a reminder for the current speaker. Require an explicitly requested time.',
+    'reminders': 'List the current speaker reminders.',
+    'cancel_reminder': 'Cancel one reminder belonging to the current speaker.'
+}
+TOOL_ENUMS = {
+    ('community_map', 'scope'): ['china', 'world'],
+    ('weather', 'target'): ['today', 'tomorrow'],
+    ('search', 'mode'): ['web', 'wiki', 'latest'],
+    ('website', 'page'): ['home', 'about', 'friends', 'resources', 'food', 'projects'],
+    ('website', 'language'): ['zh', 'en', 'ru', 'ja'],
+    ('website', 'theme'): ['dark', 'light'],
+    ('map', 'operation'): ['map', 'places', 'nearby', 'route', 'traffic']
+}
+
+
+def function_declarations():
+    """Generate provider declarations from the same registry used for validation."""
+    declarations = []
+    for name, fields in SCHEMAS.items():
+        properties = {}
+        for key, (_, limit) in fields.items():
+            field = {'type': 'STRING', 'description': f'{key}; at most {limit} characters.'}
+            if name == 'reminder' and key == 'when':
+                field['description'] = ('Use the explicit time the speaker gave: N minutes, N hours, N days, '
+                                        'or YYYY-MM-DD HH:MM in Beijing time. Ask for a time when absent.')
+            if (name, key) in TOOL_ENUMS:
+                field['enum'] = TOOL_ENUMS[name, key]
+            if name in {'weather_map', 'weather_chart'} and key == 'product':
+                from weather_maps import PRODUCTS
+                field['enum'] = list(PRODUCTS)
+            properties[key] = field
+        declaration = {'name': name, 'description': TOOL_DESCRIPTIONS[name]}
+        if fields:
+            declaration['parameters'] = {'type': 'OBJECT', 'properties': properties,
+                                         'required': list(REQUIRED.get(name, ()))}
+        declarations.append(declaration)
+    return declarations
+
+
+def function_action(response):
+    """Accept exactly one native call and reuse the existing strict argument validation."""
+    calls = getattr(response, 'function_calls', None) or []
+    if not calls:
+        return None
+    if len(calls) != 1:
+        return '[BOT_ACTION: {}]'
+    call = calls[0]
+    try:
+        marker = '[BOT_ACTION: ' + json.dumps({'tool': call.name, 'args': dict(call.args or {})}) + ']'
+    except (TypeError, ValueError):
+        return '[BOT_ACTION: {}]'
+    return marker if parse_action(marker) is not None else '[BOT_ACTION: {}]'
+
+
 def english_weather_request(text):
     text = text.strip().removeprefix('/')
     match=re.fullmatch(r'(?:weather(?: forecast)?(?:\s+(?:in|for))?\s*[:：]?\s*(.*?)|(.*?)\s+weather(?: forecast)?)[?.!]*',text,re.I)
@@ -129,6 +209,9 @@ async def dispatch(bot, action, event, ws, *, master=False, whitelist=False, gro
             await ext.send(ws,kind,group,user,text)
     if tool=='community_map':
         await reply(await ext.community.command('heatmap '+args.get('scope','china'),ws,kind,group,user,True,ext.send))
+        return
+    if tool=='food_map':
+        await ext.food_atlas_job(ws,kind,group,user)
         return
     if tool=='weather':
         await ext.weather_at(ws,kind,group,user,args.get('location',''),args.get('target','today'))

@@ -238,7 +238,7 @@ def reply_belongs_to(message, event):
 
 def parse_reminder(text, now=None):
     now = now or datetime.now(TZ)
-    match = re.fullmatch(r'remind me\s+(\d+)\s*(minutes?|hours?|days?)\s+(.+)', text, re.S | re.I)
+    match = re.fullmatch(r'remind me\s+(?:in\s+)?(\d+)\s*(minutes?|hours?|days?)\s+(?:(?:later|from now)\s+)?(?:to\s+)?(.+)', text, re.S | re.I)
     if match:
         amount = int(match[1])
         if amount <= 0:
@@ -381,6 +381,8 @@ class Features:
             try:
                 due, content = parse_reminder(text)
             except ValueError as error:
+                if not re.search(r'\d|minutes?|hours?|today|tomorrow', text, re.I):
+                    return None
                 return str(error)
             if not content or len(content) > 300:
                 return 'Reminder content must contain 1–300 characters.'
