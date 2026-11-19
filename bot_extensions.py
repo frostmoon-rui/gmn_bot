@@ -904,7 +904,7 @@ class Extensions:
         if explicit and not celestial and target != 'celestial':
             try:
                 identity = await self.celestial_research.identify(explicit)
-                if identity.get('is_celestial') is True:
+                if identity.get('is_celestial') is True or identity.get('setting') in {'fictional', 'ambiguous'}:
                     celestial = identity['canonical_name']
             except Exception:
                 pass

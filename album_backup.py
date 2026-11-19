@@ -9,12 +9,15 @@ from tempfile import NamedTemporaryFile
 from datetime import datetime, timedelta, timezone
 import os
 from urllib.error import URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, build_opener
 from uuid import uuid4
 
 from PIL import Image
 LIMIT = 64 * 1024 * 1024
+VIDEO_LIMIT = 256 * 1024 * 1024
+CDN_DOMAINS = ('photo.store.qq.com', 'video.store.qq.com', 'groupvideo.photo.qq.com',
+               'qpic.cn', 'gtimg.cn', 'gtimg.com')
 
 
 class AlbumProtocolError(ValueError):
@@ -50,33 +53,106 @@ async def pages(ws, action, params, rows, more, cursor):
 
 
 def cdn_allowed(url):
-    u = urlsplit(url)
-    return (u.scheme == "https" and u.hostname is not None
-            and u.hostname.endswith(".photo.store.qq.com")
-            and u.port in (None, 443) and not u.username and not u.password)
+    try:
+        u = urlsplit(url)
+        host = (u.hostname or '').lower()
+        return (u.scheme == 'https' and any(host == domain or host.endswith('.' + domain) for domain in CDN_DOMAINS)
+                and u.port in (None, 443) and not u.username and not u.password)
+    except (ValueError, TypeError):
+        return False
+
+
+def secure_cdn_url(url):
+    """Some QQ metadata uses HTTP; upgrade only an already allowlisted CDN host."""
+    if not isinstance(url, str):
+        raise AlbumPhotoError('Missing media URL')
+    parsed = urlsplit(url)
+    if parsed.username or parsed.password:
+        raise AlbumPhotoError('Media URL credentials are not allowed')
+    upgraded = urlunsplit(parsed._replace(scheme='https')) if parsed.scheme == 'http' and parsed.port in (None, 80) else url
+    # An explicit HTTP port cannot be reused as an HTTPS port.
+    if parsed.scheme == 'http' and parsed.port == 80:
+        upgraded = urlunsplit(('https', parsed.hostname or '', parsed.path, parsed.query, parsed.fragment))
+    if not cdn_allowed(upgraded):
+        raise AlbumPhotoError('Unexpected media CDN host: ' + (parsed.hostname or 'unknown'))
+    return upgraded
 
 
 class PhotoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not cdn_allowed(newurl):
-            raise AlbumPhotoError("Photo redirect left the QQ CDN")
+        newurl = secure_cdn_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def fetch_photo(url, expected):
-    if not cdn_allowed(url):
-        raise AlbumPhotoError("Unexpected photo URL")
+    url = secure_cdn_url(url)
     with build_opener(PhotoRedirect()).open(url, timeout=15) as response:
         blob = response.read(LIMIT + 1)
     if len(blob) > LIMIT:
         raise AlbumPhotoError("Photo exceeds size limit")
     with Image.open(BytesIO(blob)) as image:
         suffix = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif", "WEBP": ".webp",
-                  "BMP": ".bmp", "TIFF": ".tiff"}.get(image.format)
-        if not suffix or (all(expected) and image.size != expected):
-            raise AlbumPhotoError("Invalid photo format or dimensions")
+                  "BMP": ".bmp", "TIFF": ".tiff", "AVIF": ".avif", "HEIF": ".heif",
+                  "JPEG2000": ".jp2"}.get(image.format)
+        if not suffix or min(image.size) <= 0:
+            raise AlbumPhotoError('Unsupported image format: ' + str(image.format))
+        if all(expected) and image.size != expected:
+            print('[Album image metadata]: Valid', image.format, image.size, 'differs from metadata', expected,
+                  '; preserving original bytes')
         image.verify()
     return blob, suffix
+
+
+def fetch_video(url, expected=None):
+    url = secure_cdn_url(url)
+    with build_opener(PhotoRedirect()).open(url, timeout=45) as response:
+        blob = response.read(VIDEO_LIMIT + 1)
+    if len(blob) > VIDEO_LIMIT:
+        raise AlbumPhotoError('Video exceeds 256 MiB size limit')
+    if len(blob) >= 24 and blob[4:8] == b'ftyp':
+        suffix = '.mov' if blob[8:12] == b'qt  ' else '.mp4'
+    elif len(blob) >= 24 and blob.startswith(b'\x1aE\xdf\xa3'):
+        suffix = '.webm'
+    elif len(blob) >= 24 and blob[:4] == b'RIFF' and blob[8:12] == b'AVI ':
+        suffix = '.avi'
+    else:
+        raise AlbumPhotoError('Unrecognized video container; response not saved as a photo')
+    return blob, suffix
+
+
+def media_variant(item):
+    """Normalize image/video schemas without mistaking a video cover for its original."""
+    video = item.get('video') or item.get('video_info')
+    if isinstance(video, dict):
+        identity = video.get('vid') or video.get('id') or video.get('lloc') or item.get('media_id')
+        candidates = video.get('video_url') or video.get('url') or video.get('play_url')
+        if isinstance(candidates, list):
+            candidates = next((v.get('url') for v in candidates if isinstance(v, dict) and v.get('url')), None)
+        if isinstance(candidates, str):
+            candidates = {'url': candidates}
+        if isinstance(candidates, dict) and isinstance(candidates.get('url'), dict):
+            candidates = candidates['url']
+        return 'video', str(identity or ''), candidates if isinstance(candidates, dict) else None
+    photo = item.get('image')
+    if not isinstance(photo, dict) or not photo.get('lloc'):
+        return 'unknown', '', None
+    variants = [v for v in photo.get('photo_url', []) if isinstance(v, dict) and v.get('url')]
+    variants.sort(key=lambda v: str(v.get('spec')) == '6', reverse=True)
+    variant = variants[0].get('url') if variants else None
+    if isinstance(variant, str):
+        variant = {'url': variant}
+    return 'image', str(photo['lloc']), variant
+
+
+def media_variants(item):
+    result = [media_variant(item)]
+    if item.get('is_live_photo') and result[0][0] == 'video':
+        # A Live Photo contains two originals; ordinary video covers are not originals.
+        still = dict(item, video=None, video_info=None)
+        image = media_variant(still)
+        if image[0] == 'image':
+            result.append(image)
+    return result
 
 
 def short_hash(text):
@@ -109,7 +185,8 @@ def save_photo(folder, key, blob, suffix):
     return target
 
 
-PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"}
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", '.avif', '.heif', '.jp2'}
+MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | {'.mp4', '.mov', '.webm', '.avi'}
 BEIJING = timezone(timedelta(hours=8))
 
 
@@ -126,7 +203,7 @@ def write_state(path, data):
 def existing_photos(folder):
     index = {}
     for path in folder.iterdir():
-        if (not path.is_file() or path.is_symlink() or path.suffix.lower() not in PHOTO_EXTENSIONS
+        if (not path.is_file() or path.is_symlink() or path.suffix.lower() not in MEDIA_EXTENSIONS
                 or not re.fullmatch(r"[0-9a-f]{16}", path.stem)):
             continue
         with path.open("rb") as file:
@@ -146,17 +223,19 @@ async def backup(ws, group, root):
     if any((p / ".git").exists() for p in (root, *root.parents)):
         raise ValueError("Album archives must be outside Git repositories")
     root.mkdir(parents=True, exist_ok=True)
-    summary = dict(albums=0, saved=0, existing=0, duplicates=0, unavailable=0, failed=0)
+    summary = dict(albums=0, saved=0, existing=0, duplicates=0, unavailable=0, failed=0,
+                   videos_saved=0, videos_unavailable=0, unknown_media=0)
     seen_albums = set()
     transfer_errors = set()
     slots = asyncio.Semaphore(3)
     write_lock = asyncio.Lock()
 
-    async def transfer(folder, key, variant, hashes, references):
+    async def transfer(folder, key, variant, hashes, references, media_type='image'):
         async with slots:
             try:
                 blob, suffix = await asyncio.to_thread(
-                    fetch_photo, variant["url"], (variant.get("width", 0), variant.get("height", 0)))
+                    fetch_video if media_type == 'video' else fetch_photo,
+                    variant["url"], (variant.get("width", 0), variant.get("height", 0)))
                 digest = await asyncio.to_thread(lambda: sha256(blob).hexdigest())
                 async with write_lock:
                     if digest in hashes:
@@ -164,6 +243,8 @@ async def backup(ws, group, root):
                         return "duplicates"
                     saved = await asyncio.to_thread(save_photo, folder, key, blob, suffix)
                     hashes[digest] = saved.name
+                    if media_type == 'video':
+                        summary['videos_saved'] += 1
                     return "saved"
             except (OSError, ValueError, URLError, Image.DecompressionBombError) as error:
                 code = getattr(error, "code", None)
@@ -195,25 +276,27 @@ async def backup(ws, group, root):
                                          "next_has_more", "next_attach_info"):
                     jobs = {}
                     for item in media:
-                        photo = item.get("image")
-                        if not photo or not photo.get("lloc"):
-                            continue
-                        key = short_hash(photo["lloc"])
-                        if any(p.is_file() and not p.is_symlink() and p.suffix.lower() in PHOTO_EXTENSIONS
-                               for p in folder.glob(key + ".*")):
-                            summary["existing"] += 1
-                            continue
-                        saved_ref = references.get(key)
-                        if saved_ref in hashes.values():
-                            summary["duplicates"] += 1
-                            continue
-                        variant = next((v["url"] for v in photo.get("photo_url", [])
-                                        if str(v.get("spec")) == "6" and v.get("url")), None)
-                        if variant and variant.get("url"):
-                            jobs.setdefault(key, variant)
-                        else:
-                            summary["unavailable"] += 1
-                    results = await asyncio.gather(*(transfer(folder, key, variant, hashes, references) for key, variant in jobs.items()))
+                        for media_type, identity, variant in media_variants(item):
+                            if not identity:
+                                summary['unknown_media' if media_type == 'unknown' else 'videos_unavailable'] += 1
+                                continue
+                            key = short_hash(identity)
+                            if any(p.is_file() and not p.is_symlink() and p.suffix.lower() in MEDIA_EXTENSIONS
+                                   for p in folder.glob(key + ".*")):
+                                summary["existing"] += 1
+                                continue
+                            saved_ref = references.get(key)
+                            if saved_ref in hashes.values():
+                                summary["duplicates"] += 1
+                                continue
+                            if variant and variant.get("url"):
+                                jobs.setdefault(key, (variant, media_type))
+                            else:
+                                summary["unavailable"] += 1
+                                if media_type == 'video':
+                                    summary['videos_unavailable'] += 1
+                    results = await asyncio.gather(*(transfer(folder, key, variant, hashes, references, media_type)
+                                                    for key, (variant, media_type) in jobs.items()))
                     for status in results:
                         summary[status] += 1
                     if "duplicates" in results:

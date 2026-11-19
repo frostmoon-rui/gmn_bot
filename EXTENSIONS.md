@@ -231,3 +231,12 @@ Charts use 1920-pixel-wide panels, two twelve-point panels for a full day, numer
 - Images use a generic area heading and never expose a saved place name. They are sent only to the requesting conversation and never collected as stickers.
 
 See `help local-weather`. The validated `weather_chart` model action follows the same path. Existing multi-source cards, cat briefings, comparisons and scheduled weather care remain unchanged.
+
+## Celestial weather and album media
+
+- `Sun weather`, `Moon weather`, `Titan weather`, `celestial weather:Sirius`.
+- `celestial weather:M78` distinguishes a real reflection nebula from fictional namesakes. `celestial weather:Land of Light` requests fictional lore; include the work title for other settings.
+- `help weather` includes celestial weather; `help celestial-weather` opens the topic. Missing evidence stays unknown. Sun/Moon reference fallbacks are labeled, never presented as live forecasts.
+- Album backups deduplicate within each folder and preserve image bytes. Metadata dimension differences are logged separately from corrupt / unsupported images.
+- Videos are saved separately as MP4/MOV/WebM/AVI, up to 256 MiB, when the protocol supplies an accessible original URL. Missing URLs and unknown media are counted. Video covers do not substitute for originals. Dress submission remains image-only.
+- Manual and background backups share the media pipeline. Read-only metadata inspection: `python tools/inspect_album_media.py`; no media bytes are downloaded or displayed.

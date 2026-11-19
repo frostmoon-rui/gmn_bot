@@ -27,7 +27,7 @@ def eligible(provider, item, official=True):
         return None
     if str(item.get('lifecycle', '')).lower() in {'retired', 'shutdown', 'shut_down', 'deleted'}:
         return None
-    patterns = {'gemini': r'^gemini-.*(?:flash|lite|pro|argon|hydrogen|carbon)', 'openai': r'^(?:gpt-|chatgpt|o\d)',
+    patterns = {'gemini': r'^gemini-.*(?:flash|lite|pro|argon|hydrogen|carbon|neon)', 'openai': r'^(?:gpt-|chatgpt|o\d)',
                 'claude': r'^claude-', 'deepseek': r'^deepseek-', 'mimo': r'^mimo-'}
     if not re.search(patterns[provider], name):
         return None

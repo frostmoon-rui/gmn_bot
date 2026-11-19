@@ -35,6 +35,32 @@ CATALOG = {
         'basis': 'NASA mission background. No live weather measurements or operational forecast.',
         'source': 'https://science.nasa.gov/resource/searching-for-habitable-worlds/'}
 }
+CATALOG.update({
+    'sun': {'name': 'Sun', 'kind': 'STAR', 'accent': '#ffcb80',
+        'headline': 'About 5,500 °C', 'metric': 'Photosphere reference temperature; not a daily maximum',
+        'facts': [('Atmosphere', 'The photosphere, chromosphere and corona are distinct solar atmospheric layers.'),
+                  ('Solar activity', 'Sunspots and solar flares occur in the solar atmosphere.'),
+                  ('Forecast availability', 'Current flare, solar-wind and geomagnetic forecasts were not retrieved.')],
+        'brief': 'This is the Sun, meow; ordinary city weather does not apply.',
+        'basis': 'NASA Sun Facts reference profile, checked 2026-11-19. Not a current measurement.',
+        'source': 'https://science.nasa.gov/sun/facts/'},
+    'moon': {'name': 'Moon', 'kind': 'EARTH MOON', 'accent': '#bfcee6',
+        'headline': '127 °C / -173 °C', 'metric': 'Full-sun / darkness reference surface conditions',
+        'facts': [('Temperature context', 'These reference extremes are not a forecast for a particular lunar site or date.'),
+                  ('Atmosphere', 'The Moon has a very thin, weak atmosphere with little protection from radiation.'),
+                  ('Space environment', 'Current local radiation, dust and solar-wind measurements were not retrieved.')],
+        'brief': 'Lunar day and night are quite a wardrobe problem, meow.',
+        'basis': 'NASA Moon Facts reference profile, checked 2026-11-19. Local observation epoch unknown.',
+        'source': 'https://science.nasa.gov/moon/facts/'},
+    'messier78': {'name': 'Messier 78', 'kind': 'REFLECTION NEBULA', 'accent': '#b7bbff',
+        'headline': 'A real nebula', 'metric': 'The real object and a fictional namesake must be distinguished',
+        'facts': [('Astronomy', 'Messier 78 is a reflection nebula in Orion.'),
+                  ('Fictional namesake', 'The Ultraman Land of Light is a fictional setting, not an observed part of this nebula.'),
+                  ('Weather data', 'Local temperature, wind and rainfall are unknown; no city-style forecast is available.')],
+        'brief': 'Specify Messier 78 for astronomy or Land of Light for fictional lore, meow.',
+        'basis': 'NASA nebula profile and Tsuburaya character background, checked 2026-11-19.',
+        'source': 'https://science.nasa.gov/mission/hubble/science/explore-the-night-sky/hubble-messier-catalog/messier-78/\nhttps://tsuburaya-prod.com/heroes/ultraseven'}
+})
 ALIASES = {'betelgeuse': 'betelgeuse', 'alpha orionis': 'betelgeuse',
            'mimas': 'mimas', 'saturn i': 'mimas', 'kepler22b': 'kepler22b'}
 SOLAR_NAMES = ('sun mercury venus earth mars jupiter saturn uranus neptune moon phobos deimos io europa '
@@ -42,6 +68,8 @@ SOLAR_NAMES = ('sun mercury venus earth mars jupiter saturn uranus neptune moon 
                'umbriel titania oberon triton nereid charon pluto ceres eris haumea makemake').split()
 ALIASES.update({name: name for name in SOLAR_NAMES})
 ALIASES.update({'luna': 'moon', 'sol': 'sun'})
+ALIASES.update({'m78': 'messier78', 'messier 78': 'messier78', 'ngc 2068': 'messier78',
+                'land of light': 'land of light'})
 LABELS = {'title': 'CELESTIAL WEATHER', 'status': 'ENVIRONMENT PROFILE · NOT A LIVE FORECAST',
           'basis': 'Evidence & observation epoch', 'source': 'Source: NASA Science',
           'checked': 'Source review: 2026-11-19 · card generation does not refresh observations',

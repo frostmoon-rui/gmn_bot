@@ -54,34 +54,9 @@ async def pages(ws, action, params, rows, more, cursor):
     raise ValueError(f"{action}: page limit exceeded")
 
 
-def cdn_allowed(url):
-    u = urlsplit(url)
-    return (u.scheme == "https" and u.hostname is not None
-            and u.hostname.endswith(".photo.store.qq.com")
-            and u.port in (None, 443) and not u.username and not u.password)
-
-
-class PhotoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not cdn_allowed(newurl):
-            raise ValueError("Photo redirect left the QQ CDN")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-def fetch_photo(url, expected):
-    if not cdn_allowed(url):
-        raise ValueError("Unexpected photo URL")
-    with build_opener(PhotoRedirect()).open(url, timeout=15) as response:
-        blob = response.read(LIMIT + 1)
-    if len(blob) > LIMIT:
-        raise ValueError("Photo exceeds size limit")
-    with Image.open(BytesIO(blob)) as image:
-        suffix = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif", "WEBP": ".webp",
-                  "BMP": ".bmp", "TIFF": ".tiff"}.get(image.format)
-        if not suffix or (all(expected) and image.size != expected):
-            raise ValueError("Invalid photo format or dimensions")
-        image.verify()
-    return blob, suffix
+# Shared runtime transport fixes also apply to manual backup commands.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from album_backup import cdn_allowed, PhotoRedirect, fetch_photo
 
 
 def short_hash(text):
@@ -157,74 +132,24 @@ def link_photo(folder, key, original):
 
 
 async def backup(group, root):
-    root = root.resolve()
-    if any((p / ".git").exists() for p in (root, *root.parents)):
-        raise ValueError("Choose an output directory outside Git repositories")
-    root.mkdir(parents=True, exist_ok=True)
-    summary = dict(albums=0, saved=0, existing=0, linked=0, no_original_variant=0, non_photo=0, failed=0)
-    by_key, by_digest = await asyncio.to_thread(index_photos, root)
-    seen_albums = set()
-    transfer_slots = asyncio.Semaphore(6)
+    from album_backup import backup as backup_media
 
-    async def transfer(folder, key, variant):
-        async with transfer_slots:
-            try:
-                if key in by_key:
-                    link_photo(folder, key, by_key[key])
-                    return "linked"
-                blob, suffix = await asyncio.to_thread(
-                    fetch_photo, variant["url"], (variant.get("width", 0), variant.get("height", 0)))
-                digest = sha256(blob).digest()
-                original = by_digest.get(digest)
-                if original:
-                    by_key[key] = link_photo(folder, key, original)
-                    return "linked"
-                save_photo(folder, key, blob, suffix)
-                path = folder / (key + suffix)
-                by_key[key] = by_digest[digest] = path
-                return "saved"
-            except (OSError, ValueError, URLError, Image.DecompressionBombError):
-                return "failed"
+    class Adapter:
+        def __init__(self, raw):
+            self.raw = raw
 
-    async with websockets.connect("ws://127.0.0.1:3001", open_timeout=5, close_timeout=2) as ws:
-        async for albums in pages(ws, "get_qun_album_list", {"group_id": group, "attach_info": ""},
-                                  "album_list", "has_more", "attach_info"):
-            for album in albums:
-                album_id = album["album_id"]
-                if album_id in seen_albums:
-                    continue
-                seen_albums.add(album_id)
-                folder = album_folder(root, album.get("name", ""), album_id)
-                summary["albums"] += 1
-                params = {"group_id": group, "album_id": album_id, "attach_info": ""}
-                try:
-                    async for media in pages(ws, "get_group_album_media_list", params,
-                                             "media_list", "next_has_more", "next_attach_info"):
-                        jobs = {}
-                        for item in media:
-                            photo = item.get("image")
-                            if not photo or not photo.get("lloc"):
-                                summary["non_photo"] += 1
-                                continue
-                            variant = next((v["url"] for v in photo.get("photo_url", [])
-                                            if str(v.get("spec")) == "6" and v.get("url")), None)
-                            if not variant or not variant.get("url"):
-                                summary["no_original_variant"] += 1
-                                continue
-                            key = short_hash(photo["lloc"])
-                            if any(folder.glob(key + ".*")):
-                                summary["existing"] += 1
-                                continue
-                            jobs.setdefault(key, variant)
-                        for status in await asyncio.gather(*(transfer(folder, key, variant)
-                                                             for key, variant in jobs.items())):
-                            summary[status] += 1
-                        print(json.dumps(summary), flush=True)
-                except (TimeoutError, RuntimeError, ValueError) as error:
-                    print(f"Album {summary['albums']} listing incomplete: {type(error).__name__}", flush=True)
-                    summary["failed"] += 1
-                print(json.dumps(summary), flush=True)
-    return summary
+        @property
+        def closed(self):
+            return self.raw.close_code is not None
+
+        async def send(self, payload):
+            request = json.loads(payload)
+            return await call(self.raw, request['action'], request['params'])
+
+    async with websockets.connect('ws://127.0.0.1:3001', open_timeout=5, close_timeout=2) as ws:
+        result = await backup_media(Adapter(ws), group, root)
+    result['no_original_variant'] = result['unavailable']
+    return result
 
 
 if __name__ == "__main__":

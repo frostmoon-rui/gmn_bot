@@ -124,3 +124,5 @@ The project has not adopted a single open-source license. Third-party material r
 Use `heatmap china/world` after mentioning the bot in a group, or directly in a private chat. All recognizable saved regions are included by default across chats, once per account; single-member regions are displayed. No individual locations or member list is published. `heatmap leave` excludes yourself globally; `heatmap join` restores participation. Existing saved weather/profile records are preserved.
 
 `help` opens eight visual categories; `help CATEGORY` stays on one category page, and `help text CATEGORY` keeps commands copyable. Existing topic aliases remain. Official CENC bulletins refresh every 30 minutes; warning/subscription channels remain separate. See [map rules and source details](COMMUNITY_MAPS.md).
+
+Celestial weather: `Sun weather`, `Moon weather`, `celestial weather:M78`, or `celestial weather:Land of Light`. See the [user guide](EXTENSIONS.md) for scientific versus fictional modes and album video backup. [Current model information](MODEL_UPDATES.md) documents the explicit catalog refresh and generation-access limits.

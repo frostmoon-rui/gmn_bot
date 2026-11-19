@@ -24,7 +24,7 @@ class ModelCatalogTests(unittest.TestCase):
             item = {'name': 'models/'+name} if provider == 'gemini' else {'id': name}
             self.assertIsNone(eligible(provider, item))
         self.assertEqual(eligible('gemini', {'name':'models/gemini-4-argon'}), 'gemini-4-argon')
-        for model in ('gemini-4-hydrogen', 'gemini-4-carbon'):
+        for model in ('gemini-4-hydrogen', 'gemini-4-carbon', 'gemini-4-neon'):
             self.assertEqual(eligible('gemini', {'name': 'models/' + model}), model)
         self.assertGreater(model_rank('deepseek', 'deepseek-flash'), model_rank('deepseek', 'deepseek-v4-pro'))
         self.assertEqual(eligible('mimo', {'id':'mimo-v2.6-pro-ultraspeed'}), 'mimo-v2.6-pro-ultraspeed')

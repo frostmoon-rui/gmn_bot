@@ -22,6 +22,42 @@ IDENTITY = {'is_celestial': True, 'canonical_name': 'Mars', 'kind': 'planet'}
 
 
 class ResearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sun_moon_and_m78_have_verified_fallbacks_without_model_access(self):
+        service = CelestialResearch(SimpleNamespace(), AsyncMock(return_value={'pages': []}))
+        with patch('celestial_research.gemini_json', AsyncMock(side_effect=RuntimeError('offline'))), \
+             patch('research_transport.crawl_public_page', side_effect=OSError('offline')):
+            for name in ('sun', 'moon', 'messier78'):
+                report = await service.report(name, known=name)
+                self.assertNotEqual(report.celestial_data['headline'], 'Unknown')
+                self.assertIn('reference profile retained', report.celestial_data['basis'])
+
+    async def test_free_model_queue_reaches_third_candidate_and_reuses_success(self):
+        from celestial_research import gemini_json
+        generate = AsyncMock(side_effect=[RuntimeError(), RuntimeError(),
+            SimpleNamespace(text='{"facts":[]}', candidates=[]), SimpleNamespace(text='{"facts":[]}', candidates=[])])
+        bot = SimpleNamespace(AVAILABLE_CHAT_MODELS=['unavailable-1','unavailable-2','working'],
+            gemini_content_config=lambda **kwargs:kwargs,
+            client=SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate))))
+        await gemini_json(bot, 'fixture')
+        await gemini_json(bot, 'fixture')
+        self.assertEqual([call.kwargs['model'] for call in generate.await_args_list],
+                         ['unavailable-1','unavailable-2','working','working'])
+
+    async def test_fictional_sources_do_not_become_real_observations(self):
+        page = {'url':'https://www.ultramanconnection.com/pages/universe/',
+                'text':'The Land of Light is home to Ultras in the Ultraman story. ' * 4}
+        model = AsyncMock(side_effect=[{'is_celestial':None,'canonical_name':'Land of Light',
+            'kind':'fictional','setting':'fictional','work':'Ultraman'}, {'facts':[{
+            'field':'environment','value':'Home to Ultras in the Ultraman story',
+            'quote':'The Land of Light is home to Ultras in the Ultraman story.',
+            'url':page['url'],'category':'observation','epoch':''}]}])
+        service=CelestialResearch(SimpleNamespace(),AsyncMock(return_value={'pages':[page]}))
+        with patch('celestial_research.gemini_json',model), patch('research_transport.crawl_public_page',return_value=page['text']):
+            report=await service.report('Land of Light',known='land of light')
+        self.assertIn('FICTIONAL',report.celestial_labels['status'])
+        self.assertIn('Published reference',dict(report.celestial_data['facts'])['Environment [1]'])
+        self.assertNotIn('Observation ·',dict(report.celestial_data['facts'])['Environment [1]'])
+
     def test_solar_system_routes_and_reliable_domains(self):
         for name in SOLAR_NAMES:
             self.assertEqual(resolve_body(name), name)
