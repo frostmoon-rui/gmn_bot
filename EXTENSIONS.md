@@ -240,3 +240,5 @@ See `help local-weather`. The validated `weather_chart` model action follows the
 - Album backups deduplicate within each folder and preserve image bytes. Metadata dimension differences are logged separately from corrupt / unsupported images.
 - Videos are saved separately as MP4/MOV/WebM/AVI, up to 256 MiB, when the protocol supplies an accessible original URL. Missing URLs and unknown media are counted. Video covers do not substitute for originals. Dress submission remains image-only.
 - Manual and background backups share the media pipeline. Read-only metadata inspection: `python tools/inspect_album_media.py`; no media bytes are downloaded or displayed.
+
+Local-only live celestial acceptance: `python tools/preview_celestial_live.py --output backup/celestial-live`. This explicitly uses the ordinary Gemini key and public research transport, never imports the live bot, never opens NapCat and never sends QQ messages. Cards, per-object results and quote-validation traces stay in the local output directory. No restricted paid fallback key is used.

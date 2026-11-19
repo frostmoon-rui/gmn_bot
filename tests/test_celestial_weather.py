@@ -53,7 +53,9 @@ class CelestialTests(unittest.IsolatedAsyncioTestCase):
         for key in CATALOG:
             with self.subTest(key=key):
                 report = make_report(key)
-                self.assertTrue(report.celestial_data['source'].startswith('https://science.nasa.gov/'))
+                from celestial_research import trusted_url
+                first_source = report.celestial_data['source'].splitlines()[0]
+                self.assertTrue(trusted_url(first_source, CATALOG[key].get('fictional', False)))
                 self.assertNotIn('hourly', report.celestial_data)
                 image = Image.open(BytesIO(render_report(report)))
                 self.assertEqual(image.width, 1800)

@@ -36,6 +36,14 @@ CATALOG = {
         'source': 'https://science.nasa.gov/resource/searching-for-habitable-worlds/'}
 }
 CATALOG.update({
+    'land of light': {'name': 'Land of Light', 'kind': 'FICTIONAL SETTING', 'accent': '#b7e4d1', 'fictional': True,
+        'headline': 'Fictional setting', 'metric': 'Published character background; weather parameters unverified',
+        'facts': [('Work', 'An Ultraman fictional setting, distinct from the observed Messier 78 nebula.'),
+                  ('First-party background', 'Tsuburaya describes Ultraseven as visiting Earth from Nebula M78 Land of Light.'),
+                  ('Weather parameters', 'Temperature, wind and precipitation lore were not verified and remain unknown.')],
+        'brief': 'We can discuss the setting, meow; its weather must still come from published lore.',
+        'basis': 'First-party Tsuburaya character background, reviewed 2026-11-19. Not astronomical observations.',
+        'source': 'https://tsuburaya-prod.com/heroes/ultraseven'},
     'sun': {'name': 'Sun', 'kind': 'STAR', 'accent': '#ffcb80',
         'headline': 'About 5,500 °C', 'metric': 'Photosphere reference temperature; not a daily maximum',
         'facts': [('Atmosphere', 'The photosphere, chromosphere and corona are distinct solar atmospheric layers.'),
@@ -105,6 +113,8 @@ class CelestialReport(str):
 
 def make_report(key, language='en'):
     body, labels = CATALOG[key], LABELS
+    if body.get('fictional'):
+        labels = dict(labels, status='FICTIONAL SETTING · NOT ASTRONOMICAL OBSERVATIONS', source='First-party setting source')
     if language == 'zh':
         try:
             from localized_celestial import localize
@@ -142,7 +152,7 @@ def render_celestial(report, font):
     y += 26
     top = y
     y += 35
-    text(body['headline'], 68, body['accent'], True)
+    text(body['headline'], 64, body['accent'], True)
     text(body['metric'], 32)
     bottom = y + 35
     y = bottom + 35

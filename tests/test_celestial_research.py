@@ -77,6 +77,30 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(validate_facts({'facts': [dict(FACT, **change)]}, [PAGE]))
         result = validate_facts({'facts': [dict(FACT, epoch='2026-11-19')]}, [PAGE])
         self.assertEqual(result['temperature']['epoch'], '')
+        multiline = dict(FACT, quote='Its temperature is about 210 K\nat this reference level.')
+        self.assertIn('temperature', validate_facts({'facts': [multiline]}, [PAGE]))
+        grouped_quote = 'The photosphere has a reference temperature of 5,500 degrees Celsius.'
+        grouped = dict(FACT, value='Photosphere reference temperature 5500 degrees Celsius', quote=grouped_quote)
+        evidence = [dict(PAGE, text=grouped_quote)]
+        self.assertIn('temperature', validate_facts({'facts':[grouped]}, evidence))
+        invalid = dict(FACT, value='Temperature alpha999 K')
+        self.assertFalse(validate_facts({'facts':[invalid]}, [PAGE]))
+
+    def test_evidence_windows_keep_late_article_temperature_and_remain_bounded(self):
+        text = 'Mars navigation ' * 1800 + ' Actual Mars surface temperature is 210 K in this reference. '
+        selected = vetted_pages([{'url': URL, 'text': text}], 'Mars')
+        self.assertIn('surface temperature is 210 K', selected[0]['text'])
+        self.assertLessEqual(len(selected[0]['text']), 6000)
+
+    def test_photosphere_precedes_corona_and_page_update_is_not_observation_date(self):
+        photosphere = 'Photosphere surface temperature is 5,500 C.'
+        corona = 'The corona temperature is up to 2 million C.'
+        page = dict(PAGE, text=photosphere + ' ' + corona + ' Page updated Sep 17, 2026.')
+        rows = [dict(FACT, value='Photosphere 5500 C', quote=photosphere, epoch='Sep 17, 2026'),
+                dict(FACT, value='Corona 2 million C', quote=corona)]
+        result = validate_facts({'facts': rows}, [page])['temperature']
+        self.assertEqual(result['value'], 'Photosphere 5500 C')
+        self.assertEqual(result['epoch'], '')
 
     async def test_dynamic_profile_sources_unknowns_and_matching_concurrency(self):
         search = AsyncMock(return_value={'pages': [PAGE]})

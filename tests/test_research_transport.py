@@ -10,6 +10,14 @@ from research_transport import read_public_page
 
 
 class ResearchTransportTests(unittest.TestCase):
+    def test_article_budget_counts_text_not_html_indentation(self):
+        from research_transport import crawl_public_page
+        raw = '<nav>' + (' \n\t' * 20000) + '</nav><main>Reference temperature: 127 C.</main>'
+        with patch('research_transport.read_public_page', return_value=raw):
+            result = crawl_public_page('https://science.nasa.gov/moon/facts/')
+        self.assertIn('Reference temperature: 127 C.', result)
+        self.assertLess(len(result), 100)
+
     def read(self, callback, proxy='http://127.0.0.1:7897', limit=900000):
         requests = []
         class MemoryHTTPS(urllib.request.HTTPSHandler):
