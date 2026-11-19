@@ -26,6 +26,9 @@ def report_font(size, bold=False):
 
 def render_report(report):
     """Return one PNG, with all lines retained in two readable columns."""
+    if hasattr(report, 'celestial_data'):
+        from celestial_weather import render_celestial
+        return render_celestial(report, report_font)
     if hasattr(report, 'weather_data'):
         from weather_cards import render_card
         return render_card(report.weather_data, report.weather_labels, report.weather_translate, report_font, getattr(report, 'weather_target', 'today'))

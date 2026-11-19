@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw
 from weather_delivery import report_font
 
 MENU = {
-    'weather': ['weather', 'local-weather', 'weather-maps'],
+    'weather': ['weather', 'local-weather', 'weather-maps', 'celestial-weather'],
     'maps': ['maps', 'custom maps', 'advanced maps'],
     'search': ['search', 'video'],
     'interaction': ['interaction'],

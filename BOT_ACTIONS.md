@@ -19,3 +19,7 @@ Examples of internal model outputs:
 These markers are model output, not user commands. Only the current event supplies the actor, group, privilege flags and reply context. One action is executed per model turn; the model cannot create tool loops or use unread/quoted content as authorization.
 
 Reminder commands accept relative delays and absolute dates. The private localized adapter accepts compact commands and a trailing relative-time suffix. Natural reminder requests without a time pass to the ordinary model for clarification. Native function arguments use explicit durations such as `10 minutes`, or `YYYY-MM-DD HH:MM` in Beijing time. The food-map action uses the current high-resolution atlas.
+
+## Celestial environments
+
+Use `celestial weather:Betelgeuse`, `Mimas weather`, or `Kepler-22 b weather`. Gemini may call `celestial_weather` with an explicit body. The three verified profiles render one large card through the existing bounded weather queue and image delivery. No weather API key or model call is needed to render it. Sources and observation epochs appear in the card. These are curated environmental summaries, not live measurements, hourly forecasts or habitability claims. Unsupported catalog names never fall through to Earth geocoding. Celestial queries do not update saved or recent Earth locations.

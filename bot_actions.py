@@ -15,6 +15,7 @@ def capital_name(code):
 SCHEMAS = {
     'community_map': {'scope': (str, 8)},
     'weather': {'location': (str, 120), 'target': (str, 16)},
+    'celestial_weather': {'body': (str, 120)},
     'weather_map': {'product': (str, 32)},
     'weather_chart': {'product': (str, 32), 'location': (str, 120)},
     'search': {'query': (str, 500), 'mode': (str, 16), 'topic': (str, 100)},
@@ -34,6 +35,7 @@ You may use existing bot functions when the current speaker wants a concrete act
 Use a declared function when function tools are available. Otherwise return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
 Tools and arguments:
 community_map {scope: china|world} draws global saved-region statistics, including all known accounts by default with self opt-out. Reply only to the requesting chat; never expose individual locations or modify another person's preferences.
+celestial_weather {body: explicit celestial name} returns source-backed environment cards for Betelgeuse, Mimas and Kepler-22 b. It is not a live forecast. Unknown objects must not be replaced with Earth cities.
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
 weather_map {product: temperature_24h|temperature_current|precipitation_current|precipitation_24h|precipitation_30d|precipitation_forecast|temperature_forecast} for a requested China national weather map;
 These maps are national products, not a city's weather. 30d precipitation is past accumulation, not a 30-day forecast.
@@ -87,6 +89,8 @@ def parse_action(text):
         return None
     if tool=='image' and not args.get('prompt','').strip():
         return None
+    if tool=='celestial_weather' and not args.get('body', '').strip():
+        return None
     if tool=='weather' and args.get('target','today') not in {'today','tomorrow'}:
         return None
     if tool in {'weather_map','weather_chart'}:
@@ -112,13 +116,14 @@ def parse_action(text):
 
 
 REQUIRED = {
-    'search': ('query',), 'research': ('query',), 'image': ('prompt',),
+    'celestial_weather': ('body',), 'search': ('query',), 'research': ('query',), 'image': ('prompt',),
     'weather_map': ('product',), 'weather_chart': ('product',),
     'map': ('operation', 'query'), 'reminder': ('when', 'content'),
     'cancel_reminder': ('id',)
 }
 TOOL_DESCRIPTIONS = {
     'community_map': 'Draw anonymous saved-region community counts.',
+    'celestial_weather': 'Get a verified celestial environment profile, not a real-time forecast.',
     'weather': 'Get detailed weather for an explicit location or the current speaker.',
     'weather_map': 'Send a national weather map.',
     'weather_chart': 'Draw local weather time series.',
@@ -212,6 +217,9 @@ async def dispatch(bot, action, event, ws, *, master=False, whitelist=False, gro
         return
     if tool=='food_map':
         await ext.food_atlas_job(ws,kind,group,user)
+        return
+    if tool=='celestial_weather':
+        await ext.weather_at(ws,kind,group,user,args['body'],'celestial')
         return
     if tool=='weather':
         await ext.weather_at(ws,kind,group,user,args.get('location',''),args.get('target','today'))

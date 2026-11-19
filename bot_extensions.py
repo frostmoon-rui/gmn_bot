@@ -463,6 +463,12 @@ class Extensions:
             if not self.start_user_job(user, 'weather-map', job):
                 return 'A weather chart is already running, meow.'
             return 'Fetching local data and drawing a large chart, meow.' if local else 'Fetching the latest published national weather map, meow.'
+        from celestial_weather import celestial_request
+        celestial = celestial_request(text)
+        if celestial is not None:
+            if not self.start_forecast(ws, kind, group, user, celestial, 'celestial'):
+                return 'That celestial lookup is already running or the queue is full, meow.'
+            return ''
         from bot_actions import english_weather_request as weather_request
         weather = weather_request(text)
         if weather is not None:
@@ -884,6 +890,17 @@ class Extensions:
     async def weather_at(self, ws, kind, group, user, location='', target='today'):
         """One-off explicit place lookup never replaces the speaker's saved home area."""
         explicit = location.strip()
+        from celestial_weather import resolve_body, LABELS
+        UNSUPPORTED = LABELS['unsupported']
+        from celestial_weather import make_report
+        celestial = resolve_body(explicit)
+        if celestial or target == 'celestial':
+            if celestial not in {'betelgeuse', 'mimas', 'kepler22b'}:
+                await self.send(ws, kind, group, user, UNSUPPORTED)
+                return
+            language = getattr(getattr(self.b, 'features', None), 'language', 'en')
+            await self.send_weather(ws, kind, group, user, make_report(celestial, language))
+            return
         if explicit:
             if not hasattr(self, 'recent_weather_locations'):
                 self.recent_weather_locations = {}
