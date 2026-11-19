@@ -37,6 +37,11 @@ CATALOG = {
 }
 ALIASES = {'betelgeuse': 'betelgeuse', 'alpha orionis': 'betelgeuse',
            'mimas': 'mimas', 'saturn i': 'mimas', 'kepler22b': 'kepler22b'}
+SOLAR_NAMES = ('sun mercury venus earth mars jupiter saturn uranus neptune moon phobos deimos io europa '
+               'ganymede callisto enceladus tethys dione rhea titan hyperion iapetus miranda ariel '
+               'umbriel titania oberon triton nereid charon pluto ceres eris haumea makemake').split()
+ALIASES.update({name: name for name in SOLAR_NAMES})
+ALIASES.update({'luna': 'moon', 'sol': 'sun'})
 LABELS = {'title': 'CELESTIAL WEATHER', 'status': 'ENVIRONMENT PROFILE · NOT A LIVE FORECAST',
           'basis': 'Evidence & observation epoch', 'source': 'Source: NASA Science',
           'checked': 'Source review: 2026-11-19 · card generation does not refresh observations',
@@ -53,8 +58,8 @@ def resolve_body(value, aliases=None):
     if key in table:
         return table[key]
     # Catalog-like unknown objects must never be sent to terrestrial geocoding.
-    if re.fullmatch(r'(?:kepler|toi|k2)\d+[a-z]?', key):
-        return 'unsupported'
+    if re.fullmatch(r'(?:(?:kepler|toi|k2|hd|hip|gliese|gj|wasp|trappist)\d+(?:\.\d+)?[a-z]?|(?:jupiter|saturn|uranus|neptune)[ivxlcdm]+)', key):
+        return value.strip()
     return None
 
 
@@ -82,25 +87,25 @@ def make_report(key, language='en'):
 
 
 def render_celestial(report, font):
-    """Supersampled continuous corners and wrapped text at a fixed readable width."""
+    """Measure the full layout first so dynamic paragraphs and citations never clip."""
     body, labels = report.celestial_data, report.celestial_labels
-    scale, width = 2, 1800
-    image = Image.new('RGB', (width * scale, 2000 * scale), '#101827')
-    draw = ImageDraw.Draw(image)
-    y = 64
+    scale, width, y = 2, 1800, 64
+    probe = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    operations = []
 
     def text(value, size=34, color='#d4dff0', bold=False, left=100, limit=1590):
         nonlocal y
         face = font(size * scale, bold)
-        line = ''
-        for char in value:
-            if line and draw.textlength(line + char, font=face) > limit * scale:
-                draw.text((left * scale, y * scale), line, font=face, fill=color)
-                y += size * 1.55
-                line = ''
-            line += char
-        draw.text((left * scale, y * scale), line, font=face, fill=color)
-        y += size * 1.55
+        for paragraph in str(value).splitlines() or ['']:
+            line = ''
+            for char in paragraph:
+                if line and probe.textlength(line + char, font=face) > limit * scale:
+                    operations.append((left * scale, y * scale, line, face, color))
+                    y += size * 1.55
+                    line = ''
+                line += char
+            operations.append((left * scale, y * scale, line, face, color))
+            y += size * 1.55
 
     text(labels['title'], 30, body['accent'], True)
     text(body['name'], 82, '#ffffff', True)
@@ -108,12 +113,11 @@ def render_celestial(report, font):
     text(labels['status'], 28, '#9caec9')
     y += 26
     top = y
-    continuous_rectangle(draw, (64 * scale, top * scale, 1736 * scale, (top + 245) * scale),
-                         WEATHER_PANEL_RADIUS * scale, fill='#213049')
     y += 35
     text(body['headline'], 68, body['accent'], True)
     text(body['metric'], 32)
-    y = top + 280
+    bottom = y + 35
+    y = bottom + 35
     for title, content in body['facts']:
         text(title, 37, '#ffffff', True)
         text(content, 34)
@@ -126,8 +130,16 @@ def render_celestial(report, font):
     y += 16
     text(labels['source'], 26, '#9caec9', True)
     text(body['source'], 22, '#9caec9')
-    image = image.crop((0, 0, width * scale, int((y + 60) * scale)))
-    image = image.resize((width, int(y + 60)), Image.Resampling.LANCZOS)
+    height = int(y + 60)
+    if height > 10000:
+        raise ValueError('Celestial card exceeds safe canvas height')
+    image = Image.new('RGB', (width * scale, height * scale), '#101827')
+    draw = ImageDraw.Draw(image)
+    continuous_rectangle(draw, (64 * scale, top * scale, 1736 * scale, bottom * scale),
+                         WEATHER_PANEL_RADIUS * scale, fill='#213049')
+    for x, y, line, face, color in operations:
+        draw.text((x, y), line, font=face, fill=color)
+    image = image.resize((width, height), Image.Resampling.LANCZOS)
     out = BytesIO()
     image.save(out, 'PNG')
     return out.getvalue()

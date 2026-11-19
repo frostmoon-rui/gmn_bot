@@ -18,7 +18,7 @@ class CelestialTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resolve_body(name), key)
         self.assertIsNone(resolve_body('Mimas Street, Paris'))
         self.assertIsNone(resolve_body('Paris'))
-        self.assertEqual(resolve_body('Kepler-9999b'), 'unsupported')
+        self.assertEqual(resolve_body('Kepler-9999b'), 'Kepler-9999b')
         self.assertEqual(celestial_request('/celestial weather:Kepler-22 b'), 'Kepler-22 b')
 
     async def test_celestial_weather_bypasses_geocoding_and_location_history(self):
@@ -26,6 +26,7 @@ class CelestialTests(unittest.IsolatedAsyncioTestCase):
         ext.b = SimpleNamespace(regions_data={'10': {'location': 'Paris'}})
         ext.recent_weather_locations = {('private', 0, 10): (123, 'Paris')}
         ext.google_weather, ext.send_weather, ext.send = AsyncMock(), AsyncMock(), AsyncMock()
+        ext.celestial_research = SimpleNamespace(report=AsyncMock(return_value=make_report('mimas')))
         await ext.weather_at(None, 'private', 0, 10, 'Mimas')
         ext.google_weather.assert_not_awaited()
         ext.send_weather.assert_awaited_once()
@@ -35,7 +36,8 @@ class CelestialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ext.recent_weather_locations[('private', 0, 10)], (123, 'Paris'))
         await ext.weather_at(None, 'private', 0, 10, 'Kepler-9999b')
         ext.google_weather.assert_not_awaited()
-        ext.send.assert_awaited_once()
+        self.assertEqual(ext.send_weather.await_count, 2)
+        ext.send.assert_not_awaited()
 
     async def test_native_tool_uses_current_conversation_and_requires_body(self):
         self.assertIsNone(parse_action('[BOT_ACTION: {"tool":"celestial_weather","args":{}}]'))

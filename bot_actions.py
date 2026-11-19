@@ -35,7 +35,7 @@ You may use existing bot functions when the current speaker wants a concrete act
 Use a declared function when function tools are available. Otherwise return exactly one [BOT_ACTION: {"tool":"NAME","args":{...}}] instead of a fabricated result.
 Tools and arguments:
 community_map {scope: china|world} draws global saved-region statistics, including all known accounts by default with self opt-out. Reply only to the requesting chat; never expose individual locations or modify another person's preferences.
-celestial_weather {body: explicit celestial name} returns source-backed environment cards for Betelgeuse, Mimas and Kepler-22 b. It is not a live forecast. Unknown objects must not be replaced with Earth cities.
+celestial_weather {body: explicit celestial name} identifies astronomical objects and researches reliable sources to generate environment cards, including Solar System planets and moons. It is not a live forecast. Unknown objects must not be replaced with Earth cities.
 weather {location: explicit place or empty for speaker's saved area, target: today|tomorrow};
 weather_map {product: temperature_24h|temperature_current|precipitation_current|precipitation_24h|precipitation_30d|precipitation_forecast|temperature_forecast} for a requested China national weather map;
 These maps are national products, not a city's weather. 30d precipitation is past accumulation, not a 30-day forecast.
@@ -123,7 +123,7 @@ REQUIRED = {
 }
 TOOL_DESCRIPTIONS = {
     'community_map': 'Draw anonymous saved-region community counts.',
-    'celestial_weather': 'Get a verified celestial environment profile, not a real-time forecast.',
+    'celestial_weather': 'Identify any astronomical object and research source-backed environment data; missing fields remain unknown, not a live forecast.',
     'weather': 'Get detailed weather for an explicit location or the current speaker.',
     'weather_map': 'Send a national weather map.',
     'weather_chart': 'Draw local weather time series.',

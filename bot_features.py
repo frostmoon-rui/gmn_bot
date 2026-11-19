@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from bot_care import crisis_intent
 
 TZ = timezone(timedelta(hours=8))
-HELP = {'celestial-weather': 'Celestial weather: Betelgeuse weather | Mimas weather | Kepler-22 b weather. Or celestial weather:NAME. Source-backed environment cards with observation epochs, not live forecasts. Saved Earth locations remain unchanged.',
+HELP = {'celestial-weather': 'Celestial weather: Mars weather | Titan weather | celestial weather:Sirius. Solar System planets, moons and other objects are identified by Gemini and researched against reliable sources. Missing fields stay unknown. Cards show sources and observation epochs, not invented live forecasts. Saved locations remain unchanged.',
         'local-weather': 'Local high-resolution weather charts\n'
                     '/24h temperature Paris | /current temperature Paris | /current precipitation Paris\n'
                     '/24h precipitation Paris | /30d precipitation Paris\n'

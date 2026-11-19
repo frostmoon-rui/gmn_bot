@@ -416,7 +416,7 @@ class Extensions:
 
     def start_forecast(self, ws, kind, group, user, location='', target='today'):
         operation = ('weather', kind, group, location.strip(), target)
-        return self.start_user_job(user, operation, self.weather_at(ws, kind, group, user, location, target))
+        return self.start_user_job(user, operation, self.weather_at(ws, kind, group, user, location, target), timeout=180)
 
     async def send_weather(self, ws, kind, group, user, report):
         from weather_delivery import render_report
@@ -428,7 +428,13 @@ class Extensions:
                 'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
                            'message': segments}}, ensure_ascii=False))
         try:
-            image = await asyncio.to_thread(render_report, report)
+            if hasattr(report, 'celestial_data'):
+                if not hasattr(self, 'celestial_render_gate'):
+                    self.celestial_render_gate = asyncio.Semaphore(2)
+                async with self.celestial_render_gate:
+                    image = await asyncio.to_thread(render_report, report)
+            else:
+                image = await asyncio.to_thread(render_report, report)
         except Exception as error:
             print('[Weather image unavailable]:', type(error).__name__)
             await deliver({'type': 'text', 'data': {'text': self.admins.phrasing(image_notice, user)}}, True)
@@ -890,16 +896,22 @@ class Extensions:
     async def weather_at(self, ws, kind, group, user, location='', target='today'):
         """One-off explicit place lookup never replaces the speaker's saved home area."""
         explicit = location.strip()
-        from celestial_weather import resolve_body, LABELS
-        UNSUPPORTED = LABELS['unsupported']
-        from celestial_weather import make_report
+        from celestial_weather import resolve_body
+        from celestial_research import CelestialResearch
+        if not hasattr(self, 'celestial_research'):
+            self.celestial_research = CelestialResearch(self.b, self.python_search)
         celestial = resolve_body(explicit)
+        if explicit and not celestial and target != 'celestial':
+            try:
+                identity = await self.celestial_research.identify(explicit)
+                if identity.get('is_celestial') is True:
+                    celestial = identity['canonical_name']
+            except Exception:
+                pass
         if celestial or target == 'celestial':
-            if celestial not in {'betelgeuse', 'mimas', 'kepler22b'}:
-                await self.send(ws, kind, group, user, UNSUPPORTED)
-                return
             language = getattr(getattr(self.b, 'features', None), 'language', 'en')
-            await self.send_weather(ws, kind, group, user, make_report(celestial, language))
+            report = await self.celestial_research.report(explicit, language, known=celestial)
+            await self.send_weather(ws, kind, group, user, report)
             return
         if explicit:
             if not hasattr(self, 'recent_weather_locations'):
