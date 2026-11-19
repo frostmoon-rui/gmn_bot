@@ -112,26 +112,42 @@ class WeatherConnectionTests(unittest.TestCase):
             self.assertEqual(open_url.call_count, 2)
 
 
-    def test_open_meteo_proxy_failure_uses_direct_transport(self):
-        from unittest.mock import patch
+    def test_open_meteo_fake_ip_retries_explicit_proxy(self):
+        from unittest.mock import MagicMock, patch
         from urllib.error import URLError
         from weather_providers import request_json
 
-        def proxy_timeout(request, **kwargs):
-            request.set_proxy('127.0.0.1:7897', 'http')
-            raise URLError(TimeoutError())
-
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok": true}'
         with (patch('weather_providers.urllib.request.getproxies', return_value={'https': 'http://127.0.0.1:7897'}),
-              patch('weather_providers.urllib.request.urlopen', side_effect=proxy_timeout) as proxy,
+              patch('weather_providers.urllib.request.urlopen') as system,
+              patch('weather_providers.socket.getaddrinfo', return_value=[(2, 1, 6, '', ('198.18.0.9', 443))]),
               patch('weather_providers.urllib.request.build_opener') as build,
               patch('weather_providers.time.sleep')):
-            direct = build.return_value.open
-            direct.return_value.__enter__.return_value.read.return_value = b'{"ok": true}'
+            proxy = build.return_value.open
+            proxy.side_effect = [URLError(TimeoutError()), response]
             self.assertTrue(request_json('https://api.open-meteo.com/v1/forecast')['ok'])
-            self.assertEqual(build.call_args.args[0].proxies, {})
-            direct.assert_called_once()
-            proxied = proxy.call_args.args[0]
-            bypassed = direct.call_args.args[0]
-            self.assertIsNot(proxied, bypassed)
-            self.assertEqual(proxied.host, '127.0.0.1:7897')
-            self.assertEqual(bypassed.host, 'api.open-meteo.com')
+            system.assert_not_called()
+            self.assertEqual(build.call_count, 1)
+            self.assertEqual(proxy.call_count, 2)
+            first, second = [call.args[0] for call in proxy.call_args_list]
+            self.assertIsNot(first, second)
+            self.assertEqual(second.host, '127.0.0.1:7897')
+            self.assertEqual(second.get_header('Host'), 'api.open-meteo.com')
+            self.assertEqual(proxy.call_args.kwargs['timeout'], 18)
+
+    def test_open_meteo_public_dns_allows_direct_fallback(self):
+        from unittest.mock import MagicMock, patch
+        from urllib.error import URLError
+        from weather_providers import request_json
+
+        proxy, direct = MagicMock(), MagicMock()
+        proxy.open.side_effect = URLError(TimeoutError())
+        direct.open.return_value.__enter__.return_value.read.return_value = b'{"ok": true}'
+        with (patch('weather_providers.urllib.request.getproxies', return_value={'https': 'http://127.0.0.1:7897'}),
+              patch('weather_providers.socket.getaddrinfo', return_value=[(2, 1, 6, '', ('1.1.1.1', 443))]),
+              patch('weather_providers.urllib.request.build_opener', side_effect=[proxy, direct]),
+              patch('weather_providers.time.sleep')):
+            self.assertTrue(request_json('https://api.open-meteo.com/v1/forecast')['ok'])
+            self.assertEqual(direct.open.call_args.args[0].host, 'api.open-meteo.com')
+            self.assertIsNone(direct.open.call_args.args[0].get_header('Host'))

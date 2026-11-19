@@ -3,6 +3,8 @@ from reply_style import localize_provider_data
 import asyncio
 import copy
 import json
+import ipaddress
+import socket
 import math
 import time
 import urllib.parse
@@ -226,22 +228,35 @@ def request_json(url, payload=None, headers=None, timeout=8):
     request_headers = {'User-Agent': 'GmnWeatherBot/1.0',
                        **({'Content-Type': 'application/json'} if body is not None else {}),
                        **(headers or {})}
-    direct_fallback = (
-        payload is None and headers is None
-        and urllib.parse.urlsplit(url).netloc in {'api.open-meteo.com', 'geocoding-api.open-meteo.com'}
-        and urllib.parse.urlsplit(url).scheme == 'https'
-        and bool(urllib.request.getproxies().get('https'))
+    parsed = urllib.parse.urlsplit(url)
+    open_meteo_request = (
+        payload is None and headers is None and parsed.scheme == 'https'
+        and parsed.netloc in {'api.open-meteo.com', 'geocoding-api.open-meteo.com'}
     )
+    proxy = urllib.request.getproxies().get('https') if open_meteo_request else None
     open_request = urllib.request.urlopen
+    route = 'system'
+    if proxy:
+        parsed_proxy = urllib.parse.urlsplit(proxy)
+        if parsed_proxy.scheme == 'http' and parsed_proxy.hostname and not parsed_proxy.username and not parsed_proxy.password:
+            # Explicit CONNECT resolves the origin at the proxy, including Clash Fake-IP.
+            open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+            route = 'proxy'
+    if open_meteo_request:
+        timeout = max(timeout, 18 if parsed.netloc == 'api.open-meteo.com' else 10)
     try:
         for attempt in range(2):
             # ProxyHandler mutates the origin host and CONNECT tunnel on the Request.
             request = urllib.request.Request(url, data=body, headers=request_headers)
+            if route == 'proxy':
+                request.add_header('Host', parsed.netloc)
+                request.set_proxy(parsed_proxy.netloc, 'http')
+            started = time.monotonic()
             try:
                 with open_request(request, timeout=timeout) as response:
                     raw = response.read(1024*1024+1)
-                if open_request is not urllib.request.urlopen:
-                    print('[Open-Meteo connection]: Direct fallback reached the service.')
+                if open_meteo_request:
+                    print('[Open-Meteo connection]:', route, 'attempt', attempt+1, 'OK in', round(time.monotonic()-started, 2), 'seconds')
                 break
             except urllib.error.HTTPError as error:
                 if attempt or payload is not None or error.code not in {502, 503, 504}:
@@ -250,9 +265,20 @@ def request_json(url, payload=None, headers=None, timeout=8):
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
                 if attempt or payload is not None:
                     raise
-                if direct_fallback:
-                    print('[Open-Meteo proxy unavailable]:', error_code(error), '; retrying directly.')
-                    open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+                if open_meteo_request:
+                    print('[Open-Meteo connection failed]:', route, 'attempt', attempt+1,
+                          error_code(error), 'after', round(time.monotonic()-started, 2), 'seconds')
+                if route == 'proxy':
+                    try:
+                        resolved = {ipaddress.ip_address(item[4][0]) for item in
+                                    socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)}
+                    except OSError:
+                        resolved = set()
+                    if resolved and all(address.is_global for address in resolved):
+                        open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+                        route = 'direct'
+                    else:
+                        print('[Open-Meteo connection]: Local DNS cannot be used directly; retrying the proxy.')
             time.sleep(0.35)
     except urllib.error.HTTPError as error:
         try:
