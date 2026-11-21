@@ -1,7 +1,7 @@
 """Regression coverage for complete passive replies and bubble boundaries."""
 from types import SimpleNamespace
 import unittest
-from chat_style import prepare_passive_reply, generation_hit_limit
+from chat_style import compact_interjection, prepare_passive_reply, generation_hit_limit
 
 
 class ChatStyleTests(unittest.TestCase):
@@ -22,6 +22,11 @@ class ChatStyleTests(unittest.TestCase):
     def test_model_tags_and_reasoning_are_removed_without_running_updates(self):
         text='<think>Private reasoning.</think>Hi![REGION_UPDATE: 123456789 | Wrong city][SPLIT]A complete second bubble.'
         self.assertEqual(prepare_passive_reply(text),'Hi![SPLIT]A complete second bubble.')
+
+    def test_truncated_tag_is_removed_before_passive_length_check(self):
+        self.assertEqual(compact_interjection('Meow![FEELING_UPDATE:', 8, ''), 'Meow!')
+        self.assertEqual(prepare_passive_reply('[FEELING_UPDATE： hidden'), '')
+        self.assertEqual(prepare_passive_reply('Hi[FEELING_UPDATE:[SPLIT]Bye'), 'Hi[SPLIT]Bye')
 
     def test_extreme_output_has_an_explicit_ellipsis(self):
         result=prepare_passive_reply('x'*500,60)

@@ -1,11 +1,13 @@
 """Keep passive chat brief without silently chopping off ordinary sentences."""
 import re
 
+from response_visibility import strip_internal_tags
+
 
 def prepare_passive_reply(text, limit=120):
     text=re.sub(r'<(?:think|analysis)>.*?</(?:think|analysis)>','',str(text),flags=re.I|re.S)
     text=re.sub(r'<(?:think|analysis)>.*$','',text,flags=re.I|re.S)
-    text=re.sub(r'\[[A-Z_]+:[^\]]*\]','',text)
+    text = strip_internal_tags(text)
     text='[SPLIT]'.join(part.strip() for part in text.split('[SPLIT]') if part.strip())
     if len(text)<=limit:
         return text

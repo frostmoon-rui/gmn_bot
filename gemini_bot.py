@@ -468,6 +468,8 @@ def model_system_prompt(is_random=False):
 
 
 def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
+    from response_visibility import strip_internal_tags
+
     text = admins.phrasing(raw_text, user_id)
     text = re.sub(r"^Group chat\[\d+\]\s*", "", text)
     text = re.sub(r"^\[(?:this cat|Lucky Cat).*?\]\s*", "", text)
@@ -503,7 +505,7 @@ def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
         sync_save_notebook(new_note=f"[{datetime.now().strftime('%m-%d %H:%M')}] (note completed) {done_m.group(1).strip()}")
 
     # 5. Update feelings
-    for feel_m in re.finditer(r"\[FEELING_UPDATE:\s*([^\]]+?)(?:\]|$)", tag_text):
+    for feel_m in re.finditer(r"\[FEELING_UPDATE[:：]\s*([^\[\]]+)\]", tag_text):
         parts = [p.strip() for p in feel_m.group(1).split("|")]
         if len(parts) >= 2:
             feelings_data[parts[0]] = parts[1]
@@ -518,7 +520,7 @@ def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
         print(f"\n[Notebook record]: {nickname} -> {rec_m.group(1).strip()}")
 
     # Strip all background instructions such as [REGION_UPDATE] before displaying the reply.
-    text = re.sub(r"\[[A-Z_]+:[^\]]*\]", "", text).strip()
+    text = strip_internal_tags(text)
 
     if had_record and not text.endswith(" (added to notebook)"):
         text += " (added to notebook)"

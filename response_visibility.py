@@ -2,6 +2,11 @@
 import re
 
 
+def strip_internal_tags(text):
+    """Remove model control tags before displaying a reply."""
+    return re.sub(r"\[[A-Z_]+[:：][^\[\]]*(?:\]|(?=\[|$))", "", text).strip()
+
+
 def visible_response_text(response):
     candidates = getattr(response, 'candidates', None) or []
     parts = getattr(getattr(candidates[0], 'content', None), 'parts', None) if candidates else None

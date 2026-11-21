@@ -242,6 +242,20 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(answer, '')
         self.assertEqual(self.scope['regions_data'], {})
 
+    def test_only_complete_feeling_updates_are_applied_and_hidden(self):
+        save = Mock()
+        self.scope.update(
+            admins=SimpleNamespace(phrasing=lambda text, user: text),
+            feelings_data={}, FEELINGS_FILE='unused', save_json_data=save,
+        )
+        clean = self.scope['clean_and_process_tags']
+        self.assertEqual(clean('Hi [FEELING_UPDATE: Test | hidden', 10, 'Test'), 'Hi')
+        self.assertEqual(self.scope['feelings_data'], {})
+        save.assert_not_called()
+        self.assertEqual(clean('Hi [FEELING_UPDATE: Test | friendly]', 10, 'Test'), 'Hi')
+        self.assertEqual(self.scope['feelings_data'], {'Test': 'friendly'})
+        save.assert_called_once()
+
     async def test_search_is_triggered_by_model_plan_not_question_keywords(self):
         plan = {'query': 'Current safety standards for a material', 'mode': 'latest', 'topic': ''}
         self.scope['call_gemini_with_history'] = AsyncMock(return_value='[SEARCH_REQUEST: ' + json.dumps(plan) + ']')
