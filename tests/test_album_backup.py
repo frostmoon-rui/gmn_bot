@@ -1,3 +1,4 @@
+import base64
 
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from album_backup import album_folder, backup, daily_album_backup, short_hash
+from dress_album import photo_pr_body
 
 
 class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
@@ -59,3 +61,24 @@ class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads((root / 'daily-backup.json').read_text())['status'], 'interrupted')
             self.assertEqual(json.loads((root / 'daily-dress-upload.json').read_text())['status'], 'finished')
             upload.assert_called_once_with(root.resolve(), 'selected', 'owner')
+
+class DressTemplateTests(unittest.TestCase):
+    def test_fills_verified_photo_template_checks_and_preserves_other_items(self):
+        template = (
+            "<!-- pr-type: images -->\n"
+            "### Checklist\n"
+            "- [ ] Size / Images are under 1 MiB\n"
+            "- [ ] Metadata/ High-sensitivity EXIF removed\n"
+            "- [ ] Path / Folder under matching A-Z\n"
+            "- [ ] Ownership / Images are original and not stolen from others\n"
+            "- [ ] Extra upstream instruction\n"
+        )
+        def api(path):
+            self.assertEqual(path, "/repos/Cute-Dress/Dress/contents/.github/PULL_REQUEST_TEMPLATE/images.md?ref=main")
+            return {"type": "file", "encoding": "base64", "content": base64.b64encode(template.encode())}
+
+        body = photo_pr_body(api, "/repos/Cute-Dress/Dress", "main")
+        self.assertEqual(body.count("- [x]"), 3)
+        self.assertIn("- [ ] Ownership", body)
+        self.assertIn("- [ ] Extra upstream instruction", body)
+        self.assertTrue(body.startswith("<!-- pr-type: images -->"))

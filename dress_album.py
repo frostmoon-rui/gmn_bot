@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 
 UPSTREAM = "Cute-Dress/Dress"
 BATCH_SIZE = 10
+PHOTO_TEMPLATE = ".github/PULL_REQUEST_TEMPLATE/images.md"
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -54,6 +55,22 @@ def prepare_photo(path):
         if output.tell() < 1_000_000:
             return output.getvalue()
     raise ValueError("Could not fit photo under 1 MB")
+
+
+
+def photo_pr_body(api, prefix, base, *, original_confirmed=False):
+    entry = api(f"{prefix}/contents/{PHOTO_TEMPLATE}?" + urlencode({"ref": base}))
+    if entry.get("type") != "file" or entry.get("encoding") != "base64":
+        raise RuntimeError("Unexpected Dress photo PR template format")
+    template = base64.b64decode(entry["content"]).decode("utf-8-sig")
+    if "<!-- pr-type: images -->" not in template.splitlines():
+        raise RuntimeError("Dress PR template is missing the photo submission marker")
+    checks = ("Images are under 1 MiB", "High-sensitivity EXIF removed", "Folder under matching")
+    if original_confirmed:
+        checks += ("Images are original and not stolen from others",)
+    for check in checks:
+        template = re.sub(r"(?m)^- \[ \](?= [^\r\n]*/ " + re.escape(check) + ")", "- [x]", template)
+    return template
 
 
 def submit_album(root, album_tag, owner):
@@ -126,6 +143,7 @@ def submit_album(root, album_tag, owner):
     query = urlencode({"state": "all", "head": owner + ":" + branch, "base": base})
     if api(f"{prefix}/pulls?{query}"):
         return "this batch has already been submitted"
+    body = photo_pr_body(api, prefix, base)
     ref = f"/repos/{fork}/git/ref/heads/{branch}"
     if not api(ref, missing=True):
         upstream_sha = api(f"{prefix}/git/ref/heads/{quote(base, safe='')}")["object"]["sha"]
@@ -147,9 +165,6 @@ def submit_album(root, album_tag, owner):
     album_name = albums[0].name.removesuffix("--" + album_tag)
     pr = api(f"{prefix}/pulls", {
         "title": f"Add photos from {album_name}", "head": owner + ":" + branch, "base": base,
-        "body": "<!-- pr-type: images -->\n\nPhoto submission from the contributor's selected album.\n\n"
-                "- [x] Images are under 1 MiB.\n- [x] High-sensitivity EXIF is removed.\n"
-                "- [x] Files are in the matching contributor folder.\n"
-                "- [x] Photos are original and submitted with permission.\n",
+        "body": body,
     })
     return f"submitted {len(paths)} photos in PR #{pr['number']}"
