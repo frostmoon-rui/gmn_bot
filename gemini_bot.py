@@ -2571,6 +2571,7 @@ async def main():
                                        setting('ALBUM_BACKUP_DIRECTORY', ''),
                                        setting('DRESS_UPLOAD_ALBUM_TAG', ''),
                                        setting('DRESS_UPLOAD_GITHUB_OWNER', ''),
+                                       originals_album_tag=setting('DRESS_UPLOAD_ORIGINALS_ALBUM_TAG', ''),
                                        enabled=lambda: active_ws is not None and active_ws.group_enabled))
     await asyncio.gather(*(asyncio.to_thread(function) for function in (
         init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))

@@ -58,24 +58,35 @@ def prepare_photo(path):
 
 
 
-def photo_pr_body(api, prefix, base, *, original_confirmed=False):
+def photo_pr_body(api, prefix, base):
     entry = api(f"{prefix}/contents/{PHOTO_TEMPLATE}?" + urlencode({"ref": base}))
     if entry.get("type") != "file" or entry.get("encoding") != "base64":
         raise RuntimeError("Unexpected Dress photo PR template format")
     template = base64.b64decode(entry["content"]).decode("utf-8-sig")
     if "<!-- pr-type: images -->" not in template.splitlines():
         raise RuntimeError("Dress PR template is missing the photo submission marker")
-    checks = ("Images are under 1 MiB", "High-sensitivity EXIF removed", "Folder under matching")
-    if original_confirmed:
-        checks += ("Images are original and not stolen from others",)
+    checks = (
+        "Images are under 1 MiB",
+        "High-sensitivity EXIF removed",
+        "Folder under matching",
+        "Images are original and not stolen from others",
+    )
     for check in checks:
-        template = re.sub(r"(?m)^- \[ \](?= [^\r\n]*/ " + re.escape(check) + ")", "- [x]", template)
+        template, matches = re.subn(
+            r"(?m)^- \[ \](?= [^\r\n]*/ " + re.escape(check) + ")", "- [x]", template
+        )
+        if matches != 1:
+            raise RuntimeError("Dress photo checklist changed; review the upstream template")
+    if re.search(r"(?m)^[^\S\r\n]*[-*][^\S\r\n]+\[ \]", template):
+        raise RuntimeError("Dress photo checklist contains an unverified item")
     return template
 
 
-def submit_album(root, album_tag, owner):
+def submit_album(root, album_tag, owner, *, originals_album_tag=""):
     if not re.fullmatch(r"[0-9a-f]{16}", album_tag) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,38}", owner):
         raise ValueError("Invalid Dress album or GitHub owner")
+    if originals_album_tag != album_tag:
+        raise RuntimeError("Dress upload requires originality confirmation for the selected album")
     albums = [folder for folder in root.glob(f"*--{album_tag}")
               if folder.is_dir() and not folder.is_symlink() and folder.resolve().parent == root]
     if len(albums) != 1:

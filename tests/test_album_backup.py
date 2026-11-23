@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from album_backup import album_folder, backup, daily_album_backup, short_hash
-from dress_album import photo_pr_body
+from dress_album import photo_pr_body, submit_album
 
 
 class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
@@ -56,14 +56,21 @@ class AlbumBackupTests(unittest.IsolatedAsyncioTestCase):
                   patch('dress_album.submit_album', return_value='an album submission is awaiting review') as upload,
                   patch('album_backup.asyncio.sleep', side_effect=InterruptedError)):
                 with self.assertRaises(InterruptedError):
-                    await daily_album_backup(lambda: ws, '123', temp, 'selected', 'owner')
+                    await daily_album_backup(lambda: ws, '123', temp, 'selected', 'owner',
+                                             originals_album_tag='selected')
             root = Path(temp) / '123'
             self.assertEqual(json.loads((root / 'daily-backup.json').read_text())['status'], 'interrupted')
             self.assertEqual(json.loads((root / 'daily-dress-upload.json').read_text())['status'], 'finished')
-            upload.assert_called_once_with(root.resolve(), 'selected', 'owner')
+            upload.assert_called_once_with(root.resolve(), 'selected', 'owner', originals_album_tag='selected')
 
 class DressTemplateTests(unittest.TestCase):
-    def test_fills_verified_photo_template_checks_and_preserves_other_items(self):
+    def test_unconfirmed_album_cannot_start_an_upload(self):
+        with patch("dress_album.github_token") as token:
+            with self.assertRaisesRegex(RuntimeError, "originality confirmation"):
+                submit_album(Path("."), "a" * 16, "owner", originals_album_tag="b" * 16)
+        token.assert_not_called()
+
+    def test_fills_approved_template_and_rejects_unknown_checks(self):
         template = (
             "<!-- pr-type: images -->\n"
             "### Checklist\n"
@@ -71,14 +78,15 @@ class DressTemplateTests(unittest.TestCase):
             "- [ ] Metadata/ High-sensitivity EXIF removed\n"
             "- [ ] Path / Folder under matching A-Z\n"
             "- [ ] Ownership / Images are original and not stolen from others\n"
-            "- [ ] Extra upstream instruction\n"
         )
         def api(path):
             self.assertEqual(path, "/repos/Cute-Dress/Dress/contents/.github/PULL_REQUEST_TEMPLATE/images.md?ref=main")
             return {"type": "file", "encoding": "base64", "content": base64.b64encode(template.encode())}
 
         body = photo_pr_body(api, "/repos/Cute-Dress/Dress", "main")
-        self.assertEqual(body.count("- [x]"), 3)
-        self.assertIn("- [ ] Ownership", body)
-        self.assertIn("- [ ] Extra upstream instruction", body)
+        self.assertEqual(body.count("- [x]"), 4)
+        self.assertIn("- [x] Ownership", body)
         self.assertTrue(body.startswith("<!-- pr-type: images -->"))
+        template += "  * [ ] Extra upstream instruction\n"
+        with self.assertRaisesRegex(RuntimeError, "unverified item"):
+            photo_pr_body(api, "/repos/Cute-Dress/Dress", "main")

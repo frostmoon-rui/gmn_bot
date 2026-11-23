@@ -315,7 +315,7 @@ async def backup(ws, group, root):
     return summary
 
 
-async def daily_album_backup(get_ws, group, directory, dress_album="", dress_owner="", *, enabled=lambda: True):
+async def daily_album_backup(get_ws, group, directory, dress_album="", dress_owner="", *, originals_album_tag="", enabled=lambda: True):
     if not group:
         return
     if not str(group).isdecimal() or not directory:
@@ -327,6 +327,9 @@ async def daily_album_backup(get_ws, group, directory, dress_album="", dress_own
         return
     backup_state = root / "daily-backup.json"
     dress_state = root / "daily-dress-upload.json"
+    dress_enabled = bool(dress_album and dress_owner and dress_album == originals_album_tag)
+    if dress_album and dress_owner and not dress_enabled:
+        print("[Dress upload]: Originality confirmation required for the selected album.")
     next_backup = next_upload = 0
     while True:
         if not enabled():
@@ -340,9 +343,10 @@ async def daily_album_backup(get_ws, group, directory, dress_album="", dress_own
         if scan_due:
             next_backup = now + 1800
             jobs.append(run_backup(ws, str(group), root, backup_state, today))
-        if dress_album and dress_owner and now >= next_upload and not finished_today(dress_state, today):
+        if dress_enabled and now >= next_upload and not finished_today(dress_state, today):
             next_upload = now + 1800
-            jobs.append(run_dress_upload(root, dress_album, dress_owner, dress_state, today, scan_due))
+            jobs.append(run_dress_upload(root, dress_album, dress_owner, dress_state, today, scan_due,
+                                         originals_album_tag=originals_album_tag))
         await asyncio.gather(*jobs)
         await asyncio.sleep(60)
 
@@ -372,12 +376,12 @@ async def run_backup(ws, group, root, state, today):
             print("[Album backup state unavailable]:", type(state_error).__name__)
 
 
-async def run_dress_upload(root, album, owner, state, today, scan_due):
+async def run_dress_upload(root, album, owner, state, today, scan_due, *, originals_album_tag):
     from dress_album import submit_album
 
     print("[Dress upload]: Checking the selected album.")
     try:
-        result = await asyncio.to_thread(submit_album, root, album, owner)
+        result = await asyncio.to_thread(submit_album, root, album, owner, originals_album_tag=originals_album_tag)
         print("[Dress upload]:", result)
         if result not in {"album unavailable", "no photos"} and not (scan_due and result == "no new photos"):
             await asyncio.to_thread(write_state, state, {"date": today, "status": "finished"})
