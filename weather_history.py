@@ -6,7 +6,7 @@ import re
 import urllib.parse
 import urllib.request
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from bot_runtime import JsonStore
 
 
@@ -22,7 +22,42 @@ class WeatherHistory:
     def __init__(self, root):
         self.store = JsonStore(root)
         self.records = self.store.load('weather_history.json', {})
+        self.forecasts = self.store.load('weather_forecast_cache.json', {})
         self.lock = threading.RLock()
+
+    def model_forecast(self, point, fresh=None, *, now=None):
+        from weather_standard import cache_is_current, sample_time, weather_zone
+
+        instant = now or datetime.now(timezone.utc)
+        key = f"{float(point['latitude']):.5f},{float(point['longitude']):.5f}"
+        with self.lock:
+            if fresh is not None:
+                fields = ('source', 'local_date', 'timezone', 'utc_offset_seconds', 'hours')
+                snapshot = {field: copy.deepcopy(fresh[field]) for field in fields if field in fresh}
+                snapshot['forecast_report_time'] = fresh.get('report_time')
+                snapshot['data_kind'] = 'Cached numerical forecast, not station observations'
+                self.forecasts.pop(key, None)
+                self.forecasts[key] = {'saved': instant.timestamp(), 'data': snapshot}
+                while len(self.forecasts) > 32:
+                    self.forecasts.pop(next(iter(self.forecasts)))
+                try:
+                    self.store.save('weather_forecast_cache.json', self.forecasts)
+                except (OSError, RuntimeError, ValueError):
+                    print('[Weather forecast cache]: Keeping this forecast in memory')
+                return None
+
+            entry = self.forecasts.get(key, {})
+            data = entry.get('data', {})
+            saved = number(entry.get('saved'))
+            if (saved is None or not 0 <= instant.timestamp() - saved <= 7200
+                    or not weather_zone(data) or not cache_is_current(data, instant)):
+                return None
+            snapshot = copy.deepcopy(data)
+            snapshot['hours'] = [
+                row for row in data['hours']
+                if (stamp := sample_time(row.get('time'), data)) and stamp >= instant
+            ]
+            return snapshot if snapshot['hours'] else None
 
     def enrich(self, location, data):
         with self.lock:

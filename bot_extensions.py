@@ -27,7 +27,9 @@ from earthquake_feed import EarthquakeFeed, matches_province
 from community_maps import CommunityMaps
 from website_snapshots import capture as capture_website, page_url as website_page_url, SnapshotError, PAGES as WEBSITE_PAGES
 from weather_history import WeatherHistory, weather_instructions, tidy_weather_reply
-from weather_providers import WeatherAggregator, open_meteo, request_json as request_weather_json, day_string
+from weather_providers import (WeatherAggregator, day_string, open_meteo,
+                               request_json as request_weather_json, weather_cache_ttl)
+from weather_audit import error_code
 
 SHANGHAI = timezone(timedelta(hours=8))
 PROVINCE_CAPITALS = {
@@ -291,7 +293,7 @@ class Extensions:
         """Retain the legacy method name while collecting configured sources in parallel and merging fields."""
         cached = self.weather_cache.get(location)
         from weather_standard import cache_is_current
-        if cached and asyncio.get_running_loop().time()-cached[0] < 600 and cached[1].get('_cache_day') == datetime.now(SHANGHAI).date().isoformat() and cache_is_current(cached[1]):
+        if cached and asyncio.get_running_loop().time()-cached[0] < weather_cache_ttl(cached[1]) and cached[1].get('_cache_day') == datetime.now(SHANGHAI).date().isoformat() and cache_is_current(cached[1]):
             return cached[1]
         country = self.locations.get(location, {}).get('country_code')
         domestic = country == 'CN' or (not country and domestic_hint(location))
@@ -342,7 +344,18 @@ class Extensions:
             return None
         async def model():
             normalized = await point()
-            return await asyncio.to_thread(open_meteo, normalized, self.b.WMO_WEATHER_MAP)
+            try:
+                data = await asyncio.to_thread(open_meteo, normalized, self.b.WMO_WEATHER_MAP)
+            except (OSError, ValueError, KeyError) as primary_error:
+                cached = await asyncio.to_thread(self.weather_history.model_forecast, normalized)
+                if not cached:
+                    raise
+                cached['endpoint_status'] = {'cached forecast': error_code(primary_error)}
+                print('[Open-Meteo]: Using cached hourly forecast;', error_code(primary_error))
+                return cached
+            if data and data.get('hours'):
+                await asyncio.to_thread(self.weather_history.model_forecast, normalized, data)
+            return data
         def bridge(label, endpoint, token):
             async def run():
                 normalized = await point()

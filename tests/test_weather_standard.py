@@ -186,7 +186,7 @@ class WeatherPipelineTests(unittest.IsolatedAsyncioTestCase):
         ext.amap = SimpleNamespace(client=SimpleNamespace(weather=Mock(return_value=fixture())))
         ext.weather_aggregator = WeatherAggregator(timeout=2)
         ext.annotate_weather = lambda data, point: data
-        ext.weather_history = SimpleNamespace(enrich=lambda location, data: data)
+        ext.weather_history = SimpleNamespace(enrich=lambda location, data: data, model_forecast=Mock())
         point = {'status': 'resolved', 'country_code': 'CN', 'latitude': 44.43105,
                  'longitude': 84.67623, 'coordinate_system': 'WGS84'}
         model = dict(fixture(), source='Open-Meteo model', wind_kmph=14,
@@ -201,6 +201,33 @@ class WeatherPipelineTests(unittest.IsolatedAsyncioTestCase):
         fallback.assert_called_once()
         network.assert_not_called()
         ext.normalize_location.assert_awaited_once()
+
+
+class ModelForecastCacheTests(unittest.TestCase):
+    def test_snapshot_survives_restart_with_only_future_forecast_and_expires(self):
+        from datetime import datetime, timedelta, timezone
+        from tempfile import TemporaryDirectory
+        from weather_history import WeatherHistory
+
+        now = datetime(2026, 11, 24, 10, 0, tzinfo=timezone.utc)
+        point = {'latitude': 31.2, 'longitude': 121.5}
+        model = {
+            'source': 'Open-Meteo model', 'local_date': '2026-11-24', 'utc_offset_seconds': 28800,
+            'report_time': '2026-11-24T18:00+08:00', 'temp': 2, 'alerts': [],
+            'hours': [{'time': '2026-11-24T18:00+08:00', 'temp': 2},
+                      {'time': '2026-11-24T22:00+08:00', 'temp': 3}],
+        }
+        with TemporaryDirectory() as directory:
+            WeatherHistory(directory).model_forecast(point, model, now=now)
+            restarted = WeatherHistory(directory)
+            result = restarted.model_forecast(point, now=now + timedelta(minutes=61))
+            self.assertEqual(len(result['hours']), 1)
+            self.assertEqual(result['hours'][0]['temp'], 3)
+            self.assertNotIn('temp', result)
+            self.assertNotIn('alerts', result)
+            self.assertNotIn('report_time', result)
+            self.assertIsNone(restarted.model_forecast(point, now=now + timedelta(hours=3)))
+            self.assertIsNone(restarted.model_forecast(dict(point, latitude=32), now=now))
 
 
 class WeatherCardContractTests(unittest.TestCase):

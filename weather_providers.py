@@ -156,6 +156,13 @@ def merge_weather(results):
     return output
 
 
+def weather_cache_ttl(data):
+    statuses = data.get('provider_status', {})
+    incomplete = not data.get('hours') and (data.get('provider_errors') or 'Open-Meteo' in statuses)
+    using_snapshot = 'cached forecast' in statuses.get('Open-Meteo', '')
+    return 60 if incomplete or using_snapshot else 600
+
+
 class WeatherAggregator:
     def __init__(self, timeout=65):
         self.timeout = timeout
@@ -167,8 +174,11 @@ class WeatherAggregator:
         # Deduplicate concurrent area requests, but collect all configured providers.
         saved = self.cache.get(key)
         from weather_standard import cache_is_current
-        if saved and time.monotonic()-saved[0] < 600 and saved[2] == datetime.now(TZ).date().isoformat() and cache_is_current(saved[1]):
-            return copy.deepcopy(saved[1])
+        if saved:
+            cached = saved[1]
+            if (time.monotonic() - saved[0] < weather_cache_ttl(cached) and saved[2] == datetime.now(TZ).date().isoformat()
+                    and cache_is_current(cached)):
+                return copy.deepcopy(cached)
         if key not in self.pending:
             task = asyncio.create_task(self._collect(key, providers))
             self.pending[key] = task
@@ -200,7 +210,10 @@ class WeatherAggregator:
                     print('[Weather sources]:', name, 'retrieved; awaiting field validation')
                 return name, result
             except Exception as error:
-                self.cooldowns[key, name] = time.monotonic()+300
+                transient_model_error = (name == 'Open-Meteo' and isinstance(error, OSError)
+                                         and getattr(error, 'code', None) in {None, 502, 503, 504})
+                cooldown = 60 if transient_model_error else 300
+                self.cooldowns[key, name] = time.monotonic() + cooldown
                 statuses[name] = error_code(error)
                 if getattr(error, 'endpoint_status', None):
                     statuses[name] = ', '.join(endpoint + '=' + status for endpoint, status in error.endpoint_status.items() if status != 'ok')

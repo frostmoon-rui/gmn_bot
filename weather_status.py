@@ -3,6 +3,7 @@ import re
 
 LABELS = {
     'source_summary': 'Sources', 'service_notice': 'Notes', 'other_services': 'other notices',
+    'cached_forecast': 'using recent cached forecast',
     'no_hourly': 'Hourly data unavailable', 'no_daily': 'Daily data unavailable',
     'not_covered': 'not covered', 'alerts_not_covered': 'alerts unavailable', 'rate_limited': 'rate limited',
     'timed_out': 'timed out', 'access_failed': 'access/configuration', 'connection_failed': 'connection failed',
@@ -35,6 +36,8 @@ def provider_name(name, labels):
 
 def status_key(status):
     text = str(status).casefold()
+    if 'cached forecast' in text:
+        return 'cached_forecast'
     if '404' in text:
         return 'alerts_not_covered' if 'alerts=' in text and not any(f'{k}=' in text for k in ('current', 'days', 'hours')) else 'not_covered'
     if '429' in text:
@@ -62,7 +65,9 @@ def footer_lines(data, labels):
         names = [provider_name(data['source'], labels)]
     sources = labels['source_summary'] + ': ' + (' / '.join(names[:5]) or labels['unknown'])
     notices = []
-    for name, status in data.get('provider_status', {}).items():
+    statuses = data.get('provider_status', {})
+    for name in sorted(statuses, key=lambda name: name != 'Open-Meteo'):
+        status = statuses[name]
         if status in {'ok', 'available', 'acquired', 'obtained', 'data obtained', 'data retrieved', '\u5df2\u53d6\u5f97\u8d44\u6599'}:
             continue
         notice = provider_name(name, labels) + ': ' + labels[status_key(status)]

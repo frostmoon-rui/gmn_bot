@@ -83,6 +83,28 @@ class AggregatorTests(unittest.IsolatedAsyncioTestCase):
         await aggregator.collect('region', providers)
         self.assertEqual(len(calls), 3)
 
+    async def test_incomplete_cache_expires_before_normal_cache(self):
+        import time
+        calls = []
+
+        async def current():
+            calls.append('current')
+            return {'local_date': '2026-10-18', 'temp': 15}
+
+        async def model():
+            calls.append('model')
+            if calls.count('model') == 1:
+                raise TimeoutError()
+            return {'local_date': '2026-10-18', 'hours': [{'time': '2026-10-18T20:00', 'temp': 16}]}
+
+        aggregator = WeatherAggregator(timeout=.2)
+        providers = [('Amap', current), ('Open-Meteo', model)]
+        self.assertFalse((await aggregator.collect('region', providers))['hours'])
+        stamp, saved, day = aggregator.cache['region']
+        aggregator.cache['region'] = (stamp - 61, saved, day)
+        aggregator.cooldowns['region', 'Open-Meteo'] = time.monotonic() - 1
+        self.assertEqual((await aggregator.collect('region', providers))['hours'][0]['temp'], 16)
+
     async def test_slow_provider_does_not_discard_other_results(self):
         async def slow():
             await asyncio.sleep(1)
