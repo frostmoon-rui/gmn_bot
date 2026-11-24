@@ -82,6 +82,25 @@ class NativeChatEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result,'hello')
         self.assertFalse(generate.await_args.kwargs['config'].tools)
 
+        generate.reset_mock()
+        partial = SimpleNamespace(text='This reply is cut', candidates=[SimpleNamespace(finish_reason='MAX_TOKENS')])
+        complete = SimpleNamespace(text='That deserves a proper reply!', candidates=[SimpleNamespace(finish_reason='STOP')])
+        generate.side_effect = [partial, complete]
+        reply = await scope['_call_model_with_history']('group_21','fixture retry',True)
+        self.assertEqual(reply, complete.text)
+        self.assertEqual([call.kwargs['config'].max_output_tokens for call in generate.await_args_list], [256, 1024])
+        history = scope['chat_histories']['group_21']
+        self.assertEqual([entry.role for entry in history], ['user', 'model'])
+        self.assertEqual(history[-1].parts[0].text, complete.text)
+
+        generate.reset_mock()
+        generate.side_effect = [partial, partial, partial]
+        scope['AVAILABLE_CHAT_MODELS'].append('second-model')
+        reply = await scope['_call_model_with_history']('group_22','fixture exhausted',True)
+        self.assertNotEqual(reply, partial.text)
+        self.assertEqual(scope['chat_histories']['group_22'], [])
+        self.assertEqual([call.kwargs['config'].max_output_tokens for call in generate.await_args_list], [256, 1024, 256])
+
 class NaturalReminderTests(unittest.IsolatedAsyncioTestCase):
     def test_relative_time_suffix_and_compact_spacing(self):
         now = datetime(2026,11,19,18,55,tzinfo=TZ)

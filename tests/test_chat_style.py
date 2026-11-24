@@ -35,3 +35,13 @@ class ChatStyleTests(unittest.TestCase):
     def test_provider_limit_is_distinguished_from_local_formatting(self):
         self.assertTrue(generation_hit_limit(SimpleNamespace(candidates=[SimpleNamespace(finish_reason='MAX_TOKENS')])))
         self.assertFalse(generation_hit_limit(SimpleNamespace(candidates=[SimpleNamespace(finish_reason='STOP')])))
+        self.assertTrue(generation_hit_limit({'choices': [{'finish_reason': 'length'}]}))
+        self.assertTrue(generation_hit_limit({'stop_reason': 'max_tokens'}))
+        self.assertTrue(generation_hit_limit({'incomplete_details': {'reason': 'max_output_tokens'}}))
+        self.assertFalse(generation_hit_limit({'choices': [{'finish_reason': 'stop'}]}))
+
+    def test_overlong_interjection_keeps_whole_sentence_and_ignores_decimal_point(self):
+        self.assertEqual(compact_interjection('The limit is 3.14. A long sentence follows.', 20, ''),
+                         'The limit is 3.14.')
+        self.assertEqual(compact_interjection('The limit is 3.14 today', 16, ''), '')
+        self.assertEqual(compact_interjection('Sounds good', 20, ''), 'Sounds good')

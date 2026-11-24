@@ -1287,6 +1287,9 @@ async def call_deepseek_with_history(session_id: str, prompt_text: str,
     for model_name in list(DEEPSEEK_MODEL_NAMES)[:3]:
         try:
             response_data = await asyncio.to_thread(_request, model_name)
+            from chat_style import generation_hit_limit
+            if generation_hit_limit(response_data):
+                raise RuntimeError('Model response hit its output token limit')
             choices = response_data.get("choices", [])
             reply_text = ""
             if choices:
@@ -1350,6 +1353,9 @@ async def call_claude_with_history(session_id: str, prompt_text: str,
     for model_name in list(CLAUDE_MODEL_NAMES)[:3]:
         try:
             response_data = await asyncio.to_thread(_request, model_name)
+            from chat_style import generation_hit_limit
+            if generation_hit_limit(response_data):
+                raise RuntimeError('Model response hit its output token limit')
             reply_text = "".join(
                 item.get("text", "") for item in response_data.get("content", [])
                 if isinstance(item, dict) and item.get("type") == "text"
@@ -1433,6 +1439,11 @@ async def call_gpt_with_history(session_id: str, prompt_text: str,
                 )
                 with opener.open(request, timeout=min(30, remaining)) as response:
                     response_data = json.loads(response.read().decode("utf-8"))
+                from chat_style import generation_hit_limit
+                if generation_hit_limit(response_data):
+                    raise RuntimeError('Model response hit its output token limit')
+                if response_data.get('status') == 'incomplete':
+                    raise RuntimeError('Model response was incomplete')
                 reply_text = response_data.get("output_text", "")
                 if not reply_text:
                     output_items = response_data.get("output", [])
@@ -1494,13 +1505,15 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
     tool_options = {} if is_random else {'tools': [{'function_declarations': function_declarations()}]}
     token_limit = 256 if is_random else 2048
     temp = 0.9 if is_random else 0.75
-    config = gemini_content_config(
-        system_instruction=model_system_prompt(is_random),
-        temperature=temp,
-        max_output_tokens=token_limit,
-        **tool_options
-    )
+    def output_config(budget):
+        return gemini_content_config(
+            system_instruction=model_system_prompt(is_random),
+            temperature=temp,
+            max_output_tokens=budget,
+            **tool_options
+        )
 
+    config = output_config(token_limit)
     parts = [types.Part.from_text(text=prompt_text)]
     if image_parts:
         for img_bytes, mime_type in image_parts:
@@ -1513,21 +1526,29 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
     chat_histories[session_id] = chat_histories[session_id][-MAX_HISTORY_LEN:]
     current_contents = chat_histories[session_id]
 
+    from response_visibility import visible_response_text
+    from chat_style import generation_hit_limit
+
+    async def generate(model_id, model_config):
+        return await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model=model_id, contents=current_contents, config=model_config),
+            timeout=12.0
+        )
+
     last_err = ""
+    larger_retry_available = True
     for model_id in list(AVAILABLE_CHAT_MODELS)[:6]:
         try:
-            response = await asyncio.wait_for(
-                client.aio.models.generate_content(
-                    model=model_id,
-                    contents=current_contents,
-                    config=config
-                ),
-                timeout=12.0
-            )
-            from response_visibility import visible_response_text
-            from chat_style import generation_hit_limit
+            response = await generate(model_id, config)
             if generation_hit_limit(response):
-                print('[Model output limit]:', model_id, 'MAX_TOKENS')
+                print('[Gemini output token limit]:', model_id)
+                if larger_retry_available:
+                    larger_retry_available = False
+                    response = await generate(model_id, output_config(1024 if is_random else 4096))
+                if generation_hit_limit(response):
+                    last_err = 'Model response hit its output token limit'
+                    continue
             reply_text = (function_action(response) if not is_random else None) or visible_response_text(response)
             if reply_text:
                 promote_runtime_model("gemini", model_id)
