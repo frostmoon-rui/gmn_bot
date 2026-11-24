@@ -38,6 +38,10 @@ def status_key(status):
     text = str(status).casefold()
     if 'cached forecast' in text:
         return 'cached_forecast'
+    if 'mojiforecastmissing' in text:
+        return 'no_data'
+    if 'mojilocationmismatch' in text:
+        return 'invalid_data'
     if '404' in text:
         return 'alerts_not_covered' if 'alerts=' in text and not any(f'{k}=' in text for k in ('current', 'days', 'hours')) else 'not_covered'
     if '429' in text:

@@ -10,7 +10,7 @@ import re
 import socket
 import sys
 import time
-from moji_public import MojiPublic, location_candidates, title_matches_location
+from moji_public import MojiLocationMismatch, MojiPublic, location_candidates, title_matches_location
 from pathlib import Path
 import urllib.parse
 import urllib.request
@@ -338,7 +338,7 @@ class Extensions:
             for page in ([configured] if configured else location_candidates(normalized)):
                 data = await self.moji_public.weather(page)
                 if not title_matches_location(normalized, data.get('page_title', '')):
-                    raise ValueError('Moji page location did not pass verification')
+                    raise MojiLocationMismatch('Moji page location did not pass verification')
                 data['local_date'] = data.get('forecast_date')
                 return data
             return None

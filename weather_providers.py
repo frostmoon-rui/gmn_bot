@@ -3,8 +3,6 @@ from reply_style import localize_provider_data
 import asyncio
 import copy
 import json
-import ipaddress
-import socket
 import math
 import time
 import urllib.parse
@@ -247,51 +245,42 @@ def request_json(url, payload=None, headers=None, timeout=8):
         and parsed.netloc in {'api.open-meteo.com', 'geocoding-api.open-meteo.com'}
     )
     proxy = urllib.request.getproxies().get('https') if open_meteo_request else None
-    open_request = urllib.request.urlopen
-    route = 'system'
+    if open_meteo_request:
+        timeout = max(timeout, 18 if parsed.netloc == 'api.open-meteo.com' else 10)
+    routes = [('system', urllib.request.urlopen, timeout)] * (2 if payload is None else 1)
     if proxy:
         parsed_proxy = urllib.parse.urlsplit(proxy)
         if parsed_proxy.scheme == 'http' and parsed_proxy.hostname and not parsed_proxy.username and not parsed_proxy.password:
-            # Explicit CONNECT resolves the origin at the proxy, including Clash Fake-IP.
-            open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
-            route = 'proxy'
-    if open_meteo_request:
-        timeout = max(timeout, 18 if parsed.netloc == 'api.open-meteo.com' else 10)
+            # Explicit CONNECT and the OS's direct/TUN route can use different upstream paths.
+            no_proxy = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+            routes = [('proxy', no_proxy, 8), ('direct', no_proxy, 8), ('proxy', no_proxy, timeout)]
     try:
-        for attempt in range(2):
-            # ProxyHandler mutates the origin host and CONNECT tunnel on the Request.
+        for attempt, (route, open_request, attempt_timeout) in enumerate(routes, start=1):
             request = urllib.request.Request(url, data=body, headers=request_headers)
             if route == 'proxy':
                 request.add_header('Host', parsed.netloc)
                 request.set_proxy(parsed_proxy.netloc, 'http')
             started = time.monotonic()
+            final_attempt = attempt == len(routes)
             try:
-                with open_request(request, timeout=timeout) as response:
+                with open_request(request, timeout=attempt_timeout) as response:
                     raw = response.read(1024*1024+1)
                 if open_meteo_request:
-                    print('[Open-Meteo connection]:', route, 'attempt', attempt+1, 'OK in', round(time.monotonic()-started, 2), 'seconds')
+                    print('[Open-Meteo connection]:', route, 'attempt', attempt, 'OK in',
+                          round(time.monotonic()-started, 2), 'seconds')
                 break
             except urllib.error.HTTPError as error:
-                if attempt or payload is not None or error.code not in {502, 503, 504}:
+                if open_meteo_request:
+                    print('[Open-Meteo connection failed]:', route, 'attempt', attempt, error_code(error))
+                if final_attempt or error.code not in {502, 503, 504}:
                     raise
                 error.close()
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-                if attempt or payload is not None:
-                    raise
                 if open_meteo_request:
-                    print('[Open-Meteo connection failed]:', route, 'attempt', attempt+1,
+                    print('[Open-Meteo connection failed]:', route, 'attempt', attempt,
                           error_code(error), 'after', round(time.monotonic()-started, 2), 'seconds')
-                if route == 'proxy':
-                    try:
-                        resolved = {ipaddress.ip_address(item[4][0]) for item in
-                                    socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)}
-                    except OSError:
-                        resolved = set()
-                    if resolved and all(address.is_global for address in resolved):
-                        open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
-                        route = 'direct'
-                    else:
-                        print('[Open-Meteo connection]: Local DNS cannot be used directly; retrying the proxy.')
+                if final_attempt:
+                    raise
             time.sleep(0.35)
     except urllib.error.HTTPError as error:
         try:

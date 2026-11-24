@@ -98,6 +98,14 @@ class PageText(HTMLParser):
             self.parts.append(data.strip())
 
 
+class MojiForecastMissing(ValueError):
+    pass
+
+
+class MojiLocationMismatch(ValueError):
+    pass
+
+
 def parse_weather(raw):
     parser = PageText()
     parser.feed(raw)
@@ -108,7 +116,7 @@ def parse_weather(raw):
         if not match:
             if label == '后天':
                 continue
-            raise ValueError('Page lacks explicit today/tomorrow temperatures')
+            raise MojiForecastMissing('Page lacks explicit today/tomorrow temperatures')
         low, high = sorted((int(match[2]), int(match[3])))
         days.append({'label': label, 'condition': match[1].strip(),
             'minTemperature': {'degrees': low}, 'maxTemperature': {'degrees': high}})
