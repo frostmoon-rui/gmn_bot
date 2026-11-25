@@ -33,12 +33,14 @@ MESSAGES = {
     'format': 'Could not read this media file. Try an audio file or a video with an audio track.',
     'size': 'The media must be under 80 MiB and at most 10 minutes long.',
     'source': 'Could not download the media. Try uploading the file or using a public direct media link.',
+    'qq_video': 'QQ did not return a readable copy of this video. Send it again as a video or attach the original file.',
     'processing': 'Local audio separation failed. Please try again with another file.',
     'delivery': 'I could not confirm delivery of both files. Check the chat before retrying.',
     'voice_limit': 'Both files were sent. Voice playback is available for clips up to three minutes.',
     'voice_delivery': 'Both files were sent. I could not confirm voice message delivery.',
     'voice_decoder': 'This QQ voice needs the local SILK decoder, which is unavailable.',
     'page': 'The page has no downloadable audio. Try a file or a direct media URL.',
+    'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'search_page': 'This URL is a music search page. Reply to a downloaded file or an audio URL.',
     'playlist': 'This playlist format is unsupported. Try a downloadable file or a standard HLS recording.',
     'live_stream': 'This stream has not ended. Send a completed recording or an audio file.',
@@ -63,7 +65,7 @@ def kugou_search_url(title):
     return 'https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord=' + quote(title, safe='')
 
 
-def media_source(message, text):
+def media_segments(message):
     segments = message.get('message') if isinstance(message.get('message'), list) else ()
     media = [(segment.get('type'), segment['data']) for segment in segments
              if isinstance(segment, dict) and isinstance(segment.get('data'), dict)
@@ -77,15 +79,20 @@ def media_source(message, text):
                 fields[key] = (value.replace('&#44;', ',').replace('&#91;', '[')
                                .replace('&#93;', ']').replace('&amp;', '&'))
             media.append((match[1], fields))
+    return media
+
+
+def media_source(message, text):
+    media = media_segments(message)
     if len(media) > 1:
         raise MediaError('multiple')
     if media:
         kind, data = media[0]
         ident = data.get('file_id') or data.get('file')
-        if ident and (kind != 'file' or data.get('file_id')):
+        if (ident and (kind != 'file' or data.get('file_id'))) or (kind == 'video' and data.get('url')):
             if str(data.get('file_size', '')).isdigit() and int(data['file_size']) > MAX_BYTES:
                 raise MediaError('size')
-            return kind, str(ident)
+            return kind, str(ident or "")
         raise MediaError('source')
     plain = re.sub(r'\[CQ:[^\]]+\]', '', text)
     plain = plain.replace('&amp;', '&')
@@ -180,10 +187,12 @@ def _copy_limited(reader, target):
 
 
 @contextmanager
-def open_public_response(url):
+def open_public_response(url, *, allowed_url=None):
     """Follow a bounded number of redirects with the same DNS checks on every hop."""
     try:
         for _ in range(5):
+            if allowed_url and not allowed_url(url):
+                raise MediaError('source')
             conn, response = _connect_public(url)
             try:
                 if response.status in {301, 302, 303, 307, 308} and response.getheader('Location'):
@@ -208,8 +217,9 @@ def save_media_response(response, target):
     _copy_limited(response.read1, target)
 
 
-def download_media(url, target):
-    with open_public_response(url) as (response, _):
+def download_media(url, target, *, allowed_url=None):
+    source = open_public_response(url) if allowed_url is None else open_public_response(url, allowed_url=allowed_url)
+    with source as (response, _):
         mime = response.getheader('Content-Type', '').lower()
         if mime.startswith(('text/', 'application/json')):
             raise MediaError('source')
@@ -226,6 +236,82 @@ def copy_napcat_file(local, target):
         raise MediaError('size')
     with path.open('rb') as source:
         _copy_limited(source.read, target)
+
+
+def is_qq_video_url(value):
+    if not isinstance(value, str) or not value or len(value) > 8192:
+        return False
+    try:
+        parts = urlsplit(value)
+        host = (parts.hostname or '').rstrip('.')
+        return (parts.scheme in {'http', 'https'} and parts.username is None
+                and any(host == domain or host.endswith('.' + domain)
+                        for domain in ('qq.com', 'qq.com.cn', 'qpic.cn', 'gtimg.cn', 'qcloud.com')))
+    except ValueError:
+        return False
+
+
+def qq_video_cache(value):
+    if not isinstance(value, str) or not value or not Path(value).is_absolute() or value.startswith(('\\', '//')):
+        return None
+    try:
+        path = Path(value).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    parts = tuple(part.lower() for part in path.parts)
+    if ('nt_data', 'video') in tuple(zip(parts, parts[1:])) and path.suffix.lower() in {'.mp4', '.mov', '.webm', '.m4v'}:
+        return str(path)
+    return None
+
+
+async def fetch_napcat_media(call, message, source, target):
+    """Resolve an attachment from a verified message using NapCat and QQ's video CDN."""
+    kind, ident = source
+    if kind != 'video':
+        try:
+            data = await call('get_file', {'file': ident}, 60)
+        except (TimeoutError, RuntimeError) as error:
+            raise MediaError('source') from error
+        await asyncio.to_thread(copy_napcat_file, data.get('file') if isinstance(data, dict) else None, target)
+        return
+
+    _, segment = media_segments(message)[0]
+    urls = [segment.get('url')]
+    if isinstance(message.get('message'), list):
+        local = await asyncio.to_thread(qq_video_cache, segment.get('url'))
+        if local:
+            try:
+                await asyncio.to_thread(copy_napcat_file, local, target)
+                return
+            except (OSError, MediaError) as error:
+                if isinstance(error, MediaError) and str(error) == 'size':
+                    raise
+                target.unlink(missing_ok=True)
+
+    if ident and not Path(ident).is_absolute() and '://' not in ident:
+        try:
+            data = await call('get_file', {'file': ident}, 35)
+        except (TimeoutError, RuntimeError):
+            data = None
+        if isinstance(data, dict):
+            urls.append(data.get('url'))
+            try:
+                await asyncio.to_thread(copy_napcat_file, data.get('file'), target)
+                return
+            except (OSError, MediaError) as error:
+                if isinstance(error, MediaError) and str(error) == 'size':
+                    raise
+                target.unlink(missing_ok=True)
+    for url in dict.fromkeys(url for url in urls if is_qq_video_url(url)):
+        try:
+            await asyncio.to_thread(download_media, url, target, allowed_url=is_qq_video_url)
+            return
+        except (OSError, MediaError) as error:
+            if isinstance(error, MediaError) and str(error) == 'size':
+                raise
+            target.unlink(missing_ok=True)
+    print('[QQ video source unavailable]: local file and QQ video URL unavailable')
+    raise MediaError('qq_video')
 
 
 def _run(args, timeout):
@@ -368,6 +454,7 @@ class MediaSeparation:
 
         try:
             async with self.worker:
+                original = event
                 if source is None:
                     try:
                         original = await call('get_msg', {'message_id': int(reply_id)}, 12)
@@ -390,12 +477,7 @@ class MediaSeparation:
                             split_normalized_audio, self.engine, self.ffmpeg, normalized, duration, workspace,
                         )
                     else:
-                        try:
-                            data = await call('get_file', {'file': value})
-                        except (TimeoutError, RuntimeError) as error:
-                            raise MediaError('source') from error
-                        data = data if isinstance(data, dict) else {}
-                        await asyncio.to_thread(copy_napcat_file, data.get('file'), incoming)
+                        await fetch_napcat_media(call, original, source, incoming)
                         await notify('started')
                         duration, outputs = await asyncio.to_thread(
                             separate_media, self.engine, self.ffmpeg, incoming, workspace, self.silk_module,

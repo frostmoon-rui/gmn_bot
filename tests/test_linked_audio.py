@@ -54,6 +54,23 @@ class LinkedAudioTests(unittest.TestCase):
                 'https://media.example.test/song.m3u8',
             ])
 
+    def test_public_video_and_structured_audio_are_discovered(self):
+        html = b"""<video src="/clip.mp4"></video>
+        <script type="application/ld+json">
+          {"@graph":[{"@type":"VideoObject","contentUrl":"/media/second"},
+                     {"@type":"Article","contentUrl":"/ignore"}]}
+        </script>"""
+        with patch('linked_audio.open_public_response', page_response(html, 'text/html')):
+            self.assertEqual(fetch_linked_audio('https://example.test/page', None), [
+                'https://media.example.test/clip.mp4', 'https://media.example.test/media/second',
+            ])
+
+    def test_apple_music_page_is_not_mistaken_for_a_full_download(self):
+        with patch('linked_audio.open_public_response') as connect:
+            with self.assertRaisesRegex(MediaError, 'release_page'):
+                fetch_linked_audio('https://music.apple.com/us/song/1574704376', None)
+            connect.assert_not_called()
+
     def test_a_bad_candidate_does_not_discard_a_working_source(self):
         with (
             tempfile.TemporaryDirectory() as folder,

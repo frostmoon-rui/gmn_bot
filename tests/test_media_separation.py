@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from media_separation import (
     MediaError, MediaSeparation, _connect_public, decode_silk, kugou_search_url, media_source, parse_command,
-    public_address, separate_media,
+    fetch_napcat_media, is_qq_video_url, open_public_response, public_address, separate_media,
 )
 
 
@@ -60,6 +60,15 @@ class MediaTests(unittest.TestCase):
             resolve.assert_called_once_with('media.example.test')
             connect.assert_not_called()
 
+    def test_qq_media_redirect_cannot_leave_the_qq_cdn(self):
+        conn, response = Mock(), Mock(status=302)
+        response.getheader.return_value = 'https://outside.example/video.mp4'
+        with patch('media_separation._connect_public', return_value=(conn, response)) as connect:
+            with self.assertRaisesRegex(MediaError, 'source'):
+                with open_public_response('https://multimedia.nt.qq.com.cn/video', allowed_url=is_qq_video_url):
+                    self.fail('Unexpected media response')
+            connect.assert_called_once_with('https://multimedia.nt.qq.com.cn/video')
+
     def test_silent_video_never_reaches_spleeter(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -74,6 +83,62 @@ class MediaTests(unittest.TestCase):
 
 
 class MediaDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_quoted_video_uses_qq_playback_when_get_file_fails(self):
+        url = 'https://multimedia.nt.qq.com.cn/video'
+        original = {'message': [{'type': 'video', 'data': {'file': 'opaque', 'url': url}}], 'group_id': 12}
+        actions = []
+        tasks = []
+
+        async def send(raw, **kwargs):
+            request = json.loads(raw)
+            action = request['action']
+            actions.append(action)
+            if action == 'get_msg':
+                return original
+            if action == 'get_file':
+                raise RuntimeError('NapCat could not resolve the file')
+            if action == 'upload_group_file':
+                self.assertEqual(Path(request['params']['file']).read_bytes(), b'separated')
+
+        def download(source, target, *, allowed_url):
+            self.assertEqual(source, url)
+            self.assertTrue(allowed_url(url))
+            target.write_bytes(b'QQ video')
+
+        def separate(engine, ffmpeg, incoming, workspace, silk_module):
+            self.assertEqual(incoming.read_bytes(), b'QQ video')
+            outputs = {name: workspace / f'{name}.mp3' for name in ('vocals', 'accompaniment')}
+            for output in outputs.values():
+                output.write_bytes(b'separated')
+            return 12, outputs
+
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            patch('media_separation.download_media', side_effect=download),
+            patch('media_separation.separate_media', side_effect=separate),
+        ):
+            executable = Path(temp) / 'tool.exe'
+            executable.touch()
+            event = {'message_type': 'group', 'group_id': 12, 'user_id': 34, 'self_id': 56}
+            worker = MediaSeparation(executable, executable, lambda coro: tasks.append(asyncio.create_task(coro)), AsyncMock())
+            self.assertIsNone(worker.start(SimpleNamespace(send=send), event, '42', None, False,
+                belongs=lambda msg, src: msg['group_id'] == src['group_id'], text=lambda msg: ''))
+            await tasks[0]
+            self.assertEqual(actions, ['get_msg', 'get_file', 'upload_group_file', 'upload_group_file'])
+
+    async def test_video_with_only_a_native_cache_path_is_readable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'nt_data' / 'Video' / 'clip.mp4'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'local QQ video')
+            message = {'message': [{'type': 'video', 'data': {'url': str(source)}}]}
+            call = AsyncMock()
+            target = root / 'incoming'
+            await fetch_napcat_media(call, message, media_source(message, ''), target)
+            call.assert_not_awaited()
+            self.assertEqual(target.read_bytes(), b'local QQ video')
+
     async def test_voice_reply_fetches_and_returns_two_files_and_records(self):
         sent = []
         tasks = []

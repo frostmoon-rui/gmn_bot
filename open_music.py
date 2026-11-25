@@ -17,7 +17,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from bot_features import message_text, reply_belongs_to
 from media_separation import (
-    MAX_BYTES, MediaError, _connect_public, copy_napcat_file, download_media, encode_mp3, media_source,
+    MAX_BYTES, MediaError, _connect_public, download_media, encode_mp3, fetch_napcat_media, media_source,
     normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
@@ -33,7 +33,8 @@ MESSAGES = {
     'choose': 'Use /get track 1, 2 or 3 to receive the MP3 and full QQ voice playback. Results expire after 10 minutes.',
     'none': 'No matching downloadable recording was found. You can send the file or use /download audio with a media URL.',
     'search_error': 'The music catalogs are temporarily unavailable.',
-    'release_links': 'Matching release pages · playback on the source platform',
+    'release_links': 'Matching release pages · no full audio file was available to send',
+    'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
     'disabled': 'The local music downloader is unavailable.',
@@ -49,6 +50,7 @@ MESSAGES = {
     'live_stream': 'This stream has not ended. Send a completed recording or an audio file.',
     'protected_stream': 'This stream requires an encryption key. Use a file available for download.',
     'attachment': 'Reply to an audio or video attachment in this chat.',
+    'qq_video': 'QQ did not return a readable copy of this video. Send it again or attach the original file.',
     'search_page': 'This is a music search page. Open a result and use its downloadable file or audio page.',
     'audio': 'The file has no readable audio track.',
     'size': 'The source must be at most 80 MiB and 10 minutes long.',
@@ -414,9 +416,8 @@ class OpenMusic:
             raise MediaError('attachment' if str(error) == 'usage' else str(error)) from error
         if kind == 'url':
             raise MediaError('attachment')
-        data = await call('get_file', {'file': ident}, 60)
         incoming = workspace / 'source.media'
-        await asyncio.to_thread(copy_napcat_file, data.get('file') if isinstance(data, dict) else None, incoming)
+        await fetch_napcat_media(call, original, (kind, ident), incoming)
 
         def convert():
             normalized, duration = normalize_audio(self.ffmpeg, incoming, workspace, self.silk_module)
@@ -444,7 +445,7 @@ class OpenMusic:
             except MediaError as error:
                 reason = str(error)
                 await notify(self.messages[reason] if reason in {
-                    'page', 'search_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'audio', 'size'
+                    'page', 'search_page', 'release_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'qq_video', 'audio', 'size'
                 }
                              else self.messages['download'])
                 return False
