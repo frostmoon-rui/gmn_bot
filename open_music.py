@@ -11,16 +11,18 @@ import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from unicodedata import normalize
 from urllib.parse import quote, urlencode, urlsplit
 
 from bot_features import message_text, reply_belongs_to
 from media_separation import (
-    MAX_BYTES, VOICE_SECONDS, MediaError, _connect_public, download_media, encode_mp3, fetch_napcat_media, media_source,
+    MAX_BYTES, VOICE_SECONDS, MediaError, _connect_public, encode_mp3, fetch_napcat_media, kugou_search_url, media_source,
     normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
+from music_capture import detect_recording
 
 
 LICENSES = {
@@ -34,7 +36,10 @@ MESSAGES = {
     'none': 'No exact downloadable recording was found. Try adding the artist.',
     'search_error': 'The music catalogs are temporarily unavailable.',
     'ambiguous': 'Several recordings have this title. Add the artist to /play music.',
-    'release_links': 'Matching release pages · no full audio file was available to send',
+    'approximate': 'Closest downloadable result for {query}',
+    'preview': 'Listen on NetEase Cloud Music or Kugou',
+    'netease': 'NetEase Cloud Music',
+    'kugou': 'Kugou',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
@@ -64,6 +69,7 @@ class Track:
     url: str
     source: str
     license_url: str
+    duration: float = 0
 
 
 @dataclass(frozen=True)
@@ -93,7 +99,9 @@ def _track(item):
     url, source = _web_url(item.get('url')), _web_url(item.get('foreign_landing_url'))
     title = ' '.join(str(item.get('title') or '').split())[:120]
     if license_url and url and source and title:
-        return Track(title, creator, url, source, license_url)
+        milliseconds = item.get('duration')
+        duration = milliseconds / 1000 if type(milliseconds) is int and milliseconds > 0 else 0
+        return Track(title, creator, url, source, license_url, duration)
     return None
 
 
@@ -247,17 +255,49 @@ def _exact_track(track, query):
     clean_title = _clean_title(track.title)
     if not _key(title) or _key(clean_title) != _key(title):
         return False
-    if not artist:
-        return True
+    return not artist or _same_artist(track, artist)
+
+
+def _same_artist(track, artist):
     required = _artist_key(artist)
     primary = re.split(r',|\s+(?:feat\.?|ft\.?)\s+', track.creator, maxsplit=1, flags=re.I)[0]
     return bool(required) and required in (_artist_key(track.creator), _artist_key(primary))
+
+
+def _version_tags(title):
+    return set(re.findall(
+        r'(?i)\b(?:live|remix|instrumental|acoustic|remaster(?:ed)?|demo|cover|karaoke|dj|edit|sped|slowed)\b'
+        r'|现场|現場|翻唱|伴奏|纯音乐|純音樂|混音|重制|重製|原声|原聲|加速|降速|DJ(?=版)',
+        normalize('NFKC', title).lower(),
+    ))
+
+
+def _closest_track(tracks, query):
+    title, artist = _query_parts(query)
+    requested = _key(title)
+    if not artist or len(requested) < 7:
+        return None
+    scores = {}
+    for track in tracks:
+        candidate = _clean_title(track.title)
+        if (not _same_artist(track, artist) or _version_tags(candidate) != _version_tags(title)
+                or len(candidate.split()) != len(title.split())):
+            continue
+        key = _key(candidate)
+        score = SequenceMatcher(None, requested, key, autojunk=False).ratio()
+        if score >= .92:
+            scores.setdefault(key, (score, track))
+    ranked = sorted(scores.values(), key=lambda match: match[0], reverse=True)
+    if ranked and (len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= .04):
+        return ranked[0][1]
+    return None
 
 
 def search_tracks(query):
     title, _ = _query_parts(query)
     short_title = re.split(r'[([{【]', title, maxsplit=1)[0].strip()
     completed = 0
+    candidates = []
     with ThreadPoolExecutor(max_workers=3) as executor:
         for term in dict.fromkeys([title, short_title] if len(_key(short_title)) >= 2 else [title]):
             results = []
@@ -271,9 +311,11 @@ def search_tracks(query):
             exact = {track.url: track for track in results if _exact_track(track, query)}
             if exact:
                 return list(exact.values())[:3]
+            candidates.extend(results)
     if not completed:
         raise MediaError('search_error')
-    return []
+    nearest = _closest_track(candidates, query)
+    return [nearest] if nearest else []
 
 
 def search_release_links(query):
@@ -307,9 +349,31 @@ def netease_search_url(title):
 
 
 def prepare_track(track, ffmpeg, workspace):
-    incoming = workspace / 'music.media'
-    download_media(track.url, incoming)
-    return _encode_track(ffmpeg, *normalize_audio(ffmpeg, incoming, workspace), workspace, compact=True)
+    def read_recording(url, folder):
+        recording = normalize_link_audio(ffmpeg, url, folder)
+        if track.duration and abs(recording[1] - track.duration) > max(4, track.duration * .08):
+            raise MediaError('format')
+        return recording
+
+    try:
+        recording = read_recording(track.url, workspace)
+    except MediaError as error:
+        if str(error) not in {'source', 'page', 'format', 'audio'}:
+            raise
+        for index, url in enumerate(detect_recording(track.source)):
+            candidate = workspace / f'captured-{index}'
+            candidate.mkdir()
+            try:
+                recording = read_recording(url, candidate)
+            except MediaError as capture_error:
+                if str(capture_error) in {'size', 'protected_stream', 'live_stream'}:
+                    raise
+                continue
+            print('[Recording source]: Live Stream Downloader')
+            break
+        else:
+            raise
+    return _encode_track(ffmpeg, *recording, workspace, compact=True)
 
 
 def _encode_track(ffmpeg, normalized, duration, workspace, *, compact=False):
@@ -372,38 +436,44 @@ class OpenMusic:
         self.spawn(run())
         return None
 
+    def _preview(self, query):
+        return '\n'.join([
+            self.messages['preview'],
+            f"{self.messages['netease']} {netease_search_url(query)}",
+            f"{self.messages['kugou']} {kugou_search_url(query)}",
+        ])
+
     async def _search(self, key, ws, kind, group, user, query):
         try:
-            tracks = await asyncio.to_thread(search_tracks, query)
+            results = await asyncio.to_thread(search_tracks, query)
         except (MediaError, OSError, ValueError, KeyError, http.client.HTTPException):
             text = self.messages['search_error']
         else:
-            tracks = [track for track in tracks if _exact_track(track, query)]
+            tracks = [track for track in results if _exact_track(track, query)]
+            nearest = _closest_track(results, query) if not tracks else None
+            if nearest:
+                tracks = [nearest]
             if len(tracks) == 1 and not _query_parts(query)[1]:
                 releases = await asyncio.to_thread(search_release_links, query)
                 track = tracks[0]
-                if any(not _exact_track(track, f"{query} - {item.creator}") for item in releases):
+                if any(not _same_artist(track, item.creator) for item in releases):
                     artists = list(dict.fromkeys(item.creator for item in releases))
-                    await self.send(ws, kind, group, user, '\n'.join([self.messages['ambiguous'], ' / '.join(artists)]))
+                    text = '\n'.join([self.messages['ambiguous'], ' / '.join(artists), self._preview(query)])
+                    await self.send(ws, kind, group, user, text)
                     return
             if tracks:
                 if len(self.results) >= 64:
                     del self.results[next(iter(self.results))]
                 self.results[key] = (time.monotonic() + 600, tracks)
                 if len(tracks) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
-                    await self._deliver(ws, kind, group, user, tracks[0], None)
+                    await self._deliver(ws, kind, group, user, tracks[0], None, requested=query)
                     return
                 lines = [f'{i}. {track.title} · {track.creator or self.messages["unknown_creator"]}'
                          for i, track in enumerate(tracks, 1)]
                 text = '\n'.join([*lines, self.messages['choose']])
             else:
                 text = self.messages['none']
-        if text in (self.messages['none'], self.messages['search_error']):
-            releases = await asyncio.to_thread(search_release_links, query)
-            if releases:
-                lines = [f'{item.title} · {item.creator}\n{item.source}' for item in releases[:2]]
-                text = '\n'.join([self.messages['release_links'], *lines])
-        await self.send(ws, kind, group, user, text)
+        await self.send(ws, kind, group, user, text + '\n' + self._preview(query))
 
     async def _prepare_attachment(self, ws, workspace, event, message_id):
         async def call(action, params, timeout):
@@ -427,7 +497,7 @@ class OpenMusic:
 
         return await asyncio.to_thread(convert)
 
-    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False):
+    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -445,19 +515,26 @@ class OpenMusic:
                     mp3, parts = await asyncio.to_thread(prepare, source, self.ffmpeg, workspace)
             except MediaError as error:
                 reason = str(error)
-                await notify(self.messages[reason] if reason in {
+                failure = (self.messages[reason] if reason in {
                     'page', 'search_page', 'release_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'qq_video', 'audio', 'size'
                 }
-                             else self.messages['download'])
+                           else self.messages['download'])
+                await notify(failure + '\n' + self._preview(requested) if requested else failure)
                 return False
             except (OSError, RuntimeError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
-                await notify(self.messages['download'])
+                failure = self.messages['download']
+                await notify(failure + '\n' + self._preview(requested) if requested else failure)
                 return False
             if track:
-                await notify(self.messages['credits'].format(
+                credits = self.messages['credits'].format(
                     title=track.title, creator=track.creator or self.messages['unknown_creator'],
                     source=track.source, license=track.license_url,
-                ))
+                )
+                if requested and not _exact_track(track, requested):
+                    credits = self.messages['approximate'].format(query=requested) + '\n' + credits
+                if requested:
+                    credits += '\n' + self._preview(requested)
+                await notify(credits)
                 if parts and not file_only:
                     try:
                         await call('send_' + kind + '_msg', {

@@ -6,8 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from music_capture import jamendo_track_id, match_jamendo_media
 from open_music import (
-    MESSAGES, OpenMusic, Release, _archive, _encode_track, _exact_track, _query_parts, _track,
+    MESSAGES, OpenMusic, Release, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
     search_release_links, search_tracks,
 )
 
@@ -124,6 +125,50 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('Another Artist', send.call_args.args[-1])
             self.assertFalse(worker.results)
 
+    def test_closest_match_requires_artist_and_preserves_recording_type(self):
+        track = _track(SAMPLE | {'title': 'Online Fantasy'})
+        wrong = _track(SAMPLE | {'title': 'Online Fantasy', 'creator': 'Another'})
+        cover = _track(SAMPLE | {'title': 'Online Fantasy (Cover)'})
+        self.assertEqual(_closest_track([wrong, cover, track], 'Online Fantsay - Example'), track)
+        self.assertIsNone(_closest_track([wrong, cover], 'Online Fantsay - Example'))
+        self.assertIsNone(_closest_track([track], 'Online Fantsay'))
+        self.assertIsNone(_closest_track([track], 'Online Fantsay DJ版 - Example'))
+
+    def test_short_direct_audio_uses_extension_discovered_full_recording(self):
+        track = _track(SAMPLE | {'duration': 180000})
+        wav = Path('audio.wav')
+        captured = 'https://mp3l.jamendo.com/?trackid=42'
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch('open_music.normalize_link_audio', side_effect=[(wav, 30), (wav, 180)]) as read,
+            patch('open_music.detect_recording', return_value=[captured]) as detect,
+            patch('open_music._encode_track', return_value=('mp3', [])),
+        ):
+            self.assertEqual(prepare_track(track, 'ffmpeg', Path(folder)), ('mp3', []))
+            detect.assert_called_once_with(track.source)
+            self.assertEqual(read.call_args.args[1], captured)
+
+    def test_capture_accepts_only_a_media_url_for_the_same_track(self):
+        track_id = jamendo_track_id('https://www.jamendo.com/track/42/example')
+        self.assertEqual(track_id, '42')
+        self.assertTrue(match_jamendo_media('https://mp3l.jamendo.com/?trackid=42', track_id))
+        for invalid in ('https://mp3l.jamendo.com/?trackid=421', 'https://jamendo.com.other.test/?trackid=42',
+                        'https://www.jamendo.com/track/42/example', 'https://127.0.0.1/?trackid=42'):
+            self.assertFalse(match_jamendo_media(invalid, track_id), invalid)
+
+    async def test_missing_download_returns_both_platform_preview_links(self):
+        tasks, send = [], AsyncMock()
+        worker = OpenMusic(None, lambda coro: tasks.append(asyncio.create_task(coro)), send)
+        event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
+        with patch('open_music.search_tracks', return_value=[]):
+            worker.start(object(), event, 'search', 'Online Fantasy')
+            await tasks[0]
+        send.assert_awaited_once()
+        reply = send.call_args.args[-1]
+        self.assertIn('music.163.com/', reply)
+        self.assertIn('kugou.com/', reply)
+        self.assertNotIn('music.apple.com/', reply)
+
     def test_compact_music_delivers_a_single_full_item(self):
         folder = Path('workspace')
         with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, input, output: output) as encode:
@@ -160,7 +205,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertIsNone(music.start(ws, event, 'search', 'Piano piece - Example'))
                 await tasks[0]
-            deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None)
+            deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None, requested='Piano piece - Example')
             send.assert_not_awaited()
 
     async def test_download_can_convert_a_file_captured_in_the_browser(self):
