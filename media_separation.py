@@ -38,6 +38,9 @@ MESSAGES = {
     'voice_limit': 'Both files were sent. Voice playback is available for clips up to three minutes.',
     'voice_delivery': 'Both files were sent. I could not confirm voice message delivery.',
     'voice_decoder': 'This QQ voice needs the local SILK decoder, which is unavailable.',
+    'page': 'The page has no downloadable audio. Try a file or a direct media URL.',
+    'search_page': 'This URL is a music search page. Reply to a downloaded file or an audio URL.',
+    'playlist': 'This link is an HLS or DASH playlist. Try a downloadable media file.',
 }
 
 
@@ -304,6 +307,10 @@ def encode_mp3(ffmpeg, source, output, seconds=None):
 
 def separate_media(engine, ffmpeg, source, workspace, silk_module=None):
     normalized, duration = normalize_audio(ffmpeg, source, workspace, silk_module)
+    return split_normalized_audio(engine, ffmpeg, normalized, duration, workspace)
+
+
+def split_normalized_audio(engine, ffmpeg, normalized, duration, workspace):
     result = _run([engine, '-m', '2stems', normalized], 480)
     if result.returncode:
         raise MediaError('processing')
@@ -357,7 +364,6 @@ class MediaSeparation:
             return await ws.send(json.dumps({'action': action, 'params': params}), receipt_timeout=timeout)
 
         try:
-            await notify('started')
             async with self.worker:
                 if source is None:
                     try:
@@ -372,7 +378,14 @@ class MediaSeparation:
                     workspace = Path(temp)
                     incoming = workspace / 'source.media'
                     if media_kind == 'url':
-                        await asyncio.to_thread(download_media, value, incoming)
+                        from linked_audio import normalize_link_audio
+                        normalized, duration = await asyncio.to_thread(
+                            normalize_link_audio, self.ffmpeg, value, workspace, self.silk_module,
+                        )
+                        await notify('started')
+                        duration, outputs = await asyncio.to_thread(
+                            split_normalized_audio, self.engine, self.ffmpeg, normalized, duration, workspace,
+                        )
                     else:
                         try:
                             data = await call('get_file', {'file': value})
@@ -380,9 +393,10 @@ class MediaSeparation:
                             raise MediaError('source') from error
                         data = data if isinstance(data, dict) else {}
                         await asyncio.to_thread(copy_napcat_file, data.get('file'), incoming)
-                    duration, outputs = await asyncio.to_thread(
-                        separate_media, self.engine, self.ffmpeg, incoming, workspace, self.silk_module,
-                    )
+                        await notify('started')
+                        duration, outputs = await asyncio.to_thread(
+                            separate_media, self.engine, self.ffmpeg, incoming, workspace, self.silk_module,
+                        )
                     recipient = {'group_id': group} if kind == 'group' else {'user_id': user}
                     try:
                         for role, path in outputs.items():

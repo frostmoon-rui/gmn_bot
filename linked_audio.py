@@ -6,7 +6,7 @@ from time import monotonic
 from urllib.parse import urldefrag, urljoin, urlsplit
 from xml.etree import ElementTree
 
-from media_separation import MediaError, open_public_response, save_media_response
+from media_separation import MediaError, normalize_audio, open_public_response, save_media_response
 
 
 PAGE_LIMIT = 1024 * 1024
@@ -14,6 +14,15 @@ AUDIO_EXTENSIONS = {'.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.
 PLAYLIST_TYPES = {'application/vnd.apple.mpegurl', 'application/x-mpegurl', 'audio/mpegurl',
                   'audio/x-mpegurl', 'application/dash+xml'}
 FEED_TYPES = {'application/rss+xml', 'application/atom+xml', 'application/xml', 'text/xml'}
+
+
+def is_search_page(url):
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or '').lower().rstrip('.')
+    return (host in {'kugou.com', 'www.kugou.com'} and parts.path.rstrip('/') == '/yy/html/search.html')
 
 
 class AudioLinkParser(HTMLParser):
@@ -94,7 +103,11 @@ def _read_document(response):
 
 def fetch_linked_audio(url, target):
     """Download a direct file or return candidate media URLs from one public page."""
+    if is_search_page(url):
+        raise MediaError('search_page')
     with open_public_response(url) as (response, final_url):
+        if is_search_page(final_url):
+            raise MediaError('search_page')
         mime = response.getheader('Content-Type', '').partition(';')[0].strip().lower()
         if mime in PLAYLIST_TYPES or _suffix(final_url) in {'.m3u8', '.mpd', '.m3u'}:
             raise MediaError('playlist')
@@ -129,3 +142,22 @@ def fetch_candidate(url, target):
         if mime.startswith(('text/', 'application/json')) or mime in FEED_TYPES | {'application/xhtml+xml'}:
             raise MediaError('page')
         save_media_response(response, target)
+
+
+def normalize_link_audio(ffmpeg, url, workspace, silk_module=None):
+    incoming = workspace / 'music.media'
+    candidates = fetch_linked_audio(url, incoming)
+    if not candidates:
+        return normalize_audio(ffmpeg, incoming, workspace, silk_module)
+    first_error = None
+    for index, candidate in enumerate(candidates):
+        folder = workspace / f'candidate-{index}'
+        folder.mkdir()
+        incoming = folder / 'music.media'
+        try:
+            fetch_candidate(candidate, incoming)
+            return normalize_audio(ffmpeg, incoming, folder, silk_module)
+        except MediaError as error:
+            if first_error is None:
+                first_error = error
+    raise first_error or MediaError('page')

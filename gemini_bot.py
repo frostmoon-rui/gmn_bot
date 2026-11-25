@@ -1835,7 +1835,7 @@ async def handle_message_event(ws, data):
             reply = 'Usage: /play music SONG ARTIST'
         else:
             link = 'Kugou Music' + ' · ' + value + '\n' + kugou_search_url(value)
-            reply = link if command == 'kugou music' else open_music.start(ws, data, 'search', value, link)
+            reply = link if command == 'kugou music' else open_music.start(ws, data, 'search', value)
         if reply:
             await extensions.send(ws, msg_type, group_id, user_id, reply)
         return

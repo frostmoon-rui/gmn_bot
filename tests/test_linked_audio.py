@@ -6,9 +6,8 @@ from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
 
-from linked_audio import fetch_linked_audio
+from linked_audio import fetch_linked_audio, normalize_link_audio
 from media_separation import MediaError
-from open_music import prepare_link
 
 
 def page_response(body, media_type):
@@ -51,12 +50,18 @@ class LinkedAudioTests(unittest.TestCase):
     def test_a_bad_candidate_does_not_discard_a_working_source(self):
         with (
             tempfile.TemporaryDirectory() as folder,
-            patch('open_music.fetch_linked_audio', return_value=['https://example.test/bad', 'https://example.test/good']),
-            patch('open_music.fetch_candidate', side_effect=[MediaError('source'), None]) as fetch,
-            patch('open_music._encode_track', return_value=('complete.mp3', 'preview.mp3')),
+            patch('linked_audio.fetch_linked_audio', return_value=['https://example.test/bad', 'https://example.test/good']),
+            patch('linked_audio.fetch_candidate', side_effect=[MediaError('source'), None]) as fetch,
+            patch('linked_audio.normalize_audio', return_value=('track.wav', 30)),
         ):
-            self.assertEqual(prepare_link('https://example.test/page', 'ffmpeg', Path(folder)),
-                             ('complete.mp3', 'preview.mp3'))
+            self.assertEqual(normalize_link_audio('ffmpeg', 'https://example.test/page', Path(folder)),
+                             ('track.wav', 30))
             self.assertEqual([call.args[0] for call in fetch.call_args_list], [
                 'https://example.test/bad', 'https://example.test/good',
             ])
+
+    def test_kugou_search_page_is_rejected_before_network(self):
+        with patch('linked_audio.open_public_response') as connect:
+            with self.assertRaisesRegex(MediaError, 'search_page'):
+                fetch_linked_audio('https://www.kugou.com/yy/html/search.html#searchKeyWord=Example', None)
+            connect.assert_not_called()
