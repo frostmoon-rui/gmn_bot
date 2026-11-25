@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 from music_capture import jamendo_track_id, match_jamendo_media
 from open_music import (
-    MESSAGES, OpenMusic, Release, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
-    search_release_links, search_tracks,
+    MESSAGES, OpenMusic, Release, configured_platform_track, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
+    search_platform_tracks, search_release_links, search_tracks,
 )
 
 
@@ -25,6 +25,9 @@ SAMPLE = {
 
 class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        platform = patch('open_music._platform_response', return_value={})
+        platform.start()
+        self.addCleanup(platform.stop)
         patcher = patch('open_music._archive', return_value=[])
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -156,18 +159,49 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                         'https://www.jamendo.com/track/42/example', 'https://127.0.0.1/?trackid=42'):
             self.assertFalse(match_jamendo_media(invalid, track_id), invalid)
 
-    async def test_missing_download_returns_both_platform_preview_links(self):
+    def test_identical_platform_track_has_two_direct_links(self):
+        kugou = {'SongName': 'Sample', 'Suffix': '(Studio)', 'SingerName': 'Performer',
+                 'FileHash': 'a' * 32, 'AlbumID': '123'}
+        netease = {'name': 'Sample (Studio)', 'artists': [{'name': 'Performer'}], 'id': 456}
+        def response(url):
+            if 'kugou' in url:
+                return {'data': {'lists': [kugou]}}
+            return {'result': {'songs': [netease | {'artists': [{'name': 'Unrelated'}]}, netease]}}
+
+        with patch('open_music._platform_response', side_effect=response):
+            links = search_platform_tracks('Sample')
+            self.assertEqual([platform for platform, _ in links], ['kugou', 'netease'])
+            self.assertEqual(links[0][1].title, 'Sample (Studio)')
+            self.assertTrue(links[0][1].source.endswith('album_id=123'))
+            self.assertEqual(links[1][1].source, 'https://music.163.com/song?id=456')
+            self.assertEqual(search_platform_tracks('Sample (Live) - Performer'), [])
+
+    def test_configured_recording_matches_its_alias_and_requested_performer(self):
+        entries = [{'title': 'Sample (Studio)', 'aliases': ['Sample'], 'creator': 'Example & Guest',
+                    'url': 'https://www.kugou.com/song/#hash=' + 'a' * 32 + '&album_id=123'}]
+        match = configured_platform_track(entries, 'Sample')
+        self.assertEqual(match[1].title, 'Sample (Studio)')
+        self.assertEqual(configured_platform_track(entries, 'Sample (Studio) - Example & Guest'), match)
+        self.assertIsNone(configured_platform_track(entries, 'Sample - Unrelated'))
+        self.assertIsNone(configured_platform_track(entries, 'Sample (Live)'))
+        self.assertIsNone(configured_platform_track([entries[0] | {'url': 'https://example.test'}], 'Sample'))
+
+    async def test_missing_download_returns_direct_platform_link_when_available(self):
         tasks, send = [], AsyncMock()
         worker = OpenMusic(None, lambda coro: tasks.append(asyncio.create_task(coro)), send)
         event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
-        with patch('open_music.search_tracks', return_value=[]):
+        release = Release('Online Fantasy', 'Example', '', 'https://music.163.com/song?id=42')
+        with (
+            patch('open_music.search_tracks', return_value=[]),
+            patch('open_music.search_platform_tracks', return_value=[('netease', release)]),
+        ):
             worker.start(object(), event, 'search', 'Online Fantasy')
             await tasks[0]
         send.assert_awaited_once()
         reply = send.call_args.args[-1]
-        self.assertIn('music.163.com/', reply)
-        self.assertIn('kugou.com/', reply)
-        self.assertNotIn('music.apple.com/', reply)
+        self.assertIn('Online Fantasy · Example', reply)
+        self.assertIn('https://music.163.com/song?id=42', reply)
+        self.assertNotIn('search.html', reply)
 
     def test_compact_music_delivers_a_single_full_item(self):
         folder = Path('workspace')

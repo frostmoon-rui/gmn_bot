@@ -2642,6 +2642,7 @@ async def main():
     open_music = OpenMusic(
         setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,
         silk_module=setting('MEDIA_SILK_MODULE'),
+        preview_catalog=setting('MUSIC_PREVIEW_CATALOG', []),
     )
     media_separation = MediaSeparation(
         setting('MEDIA_SPLEETER_EXE'), setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,

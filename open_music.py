@@ -15,6 +15,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from unicodedata import normalize
 from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bot_features import message_text, reply_belongs_to
 from media_separation import (
@@ -33,11 +34,11 @@ VOICE_PART_SECONDS = 120
 CATALOG_ERRORS = (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException)
 MESSAGES = {
     'choose': 'Choose with /get track NUMBER.',
-    'none': 'No exact downloadable recording was found. Try adding the artist.',
+    'none': 'No full recording was available to send.',
     'search_error': 'The music catalogs are temporarily unavailable.',
     'ambiguous': 'Several recordings have this title. Add the artist to /play music.',
     'approximate': 'Closest downloadable result for {query}',
-    'preview': 'Listen on NetEase Cloud Music or Kugou',
+    'preview_search': 'Search on Kugou',
     'netease': 'NetEase Cloud Music',
     'kugou': 'Kugou',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
@@ -348,6 +349,114 @@ def netease_search_url(title):
     return 'https://music.163.com/#/search/m/?' + urlencode({'s': title, 'type': 1})
 
 
+class _NoCatalogRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _platform_response(url):
+    referer = 'https://www.kugou.com/' if urlsplit(url).hostname == 'songsearch.kugou.com' else 'https://music.163.com/'
+    request = Request(url, headers={
+        'User-Agent': 'Mozilla/5.0', 'Referer': referer, 'Accept': 'application/json, text/javascript, */*; q=0.01',
+    })
+    with build_opener(_NoCatalogRedirect()).open(request, timeout=6) as response:
+        return json.loads(response.read(512 * 1024))
+
+
+def _platform_candidates(platform, query):
+    title, artist = _query_parts(query)
+    search_title = re.sub(r'\s*\([^()]+\)\s*$', '', title).strip() or title
+    if platform == 'kugou':
+        for page_size in (12, 15):
+            params = urlencode({'keyword': search_title, 'page': 1, 'pagesize': page_size, 'platform': 'WebFilter', 'userid': 0})
+            payload = _platform_response('https://songsearch.kugou.com/song_search_v2?' + params)
+            rows = (payload.get('data') or {}).get('lists') or []
+            if rows:
+                break
+    else:
+        params = urlencode({'s': search_title, 'type': 1, 'limit': 12})
+        payload = _platform_response('https://music.163.com/api/search/get?' + params)
+        rows = (payload.get('result') or {}).get('songs') or []
+    requested = _key(title)
+    requested_artists = set(_artist_key(artist))
+    results = []
+    for row in rows[:12]:
+        if not isinstance(row, dict):
+            continue
+        if platform == 'kugou':
+            base = str(row.get('SongName') or '')
+            suffix = str(row.get('Suffix') or '').strip()
+            name = base if not suffix or _key(base).endswith(_key(suffix)) else f'{base} {suffix}'
+            creator = str(row.get('SingerName') or '')
+            file_hash = str(row.get('FileHash') or '')
+            album = str(row.get('AlbumID') or '')
+            if not re.fullmatch(r'[0-9a-fA-F]{32}', file_hash) or not re.fullmatch(r'[0-9]{1,16}', album):
+                continue
+            url = 'https://www.kugou.com/song/#' + urlencode({'hash': file_hash, 'album_id': album})
+        else:
+            name = str(row.get('name') or '')
+            base = re.sub(r'\s*\([^()]+\)\s*$', '', normalize('NFKC', name)).strip()
+            artist_rows = row.get('artists') or []
+            creator = ' / '.join(str(item.get('name') or '') for item in artist_rows if isinstance(item, dict))
+            ident = str(row.get('id') or '')
+            if not re.fullmatch(r'[0-9]{1,16}', ident):
+                continue
+            url = f'https://music.163.com/song?id={ident}'
+        if not creator.strip() or not requested or requested not in {_key(base), _key(name)}:
+            continue
+        track = Release(' '.join(name.split())[:120], ' '.join(creator.split())[:120], '', url)
+        if not artist or (requested_artists and requested_artists <= set(_artist_key(creator))):
+            results.append(track)
+    return results
+
+
+def search_platform_tracks(query):
+    def search(platform):
+        try:
+            return _platform_candidates(platform, query)
+        except CATALOG_ERRORS:
+            return []
+
+    with ThreadPoolExecutor(max_workers=2) as worker:
+        kugou, netease = worker.map(search, ('kugou', 'netease'))
+    if not kugou:
+        identities = {(_key(entry.title), tuple(_artist_key(entry.creator))) for entry in netease}
+        return [('netease', netease[0])] if len(identities) == 1 else []
+    selected = kugou[0]
+    links = [('kugou', selected)]
+    for entry in netease:
+        if _key(entry.title) == _key(selected.title) and _same_artist(entry, selected.creator):
+            links.append(('netease', entry))
+            break
+    return links
+
+
+def configured_platform_track(entries, query):
+    if not isinstance(entries, list):
+        return None
+    title, artist = _query_parts(query)
+    key = _key(title)
+    if not key:
+        return None
+    for row in entries:
+        if not isinstance(row, dict) or not all(isinstance(row.get(key), str) for key in ('title', 'creator', 'url')):
+            continue
+        url = row['url']
+        if re.fullmatch(r'https://www\.kugou\.com/song/#hash=[0-9a-fA-F]{32}&album_id=[0-9]{1,16}', url):
+            platform = 'kugou'
+        elif re.fullmatch(r'https://music\.163\.com/song\?id=[0-9]{1,16}', url):
+            platform = 'netease'
+        else:
+            continue
+        track = Release(row['title'], row['creator'], '', url)
+        aliases = row.get('aliases')
+        if key == _key(track.title) or (isinstance(aliases, list) and
+                any(isinstance(alias, str) and key == _key(alias) for alias in aliases)):
+            if not artist or _same_artist(track, artist):
+                return platform, track
+    return None
+
+
 def prepare_track(track, ffmpeg, workspace):
     def read_recording(url, folder):
         recording = normalize_link_audio(ffmpeg, url, folder)
@@ -395,11 +504,12 @@ def prepare_link(url, ffmpeg, workspace):
 
 
 class OpenMusic:
-    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None):
+    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None, preview_catalog=None):
         self.ffmpeg = Path(ffmpeg) if ffmpeg else None
         self.spawn, self.send = spawn, send
         self.silk_module = silk_module
         self.messages = MESSAGES | (messages or {})
+        self.preview_catalog = preview_catalog
         self.results = {}
         self.active = set()
 
@@ -436,21 +546,29 @@ class OpenMusic:
         self.spawn(run())
         return None
 
-    def _preview(self, query):
+    async def _preview(self, query):
+        configured = configured_platform_track(self.preview_catalog, query)
+        links = [configured] if configured else await asyncio.to_thread(search_platform_tracks, query)
+        if not links:
+            return f"{self.messages['preview_search']} {kugou_search_url(query)}"
+        recording = links[0][1]
         return '\n'.join([
-            self.messages['preview'],
-            f"{self.messages['netease']} {netease_search_url(query)}",
-            f"{self.messages['kugou']} {kugou_search_url(query)}",
+            f"{recording.title} · {recording.creator}",
+            *(f"{self.messages[platform]} {track.source}" for platform, track in links),
         ])
 
     async def _search(self, key, ws, kind, group, user, query):
+        configured = configured_platform_track(self.preview_catalog, query)
+        if configured:
+            track = configured[1]
+            query = f'{track.title} - {track.creator}'
         try:
             results = await asyncio.to_thread(search_tracks, query)
         except (MediaError, OSError, ValueError, KeyError, http.client.HTTPException):
             text = self.messages['search_error']
         else:
             tracks = [track for track in results if _exact_track(track, query)]
-            nearest = _closest_track(results, query) if not tracks else None
+            nearest = _closest_track(results, query) if not tracks and not configured else None
             if nearest:
                 tracks = [nearest]
             if len(tracks) == 1 and not _query_parts(query)[1]:
@@ -458,7 +576,7 @@ class OpenMusic:
                 track = tracks[0]
                 if any(not _same_artist(track, item.creator) for item in releases):
                     artists = list(dict.fromkeys(item.creator for item in releases))
-                    text = '\n'.join([self.messages['ambiguous'], ' / '.join(artists), self._preview(query)])
+                    text = '\n'.join([self.messages['ambiguous'], ' / '.join(artists), await self._preview(query)])
                     await self.send(ws, kind, group, user, text)
                     return
             if tracks:
@@ -473,7 +591,7 @@ class OpenMusic:
                 text = '\n'.join([*lines, self.messages['choose']])
             else:
                 text = self.messages['none']
-        await self.send(ws, kind, group, user, text + '\n' + self._preview(query))
+        await self.send(ws, kind, group, user, text + '\n' + await self._preview(query))
 
     async def _prepare_attachment(self, ws, workspace, event, message_id):
         async def call(action, params, timeout):
@@ -519,11 +637,11 @@ class OpenMusic:
                     'page', 'search_page', 'release_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'qq_video', 'audio', 'size'
                 }
                            else self.messages['download'])
-                await notify(failure + '\n' + self._preview(requested) if requested else failure)
+                await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
             except (OSError, RuntimeError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
                 failure = self.messages['download']
-                await notify(failure + '\n' + self._preview(requested) if requested else failure)
+                await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
             if track:
                 credits = self.messages['credits'].format(
@@ -533,7 +651,7 @@ class OpenMusic:
                 if requested and not _exact_track(track, requested):
                     credits = self.messages['approximate'].format(query=requested) + '\n' + credits
                 if requested:
-                    credits += '\n' + self._preview(requested)
+                    credits += '\n' + await self._preview(requested)
                 await notify(credits)
                 if parts and not file_only:
                     try:
