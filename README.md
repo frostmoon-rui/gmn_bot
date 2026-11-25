@@ -123,11 +123,12 @@ The project has not adopted a single open-source license. Third-party material r
 
 Reply to an uploaded audio file, a video with audio, a QQ voice message, or a public direct media link with `separate audio`. You can also send `separate audio: URL` or put the command in an attachment caption. The bot returns separate MP3 files for vocals and accompaniment. Add `voice` after the command for two additional QQ voice messages if the input is at most three minutes.
 
-- Set `MEDIA_SPLEETER_EXE` to an absolute path to the Spleeter CLI with a working `2stems` model. Keep the model and required libraries beside the executable. Set `MEDIA_FFMPEG_EXE` to an FFmpeg executable with the LAME MP3 encoder.
+- Set `MEDIA_SPLEETER_EXE` to an absolute path to [SpleeterMsvcExe](https://github.com/wudicgi/SpleeterMsvcExe/releases) with a working `2stems` model. Keep the model and required libraries beside the executable. Set `MEDIA_FFMPEG_EXE` to an [FFmpeg](https://ffmpeg.org/download.html) executable with the LAME MP3 encoder.
 - For SILK voice input, install Node.js and run `npm install --ignore-scripts --prefix PATH silk-wasm@3.7.1` in a local tools directory. Set `MEDIA_SILK_MODULE` to the absolute path to `PATH/node_modules/silk-wasm/lib/index.cjs`.
 - The bot checks for a decodable audio track first. It accepts up to 80 MiB and 10 minutes per job. One job runs at a time, with up to three active or queued jobs. Files are processed locally.
 - URL inputs must point to downloadable audio or video over public HTTP or HTTPS. Redirects are validated. If the system resolver only returns synthetic proxy addresses, public DNS resolution uses Cloudflare DNS over HTTPS. Streaming playlists and player pages are outside this input format.
 - `/kugou music SONG ARTIST` produces an official Kugou search link. Playback and subscription entitlements are handled on Kugou.
+- `/play music SONG ARTIST` searches Openverse for up to three downloadable recordings and includes the Kugou link. Use `/get track 1` in the same chat within 10 minutes. The bot sends an attributed MP3 and a QQ voice preview of up to 30 seconds. The search accepts public-domain, CC0, and CC BY results. An open recording can differ from the commercial release.
 
 ## Community maps and visual help
 

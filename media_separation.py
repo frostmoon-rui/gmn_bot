@@ -262,7 +262,7 @@ const { decode, getDuration } = require(modulePath);
     return decoded
 
 
-def separate_media(engine, ffmpeg, source, workspace, silk_module=None):
+def normalize_audio(ffmpeg, source, workspace, silk_module=None):
     source = decode_silk(source, workspace, silk_module)
     normalized = workspace / 'track.wav'
     # An explicit first-audio mapping rejects video-only content before Spleeter sees it.
@@ -276,22 +276,32 @@ def separate_media(engine, ffmpeg, source, workspace, silk_module=None):
     duration = _wave_seconds(normalized)
     if duration > MAX_SECONDS:
         raise MediaError('size')
-    result = _run([engine, '-m', '2stems', '-o', workspace / 'split.wav', normalized], 480)
+    return normalized, duration
+
+
+def encode_mp3(ffmpeg, source, output, seconds=None):
+    clip = ['-t', str(seconds)] if seconds else []
+    encoded = _run([ffmpeg, '-nostdin', '-v', 'error', '-i', source, *clip,
+                    '-c:a', 'libmp3lame', '-b:a', '192k', output], 60)
+    if encoded.returncode or not output.is_file() or not output.stat().st_size:
+        raise MediaError('processing')
+    return output
+
+
+def separate_media(engine, ffmpeg, source, workspace, silk_module=None):
+    normalized, duration = normalize_audio(ffmpeg, source, workspace, silk_module)
+    result = _run([engine, '-m', '2stems', normalized], 480)
     if result.returncode:
         raise MediaError('processing')
     outputs = {}
     # Spleeter wrappers may rename their output tracks. Translate disk names here.
     for role, aliases in {'vocals': ('vocals', '人声'), 'accompaniment': ('accompaniment', '伴奏')}.items():
-        candidates = [workspace / f'split.{alias}.wav' for alias in aliases]
+        candidates = [normalized.with_suffix(f'.{alias}.wav') for alias in aliases]
         track = next((candidate for candidate in candidates if candidate.is_file()), None)
         if track is None or abs(_wave_seconds(track) - duration) > 0.5:
             raise MediaError('processing')
         output = workspace / f'{role}.mp3'
-        encoded = _run([ffmpeg, '-nostdin', '-v', 'error', '-i', track, '-c:a', 'libmp3lame',
-                        '-b:a', '192k', output], 60)
-        if encoded.returncode or not output.is_file() or not output.stat().st_size:
-            raise MediaError('processing')
-        outputs[role] = output
+        outputs[role] = encode_mp3(ffmpeg, track, output)
     return duration, outputs
 
 

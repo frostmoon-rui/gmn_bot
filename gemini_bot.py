@@ -4,6 +4,7 @@ if __name__ == '__main__':
 
 from local_settings import setting
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
+from open_music import OpenMusic
 from model_proxy import select_model_proxy
 import asyncio
 import base64
@@ -1818,15 +1819,22 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
-    music_request = re.fullmatch(r'(/?)(?:kugou music)(?:\s+([^\r\n]+))?', cleaned_msg, re.I)
+    music_request = re.fullmatch(r'(/?)(play music|kugou music|get track)(?:\s+([^\r\n]+))?', cleaned_msg, re.I)
     if music_request:
         from bot_features import mention_targets
         mentions = mention_targets(raw_msg)
         if (mentions and not is_at_me) or not (msg_type == 'private' or music_request[1] or is_at_me):
             return
-        title = (music_request[2] or '').strip()
-        link = kugou_search_url(title) if 0 < len(title) <= 100 else None
-        await extensions.send(ws, msg_type, group_id, user_id, 'Usage: /kugou music SONG ARTIST' if link is None else 'Kugou Music' + ' · ' + title + '\n' + link)
+        command, value = music_request[2].lower(), (music_request[3] or '').strip()
+        if command == 'get track':
+            reply = open_music.start(ws, data, 'download', int(value)) if value in {'1', '2', '3'} else 'Usage: /get track 1'
+        elif not 0 < len(value) <= 100:
+            reply = 'Usage: /play music SONG ARTIST'
+        else:
+            link = 'Kugou Music' + ' · ' + value + '\n' + kugou_search_url(value)
+            reply = link if command == 'kugou music' else open_music.start(ws, data, 'search', value, link)
+        if reply:
+            await extensions.send(ws, msg_type, group_id, user_id, reply)
         return
 
     media_command = parse_media_command(cleaned_msg, 'separate audio', 'voice')
@@ -2597,8 +2605,11 @@ async def main():
     global features
     global videos
     features = Features(sys.modules[__name__])
-    global media_separation
+    global media_separation, open_music
     extensions = Extensions(sys.modules[__name__])
+    open_music = OpenMusic(
+        setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,
+    )
     media_separation = MediaSeparation(
         setting('MEDIA_SPLEETER_EXE'), setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,
         silk_module=setting('MEDIA_SILK_MODULE'),
