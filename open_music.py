@@ -17,7 +17,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from bot_features import message_text, reply_belongs_to
 from media_separation import (
-    MAX_BYTES, MediaError, _connect_public, download_media, encode_mp3, fetch_napcat_media, media_source,
+    MAX_BYTES, VOICE_SECONDS, MediaError, _connect_public, download_media, encode_mp3, fetch_napcat_media, media_source,
     normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
@@ -30,20 +30,20 @@ LICENSES = {
 VOICE_PART_SECONDS = 120
 CATALOG_ERRORS = (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException)
 MESSAGES = {
-    'choose': 'Use /get track 1, 2 or 3 to receive the MP3 and full QQ voice playback. Results expire after 10 minutes.',
-    'none': 'No matching downloadable recording was found. You can send the file or use /download audio with a media URL.',
+    'choose': 'Choose with /get track NUMBER.',
+    'none': 'No exact downloadable recording was found. Try adding the artist.',
     'search_error': 'The music catalogs are temporarily unavailable.',
+    'ambiguous': 'Several recordings have this title. Add the artist to /play music.',
     'release_links': 'Matching release pages · no full audio file was available to send',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
     'disabled': 'The local music downloader is unavailable.',
     'download': 'Could not download or process this recording. Try another result.',
-    'sending': 'I’ll download the recording and prepare QQ voice playback.',
     'file_failed': 'Delivery of the MP3 could not be confirmed. Check the chat before retrying.',
     'voice_failed': 'The MP3 was sent. I confirmed {sent}/{total} voice messages.',
-    'voice_parts': 'The full recording will be sent in {total} voice messages. Play them in order.',
-    'credits': '{title} · {creator}\n{source}\n{license}\nConverted to MP3 and QQ voice.',
+    'credits': '{title} · {creator}\n{source}\n{license}',
+    'track_unconfirmed': 'I could not confirm delivery. Check the chat before retrying.',
     'unknown_creator': 'Unknown creator',
     'page': 'No downloadable audio link was found on this page. Try a public media URL.',
     'playlist': 'This playlist format is unsupported. Try a downloadable file or a standard HLS recording.',
@@ -255,13 +255,7 @@ def _exact_track(track, query):
 
 
 def search_tracks(query):
-    title, artist = _query_parts(query)
-    # A specified recording must never resolve to a cover, instrumental or another version.
-    version = re.search(
-        r'[(\[]\s*(?:live|acoustic|remix|remaster(?:ed)?|instrumental|demo|cover|现场版|現場版|伴奏|翻唱)\b',
-        title, re.I,
-    )
-    strict = bool(artist or version)
+    title, _ = _query_parts(query)
     short_title = re.split(r'[([{【]', title, maxsplit=1)[0].strip()
     completed = 0
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -274,11 +268,9 @@ def search_tracks(query):
                     completed += 1
                 except CATALOG_ERRORS:
                     continue
-            if strict:
-                results = [track for track in results if _exact_track(track, query)]
-            if results:
-                unique = {track.url: track for track in results}
-                return sorted(unique.values(), key=lambda track: not _exact_track(track, query))[:3]
+            exact = {track.url: track for track in results if _exact_track(track, query)}
+            if exact:
+                return list(exact.values())[:3]
     if not completed:
         raise MediaError('search_error')
     return []
@@ -317,11 +309,13 @@ def netease_search_url(title):
 def prepare_track(track, ffmpeg, workspace):
     incoming = workspace / 'music.media'
     download_media(track.url, incoming)
-    return _encode_track(ffmpeg, *normalize_audio(ffmpeg, incoming, workspace), workspace)
+    return _encode_track(ffmpeg, *normalize_audio(ffmpeg, incoming, workspace), workspace, compact=True)
 
 
-def _encode_track(ffmpeg, normalized, duration, workspace):
+def _encode_track(ffmpeg, normalized, duration, workspace, *, compact=False):
     mp3 = encode_mp3(ffmpeg, normalized, workspace / 'track.mp3')
+    if compact:
+        return mp3, [mp3] if duration <= VOICE_SECONDS else []
     count = math.ceil(duration / VOICE_PART_SECONDS)
     if count == 1:
         return mp3, [mp3]
@@ -355,7 +349,7 @@ class OpenMusic:
             job = self._search(key, ws, kind, group, user, value)
         else:
             track = None
-            if operation == 'download':
+            if operation in {'download', 'download_file'}:
                 entry = self.results.get(key)
                 if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
                     return self.messages['expired']
@@ -365,7 +359,8 @@ class OpenMusic:
             if operation == 'attachment':
                 job = self._deliver(ws, kind, group, user, None, None, attachment=(event, value))
             else:
-                job = self._deliver(ws, kind, group, user, track, value if track is None else None)
+                job = self._deliver(ws, kind, group, user, track, value if track is None else None,
+                                    file_only=operation == 'download_file')
         self.active.add(key)
 
         async def run():
@@ -383,14 +378,21 @@ class OpenMusic:
         except (MediaError, OSError, ValueError, KeyError, http.client.HTTPException):
             text = self.messages['search_error']
         else:
+            tracks = [track for track in tracks if _exact_track(track, query)]
+            if len(tracks) == 1 and not _query_parts(query)[1]:
+                releases = await asyncio.to_thread(search_release_links, query)
+                track = tracks[0]
+                if any(not _exact_track(track, f"{query} - {item.creator}") for item in releases):
+                    artists = list(dict.fromkeys(item.creator for item in releases))
+                    await self.send(ws, kind, group, user, '\n'.join([self.messages['ambiguous'], ' / '.join(artists)]))
+                    return
             if tracks:
                 if len(self.results) >= 64:
                     del self.results[next(iter(self.results))]
                 self.results[key] = (time.monotonic() + 600, tracks)
-                exact = [track for track in tracks if _exact_track(track, query)]
-                if len(exact) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
-                    if await self._deliver(ws, kind, group, user, exact[0], None):
-                        return
+                if len(tracks) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
+                    await self._deliver(ws, kind, group, user, tracks[0], None)
+                    return
                 lines = [f'{i}. {track.title} · {track.creator or self.messages["unknown_creator"]}'
                          for i, track in enumerate(tracks, 1)]
                 text = '\n'.join([*lines, self.messages['choose']])
@@ -399,8 +401,8 @@ class OpenMusic:
         if text in (self.messages['none'], self.messages['search_error']):
             releases = await asyncio.to_thread(search_release_links, query)
             if releases:
-                lines = [f'{item.title} · {item.creator} · {item.album}\n{item.source}' for item in releases]
-                text = '\n'.join([text, self.messages['release_links'], *lines])
+                lines = [f'{item.title} · {item.creator}\n{item.source}' for item in releases[:2]]
+                text = '\n'.join([self.messages['release_links'], *lines])
         await self.send(ws, kind, group, user, text)
 
     async def _prepare_attachment(self, ws, workspace, event, message_id):
@@ -425,7 +427,7 @@ class OpenMusic:
 
         return await asyncio.to_thread(convert)
 
-    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None):
+    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -433,7 +435,6 @@ class OpenMusic:
             target = {'group_id': group} if kind == 'group' else {'user_id': user}
             return await ws.send(json.dumps({'action': action, 'params': target | params}), receipt_timeout=timeout)
 
-        await notify(self.messages['sending'])
         with tempfile.TemporaryDirectory(prefix='gmn-music-', ignore_cleanup_errors=True) as folder:
             try:
                 workspace = Path(folder)
@@ -457,19 +458,32 @@ class OpenMusic:
                     title=track.title, creator=track.creator or self.messages['unknown_creator'],
                     source=track.source, license=track.license_url,
                 ))
+                if parts and not file_only:
+                    try:
+                        await call('send_' + kind + '_msg', {
+                            'message': [{'type': 'record', 'data': {'file': mp3.as_uri()}}],
+                        }, 60)
+                    except (TimeoutError, OSError):
+                        await notify(self.messages['track_unconfirmed'])
+                        return True
+                    except RuntimeError:
+                        # NapCat rejected the voice. Deliver the full file instead.
+                        pass
+                    else:
+                        return True
             try:
                 await call('upload_' + kind + '_file', {'file': str(mp3), 'name': 'track.mp3'}, 120)
-            except (OSError, RuntimeError):
+            except (TimeoutError, OSError, RuntimeError):
                 await notify(self.messages['file_failed'])
                 return True
-            if len(parts) > 1:
-                await notify(self.messages['voice_parts'].format(total=len(parts)))
+            if track:
+                return True
             for index, voice in enumerate(parts):
                 try:
                     await call('send_' + kind + '_msg', {
                         'message': [{'type': 'record', 'data': {'file': voice.as_uri()}}],
                     }, 60)
-                except (OSError, RuntimeError):
+                except (TimeoutError, OSError, RuntimeError):
                     await notify(self.messages['voice_failed'].format(sent=index, total=len(parts)))
                     break
             return True

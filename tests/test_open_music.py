@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from open_music import (
-    MESSAGES, OpenMusic, _archive, _encode_track, _exact_track, _query_parts, _track,
+    MESSAGES, OpenMusic, Release, _archive, _encode_track, _exact_track, _query_parts, _track,
     search_release_links, search_tracks,
 )
 
@@ -92,6 +92,47 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             commons.return_value = [correct]
             self.assertEqual(search_tracks(query), [correct])
 
+    def test_title_only_filters_out_related_songs_and_other_versions(self):
+        wrong = _track(SAMPLE | {'title': 'I Wanna See You Again'})
+        cover = _track(SAMPLE | {'title': 'See You Again (Cover)'})
+        right = _track(SAMPLE | {'title': 'See You Again'})
+        with (
+            patch('open_music._openverse', return_value=[wrong, cover]),
+            patch('open_music._commons', return_value=[]) as commons,
+        ):
+            self.assertEqual(search_tracks('see you again'), [])
+            commons.return_value = [right]
+            self.assertEqual(search_tracks('see you again'), [right])
+            self.assertEqual(search_tracks('see you again DJ'), [])
+
+    async def test_title_only_does_not_choose_a_different_same_title_artist(self):
+        event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
+        tasks, send = [], AsyncMock()
+        release = Release('Piano piece', 'Another Artist', 'Album', 'https://example.test/release')
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'ffmpeg'
+            executable.touch()
+            worker = OpenMusic(executable, lambda coro: tasks.append(asyncio.create_task(coro)), send)
+            with (
+                patch('open_music.search_tracks', return_value=[_track(SAMPLE)]),
+                patch('open_music.search_release_links', return_value=[release]),
+                patch.object(worker, '_deliver', new_callable=AsyncMock) as deliver,
+            ):
+                worker.start(object(), event, 'search', 'Piano piece')
+                await tasks[0]
+                deliver.assert_not_awaited()
+            self.assertIn('Another Artist', send.call_args.args[-1])
+            self.assertFalse(worker.results)
+
+    def test_compact_music_delivers_a_single_full_item(self):
+        folder = Path('workspace')
+        with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, input, output: output) as encode:
+            mp3, parts = _encode_track('ffmpeg', folder/'track.wav', 166, folder, compact=True)
+            self.assertEqual(parts, [mp3])
+            mp3, parts = _encode_track('ffmpeg', folder/'track.wav', 190, folder, compact=True)
+            self.assertEqual(parts, [])
+        self.assertEqual(encode.call_count, 2)
+
     def test_voice_parts_cover_the_whole_track(self):
         root = Path('workspace')
         with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, source, output, *a, **kw: output) as encode:
@@ -157,7 +198,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 await tasks[0]
         self.assertEqual(actions, ['get_msg', 'get_file', 'upload_group_file', 'send_group_msg'])
 
-    async def test_results_are_chat_scoped_and_voice_parts_are_sent_in_order(self):
+    async def test_selection_is_chat_scoped_and_sends_one_voice_or_requested_file(self):
         tasks, messages, actions, voices = [], [], [], []
 
         async def send(ws, kind, group, user, message):
@@ -177,10 +218,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(track, _track(SAMPLE))
             output = directory / 'sample.mp3'
             output.write_bytes(b'mock audio')
-            parts = [directory / f'voice-{index}.mp3' for index in (1, 2)]
-            for part in parts:
-                part.write_bytes(b'mock voice')
-            return output, parts
+            return output, [output]
 
         event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
         ws = SimpleNamespace(send=call)
@@ -188,8 +226,9 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             executable = Path(directory) / 'ffmpeg'
             executable.touch()
             music = OpenMusic(executable, lambda coro: tasks.append(asyncio.create_task(coro)), send)
-            with patch('open_music.search_tracks', return_value=[_track(SAMPLE)]):
-                self.assertIsNone(music.start(ws, event, 'search', 'Piano'))
+            second = _track(SAMPLE | {'creator': 'Second artist', 'url': 'https://audio.example.test/second.mp3'})
+            with patch('open_music.search_tracks', return_value=[_track(SAMPLE), second]):
+                self.assertIsNone(music.start(ws, event, 'search', 'Piano piece'))
                 await tasks[-1]
             self.assertIn('Piano piece', messages[-1])
             self.assertEqual(music.start(ws, event | {'group_id': 21}, 'download', 1), MESSAGES['expired'])
@@ -197,6 +236,10 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             with patch('open_music.prepare_track', side_effect=prepare):
                 self.assertIsNone(music.start(ws, event, 'download', 1))
                 await tasks[-1]
-        self.assertEqual(actions, ['upload_group_file', 'send_group_msg', 'send_group_msg'])
-        self.assertEqual(voices, ['voice-1.mp3', 'voice-2.mp3'])
-        self.assertTrue(any('https://creativecommons.org/licenses/by/4.0/' in text for text in messages))
+                self.assertIsNone(music.start(ws, event, 'download_file', 1))
+                await tasks[-1]
+        self.assertEqual(actions, ['send_group_msg', 'upload_group_file'])
+        self.assertEqual(voices, ['sample.mp3'])
+        self.assertEqual(len(messages), 3)
+        for text in messages[1:]:
+            self.assertIn('https://creativecommons.org/licenses/by/4.0/', text)

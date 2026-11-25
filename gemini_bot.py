@@ -1843,7 +1843,12 @@ async def handle_message_event(ws, data):
             else:
                 reply = 'Use /download audio URL or reply to a media file with /download audio.'
         elif command == 'get track':
-            reply = open_music.start(ws, data, 'download', int(value)) if value in {'1', '2', '3'} else 'Usage: /get track 1'
+            selection = re.fullmatch(r'([1-3])(?:\s+(file))?', value, re.I)
+            if selection:
+                operation = 'download_file' if selection[2] else 'download'
+                reply = open_music.start(ws, data, operation, int(selection[1]))
+            else:
+                reply = 'Use /get track 1, or /get track 1 file for the MP3.'
         elif not 0 < len(value) <= 100:
             reply = 'Usage: /play music SONG ARTIST'
         else:
