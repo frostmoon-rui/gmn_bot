@@ -43,7 +43,7 @@ MESSAGES = {
     'preview_search': 'Search on Kugou',
     'netease': 'NetEase Cloud Music',
     'qqmusic': 'QQ Music',
-    'qqmusic_trial': 'QQ Music preview · {seconds}s',
+    'qqmusic_trial': 'QQ Music · VIP track, {seconds}s preview',
     'qqmusic_full': 'QQ Music · full track',
     'kugou': 'Kugou',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
