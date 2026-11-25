@@ -1,4 +1,4 @@
-"""Detect the playback URL of a known Jamendo recording using Live Stream Downloader."""
+"""Detect recordings from supported players using Live Stream Downloader."""
 
 import json
 import os
@@ -8,8 +8,12 @@ from pathlib import Path
 from threading import Lock
 from urllib.parse import parse_qs, urlsplit
 
+from media_separation import MediaError, download_media
+
 
 EXTENSION_ID = 'looepbdllpjgdmkpdcdffhdbmpbcfekj'
+QQ_PLAYER = 'https://y.qq.com/n/ryqq_v2/player'
+QQ_TRACK = 'https://y.qq.com/n/ryqq_v2/songDetail/'
 BROWSER_PROFILES = ('Microsoft/Edge/User Data', 'Google/Chrome/User Data')
 BROWSER_SLOT = Lock()
 BRIDGE = r"""
@@ -93,12 +97,103 @@ def find_extension():
 
 
 def _make_bridge(path):
-    path.mkdir()
+    path.mkdir(exist_ok=True)
     manifest = {'manifest_version': 3, 'name': 'GMN recording detector bridge', 'version': '1.0',
                 'permissions': ['tabs'], 'background': {'service_worker': 'gmn-bridge.js'}}
     (path/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
     (path/'gmn-bridge.js').write_text('chrome.runtime.onInstalled.addListener(() => {});', encoding='utf-8')
     (path/'probe.html').write_text('<!doctype html><title>Recording detector</title>', encoding='utf-8')
+
+
+def qqmusic_profile():
+    local = os.environ.get('LOCALAPPDATA')
+    return Path(local, 'GMN-Bot/qqmusic-automation/profile') if local else None
+
+
+def qqmusic_track_id(source):
+    match = re.fullmatch(r'https://i2\.y\.qq\.com/a/song/([a-zA-Z0-9]{1,32})', source)
+    return match[1] if match else None
+
+
+def _qqmusic_media(url):
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme == 'https' and parts.port in (None, 443) and parts.username is None
+                and '\\' not in url and len(url) <= 4096
+                and bool(re.fullmatch(r'[a-z0-9-]+\.stream\.qqmusic\.qq\.com', parts.hostname or ''))
+                and bool(re.fullmatch(r'/[A-Za-z0-9]+\.mp3', parts.path)))
+    except ValueError:
+        return False
+
+
+def _qqmusic_stream(context, worker, track_id):
+    page = context.pages[0]
+    page.goto(QQ_TRACK + track_id, wait_until='domcontentloaded', timeout=14000)
+    observed = set()
+
+    def remember(response):
+        if (response.status in (200, 206) and _qqmusic_media(response.url)
+                and not response.from_service_worker and response.frame.url == QQ_PLAYER):
+            observed.add(response.url)
+
+    context.on('response', remember)
+    with context.expect_page(timeout=8000) as opened:
+        page.get_by_text('\u64ad\u653e', exact=True).first.click(timeout=8000)
+    player = opened.value
+    player.wait_for_url(QQ_PLAYER, timeout=8000)
+    row = player.locator(f'a[href*="/songDetail/{track_id}"]').first.locator('xpath=ancestor::li[1]')
+    row.wait_for(timeout=5000)
+    match = re.search(r'(?<!\d)(\d{1,2}):([0-5]\d)(?!\d)', row.inner_text(timeout=3000))
+    if match is None:
+        return None
+    duration = int(match[1]) * 60 + int(match[2])
+    helper = context.new_page()
+    helper.goto(worker.url.rsplit('/', 1)[0] + '/probe.html', timeout=5000)
+    candidates = helper.evaluate(BRIDGE, {'extensionId': EXTENSION_ID, 'url': player.url})
+    matched = {url for url in candidates if url in observed}
+    if len(matched) != 1:
+        return None
+    trial = '\u5b8c\u6574\u64ad\u653e\u9700\u8981\u5f00\u901a\u4f1a\u5458' in player.locator('body').inner_text(timeout=3000)
+    return matched.pop(), duration, trial
+
+
+def capture_qqmusic(source, target):
+    track_id = qqmusic_track_id(source)
+    profile = qqmusic_profile()
+    extension = find_extension() if track_id and profile and (profile / 'Local State').is_file() else None
+    if not extension or not BROWSER_SLOT.acquire(timeout=2):
+        return None
+    try:
+        from playwright.sync_api import sync_playwright
+
+        bridge = profile.parent / 'bridge'
+        _make_bridge(bridge)
+        roots = f'{extension},{bridge}'
+        with sync_playwright() as runtime:
+            context = runtime.chromium.launch_persistent_context(
+                profile, channel='chromium', headless=True, locale='zh-CN', timeout=15000,
+                args=[f'--disable-extensions-except={roots}', f'--load-extension={roots}',
+                      '--disable-background-networking', '--mute-audio',
+                      '--disk-cache-size=16777216', '--media-cache-size=16777216'],
+            )
+            try:
+                worker = next((item for item in context.service_workers if item.url.endswith('/gmn-bridge.js')), None)
+                if worker is None:
+                    worker = context.wait_for_event('serviceworker',
+                        predicate=lambda item: item.url.endswith('/gmn-bridge.js'), timeout=6000)
+                stream = _qqmusic_stream(context, worker, track_id)
+                if stream is None:
+                    return None
+                url, duration, trial = stream
+                download_media(url, target, allowed_url=_qqmusic_media)
+                return duration, trial
+            finally:
+                context.close()
+    except Exception as error:
+        print('[QQ Music browser unavailable]:', type(error).__name__)
+        return None
+    finally:
+        BROWSER_SLOT.release()
 
 
 def _detect(context, bridge_url, source):
@@ -160,3 +255,20 @@ def detect_recording(source):
         return []
     finally:
         BROWSER_SLOT.release()
+
+
+if __name__ == '__main__':
+    from playwright.sync_api import sync_playwright
+
+    profile = qqmusic_profile()
+    if profile is None:
+        raise SystemExit('This login setup requires Windows LOCALAPPDATA.')
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as runtime:
+        context = runtime.chromium.launch_persistent_context(
+            profile, channel='chromium', headless=False, locale='zh-CN', timeout=15000,
+            args=['--disable-background-networking', '--no-first-run'],
+        )
+        context.pages[0].goto('https://y.qq.com/', wait_until='domcontentloaded', timeout=20000)
+        print('Sign in to QQ Music, then close the dedicated browser window.', flush=True)
+        context.wait_for_event('close', timeout=0)

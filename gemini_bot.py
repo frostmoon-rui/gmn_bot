@@ -2644,6 +2644,7 @@ async def main():
         silk_module=setting('MEDIA_SILK_MODULE'),
         preview_catalog=setting('MUSIC_PREVIEW_CATALOG', []),
         official=OfficialMusic(qq_key=setting('QQMUSIC_API_KEY'), netease_cli=setting('NCM_CLI_JS')),
+        qqmusic_browser=str(setting('QQMUSIC_BROWSER_CAPTURE', False)).lower() == 'true',
     )
     media_separation = MediaSeparation(
         setting('MEDIA_SPLEETER_EXE'), setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,

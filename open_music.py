@@ -25,7 +25,7 @@ from media_separation import (
     normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
-from music_capture import detect_recording
+from music_capture import capture_qqmusic, detect_recording
 
 
 LICENSES = {
@@ -43,6 +43,8 @@ MESSAGES = {
     'preview_search': 'Search on Kugou',
     'netease': 'NetEase Cloud Music',
     'qqmusic': 'QQ Music',
+    'qqmusic_trial': 'QQ Music preview · {seconds}s',
+    'qqmusic_full': 'QQ Music · full track',
     'kugou': 'Kugou',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
@@ -622,14 +624,34 @@ def prepare_link(url, ffmpeg, workspace):
     return _encode_track(ffmpeg, *normalize_link_audio(ffmpeg, url, workspace), workspace)
 
 
+def prepare_qqmusic(release, ffmpeg, workspace):
+    source = workspace / 'qqmusic.mp3'
+    playback = capture_qqmusic(release.source, source)
+    if playback is None:
+        raise MediaError('source')
+    expected, trial = playback
+    normalized, duration = normalize_audio(ffmpeg, source, workspace)
+    if trial:
+        if not 0 < duration <= 61:
+            raise MediaError('format')
+        mp3 = encode_mp3(ffmpeg, normalized, workspace / 'preview.mp3', min(duration, 60))
+        return mp3, [mp3], trial, round(min(duration, 60))
+    if abs(duration - expected) > 3:
+        raise MediaError('format')
+    mp3, parts = _encode_track(ffmpeg, normalized, duration, workspace, compact=True)
+    return mp3, parts, trial, round(duration)
+
+
 class OpenMusic:
-    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None, preview_catalog=None, official=None):
+    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None, preview_catalog=None, official=None,
+                 qqmusic_browser=False):
         self.ffmpeg = Path(ffmpeg) if ffmpeg else None
         self.spawn, self.send = spawn, send
         self.silk_module = silk_module
         self.messages = MESSAGES | (messages or {})
         self.preview_catalog = preview_catalog
         self.official = official
+        self.qqmusic_browser = qqmusic_browser
         self.preview_cache = {}
         self.results = {}
         self.active = set()
@@ -718,9 +740,24 @@ class OpenMusic:
 
     async def _search(self, key, ws, kind, group, user, query):
         configured = configured_platform_track(self.preview_catalog, query)
+        original_query = query
         if configured:
             track = configured[1]
             query = f'{track.title} - {track.creator}'
+        if (self.qqmusic_browser and self.official and self.official.qq_key
+                and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file()):
+            try:
+                candidates = await asyncio.to_thread(self.official.search, 'qqmusic', original_query)
+            except CATALOG_ERRORS:
+                candidates = []
+            if configured:
+                candidates = [entry for entry in candidates if recording_key(entry) == recording_key(configured[1])]
+            exact = [entry for entry in candidates if _exact_track(entry, query)]
+            options = {entry.source: entry for entry in exact or candidates}
+            if len(options) == 1 and await self._deliver(
+                ws, kind, group, user, None, None, qqmusic=next(iter(options.values())), report_failure=False,
+            ):
+                return
         try:
             results = await asyncio.to_thread(search_tracks, query)
         except (MediaError, OSError, ValueError, KeyError, http.client.HTTPException):
@@ -783,7 +820,8 @@ class OpenMusic:
 
         return await asyncio.to_thread(convert)
 
-    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None, report_failure=True):
+    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None,
+                       report_failure=True, qqmusic=None):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -796,6 +834,8 @@ class OpenMusic:
                 workspace = Path(folder)
                 if attachment:
                     mp3, parts = await self._prepare_attachment(ws, workspace, *attachment)
+                elif qqmusic:
+                    mp3, parts, trial, seconds = await asyncio.to_thread(prepare_qqmusic, qqmusic, self.ffmpeg, workspace)
                 else:
                     prepare, source = (prepare_track, track) if track else (prepare_link, url)
                     mp3, parts = await asyncio.to_thread(prepare, source, self.ffmpeg, workspace)
@@ -813,17 +853,21 @@ class OpenMusic:
                 if report_failure:
                     await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
-            if track:
-                credits = self.messages['credits'].format(
-                    title=track.title, creator=track.creator or self.messages['unknown_creator'],
-                    source=track.source, license=track.license_url,
-                )
-                if requested and not _exact_track(track, requested):
-                    credits = self.messages['approximate'].format(query=requested) + '\n' + credits
-                if requested and track.creator:
-                    preview = await self._preview(f'{track.title} - {track.creator}', search_fallback=False)
-                    if preview:
-                        credits += '\n' + preview
+            if qqmusic or track:
+                if qqmusic:
+                    label = self.messages['qqmusic_trial' if trial else 'qqmusic_full'].format(seconds=seconds)
+                    credits = f'{qqmusic.title} · {qqmusic.creator}\n{label}\n{qqmusic.source}'
+                else:
+                    credits = self.messages['credits'].format(
+                        title=track.title, creator=track.creator or self.messages['unknown_creator'],
+                        source=track.source, license=track.license_url,
+                    )
+                    if requested and not _exact_track(track, requested):
+                        credits = self.messages['approximate'].format(query=requested) + '\n' + credits
+                    if requested and track.creator:
+                        preview = await self._preview(f'{track.title} - {track.creator}', search_fallback=False)
+                        if preview:
+                            credits += '\n' + preview
                 await notify(credits)
                 if parts and not file_only:
                     try:
@@ -839,11 +883,11 @@ class OpenMusic:
                     else:
                         return True
             try:
-                await call('upload_' + kind + '_file', {'file': str(mp3), 'name': 'track.mp3'}, 120)
+                await call('upload_' + kind + '_file', {'file': str(mp3), 'name': mp3.name}, 120)
             except (TimeoutError, OSError, RuntimeError):
                 await notify(self.messages['file_failed'])
                 return True
-            if track:
+            if qqmusic or track:
                 return True
             for index, voice in enumerate(parts):
                 try:

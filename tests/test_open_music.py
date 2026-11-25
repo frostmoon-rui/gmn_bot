@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from music_capture import jamendo_track_id, match_jamendo_media
 from open_music import (
-    OfficialMusic,
+    OfficialMusic, prepare_qqmusic,
     MESSAGES, OpenMusic, Release, configured_platform_track, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
     search_platform_tracks, search_release_links, search_tracks,
 )
@@ -32,6 +32,36 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
         patcher = patch('open_music._archive', return_value=[])
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_qqmusic_caps_and_labels_a_trial_and_rejects_truncated_full_tracks(self):
+        release = Release('Sample', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
+        workspace = Path('workspace')
+        with (
+            patch('open_music.capture_qqmusic', return_value=(211, True)) as capture,
+            patch('open_music.normalize_audio', return_value=(workspace / 'track.wav', 60.4)),
+            patch('open_music.encode_mp3', return_value=workspace / 'preview.mp3') as encode,
+        ):
+            path, parts, trial, seconds = prepare_qqmusic(release, 'ffmpeg', workspace)
+            self.assertEqual((path, parts, trial, seconds), (workspace / 'preview.mp3', [path], True, 60))
+            capture.assert_called_once_with(release.source, workspace / 'qqmusic.mp3')
+            self.assertEqual(encode.call_args.args[-1], 60)
+            capture.return_value = (211, False)
+            with self.assertRaisesRegex(Exception, 'format'):
+                prepare_qqmusic(release, 'ffmpeg', workspace)
+
+    async def test_qqmusic_unique_match_is_tried_before_download_catalogs(self):
+        release = Release('Sample', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
+        official = SimpleNamespace(qq_key='test-key', search=lambda *_: [release])
+        with tempfile.TemporaryDirectory() as directory:
+            ffmpeg = Path(directory, 'ffmpeg')
+            ffmpeg.touch()
+            bot = OpenMusic(ffmpeg, None, AsyncMock(), official=official, qqmusic_browser=True)
+            with patch.object(bot, '_deliver', AsyncMock(return_value=True)) as deliver, patch(
+                'open_music.search_tracks',
+            ) as fallback:
+                await bot._search('key', 'ws', 'private', 0, 1, 'Sample - Performer')
+                deliver.assert_awaited_once_with('ws', 'private', 0, 1, None, None, qqmusic=release, report_failure=False)
+                fallback.assert_not_called()
 
     def test_official_qq_search_posts_only_the_keyword_and_checks_the_recording(self):
         with patch('open_music.build_opener') as opener:
