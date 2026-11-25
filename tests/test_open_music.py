@@ -355,14 +355,68 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('https://music.163.com/song?id=42', reply)
         self.assertNotIn('search.html', reply)
 
-    def test_compact_music_delivers_a_single_full_item(self):
-        folder = Path('workspace')
-        with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, input, output: output) as encode:
-            mp3, parts = _encode_track('ffmpeg', folder/'track.wav', 166, folder, compact=True)
+    def test_music_uses_one_voice_up_to_three_minutes_and_splits_longer_tracks(self):
+        workspace = Path('workspace')
+        with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, source, output, *a, **kw: output) as encode:
+            mp3, parts = _encode_track('ffmpeg', workspace / 'track.wav', 180, workspace, compact=True)
             self.assertEqual(parts, [mp3])
-            mp3, parts = _encode_track('ffmpeg', folder/'track.wav', 190, folder, compact=True)
-            self.assertEqual(parts, [])
-        self.assertEqual(encode.call_count, 2)
+            mp3, parts = _encode_track('ffmpeg', workspace / 'track.wav', 222, workspace, compact=True)
+        self.assertEqual([part.name for part in parts], ['voice-1.mp3', 'voice-2.mp3'])
+        self.assertEqual([call.args[3] for call in encode.call_args_list[-2:]], [111, 111])
+        self.assertEqual([call.kwargs['start'] for call in encode.call_args_list[-2:]], [0, 111])
+        with patch('open_music.encode_mp3', return_value=mp3) as encode:
+            self.assertEqual(_encode_track('ffmpeg', workspace / 'track.wav', 222, workspace,
+                                           compact=True, file_only=True), (mp3, []))
+        encode.assert_called_once()
+
+    async def test_qqmusic_delivers_clips_in_order_or_falls_back_only_on_explicit_rejection(self):
+        release = Release('Sample', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
+
+        def prepare(release, ffmpeg, directory, *, file_only=False):
+            mp3 = directory / 'track.mp3'
+            parts = [directory / 'voice-1.mp3', directory / 'voice-2.mp3']
+            for path in (mp3, *parts):
+                path.write_bytes(b'mock audio')
+            return mp3, parts, False, 222
+
+        cases = [
+            (None, False, ['voice-1.mp3', 'voice-2.mp3'], None),
+            (RuntimeError('rejected'), False, ['voice-1.mp3', 'voice-2.mp3', 'track.mp3'],
+             MESSAGES['voice_failed'].format(sent=1, total=2)),
+            (TimeoutError('receipt unknown'), False, ['voice-1.mp3', 'voice-2.mp3'], MESSAGES['track_unconfirmed']),
+            (None, True, ['track.mp3'], None),
+        ]
+        for error, file_only, expected_files, notice in cases:
+            with self.subTest(error=error, file_only=file_only):
+                files, uploads = [], []
+
+                async def call(payload, *, receipt_timeout):
+                    request = json.loads(payload)
+                    params = request['params']
+                    self.assertEqual(params['group_id'], 20)
+                    if request['action'] == 'send_group_msg':
+                        voice = params['message'][0]
+                        self.assertEqual(voice['type'], 'record')
+                        files.append(voice['data']['file'].rsplit('/', 1)[-1])
+                        if files[-1] == 'voice-2.mp3' and error:
+                            raise error
+                    else:
+                        self.assertEqual(request['action'], 'upload_group_file')
+                        uploaded = Path(params['file'])
+                        self.assertTrue(uploaded.is_file())
+                        uploads.append(uploaded)
+                        files.append(uploaded.name)
+
+                send = AsyncMock()
+                worker = OpenMusic(None, None, send)
+                with patch('open_music.prepare_qqmusic', side_effect=prepare):
+                    self.assertTrue(await worker._deliver(SimpleNamespace(send=call), 'group', 20, 30,
+                                                          None, None, qqmusic=release, file_only=file_only))
+                self.assertEqual(files, expected_files)
+                self.assertTrue(all(not path.exists() for path in uploads))
+                self.assertEqual(send.await_count, 2 if notice else 1)
+                if notice:
+                    self.assertEqual(send.await_args.args[-1], notice)
 
     def test_voice_parts_cover_the_whole_track(self):
         root = Path('workspace')
@@ -476,7 +530,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             else:
                 voices.append(request['params']['message'][0]['data']['file'].rsplit('/', 1)[-1])
 
-        def prepare(track, ffmpeg, directory):
+        def prepare(track, ffmpeg, directory, *, file_only=False):
             self.assertEqual(track, _track(SAMPLE))
             output = directory / 'sample.mp3'
             output.write_bytes(b'mock audio')

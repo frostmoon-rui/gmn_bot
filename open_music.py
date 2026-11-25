@@ -620,7 +620,7 @@ def configured_platform_track(entries, query):
     return None
 
 
-def prepare_track(track, ffmpeg, workspace):
+def prepare_track(track, ffmpeg, workspace, *, file_only=False):
     def read_recording(url, folder):
         recording = normalize_link_audio(ffmpeg, url, folder)
         if track.duration and abs(recording[1] - track.duration) > max(4, track.duration * .08):
@@ -645,16 +645,17 @@ def prepare_track(track, ffmpeg, workspace):
             break
         else:
             raise
-    return _encode_track(ffmpeg, *recording, workspace, compact=True)
+    return _encode_track(ffmpeg, *recording, workspace, compact=True, file_only=file_only)
 
 
-def _encode_track(ffmpeg, normalized, duration, workspace, *, compact=False):
+def _encode_track(ffmpeg, normalized, duration, workspace, *, compact=False, file_only=False):
     mp3 = encode_mp3(ffmpeg, normalized, workspace / 'track.mp3')
-    if compact:
-        return mp3, [mp3] if duration <= VOICE_SECONDS else []
-    count = math.ceil(duration / VOICE_PART_SECONDS)
-    if count == 1:
+    if file_only:
+        return mp3, []
+    single_voice_limit = VOICE_SECONDS if compact else VOICE_PART_SECONDS
+    if duration <= single_voice_limit:
         return mp3, [mp3]
+    count = math.ceil(duration / VOICE_PART_SECONDS)
     seconds = duration / count
     parts = [encode_mp3(ffmpeg, normalized, workspace / f'voice-{index + 1}.mp3',
                         seconds, start=index * seconds)
@@ -666,7 +667,7 @@ def prepare_link(url, ffmpeg, workspace):
     return _encode_track(ffmpeg, *normalize_link_audio(ffmpeg, url, workspace), workspace)
 
 
-def prepare_qqmusic(release, ffmpeg, workspace):
+def prepare_qqmusic(release, ffmpeg, workspace, *, file_only=False):
     source = workspace / 'qqmusic.mp3'
     playback = capture_qqmusic(release.source, source)
     if playback is None:
@@ -680,7 +681,7 @@ def prepare_qqmusic(release, ffmpeg, workspace):
         return mp3, [mp3], trial, round(min(duration, 60))
     if abs(duration - expected) > 3:
         raise MediaError('format')
-    mp3, parts = _encode_track(ffmpeg, normalized, duration, workspace, compact=True)
+    mp3, parts = _encode_track(ffmpeg, normalized, duration, workspace, compact=True, file_only=file_only)
     return mp3, parts, trial, round(duration)
 
 
@@ -977,10 +978,13 @@ class OpenMusic:
                 if attachment:
                     mp3, parts = await self._prepare_attachment(ws, workspace, *attachment)
                 elif qqmusic:
-                    mp3, parts, trial, seconds = await asyncio.to_thread(prepare_qqmusic, qqmusic, self.ffmpeg, workspace)
+                    mp3, parts, trial, seconds = await asyncio.to_thread(
+                        prepare_qqmusic, qqmusic, self.ffmpeg, workspace, file_only=file_only,
+                    )
+                elif track:
+                    mp3, parts = await asyncio.to_thread(prepare_track, track, self.ffmpeg, workspace, file_only=file_only)
                 else:
-                    prepare, source = (prepare_track, track) if track else (prepare_link, url)
-                    mp3, parts = await asyncio.to_thread(prepare, source, self.ffmpeg, workspace)
+                    mp3, parts = await asyncio.to_thread(prepare_link, url, self.ffmpeg, workspace)
             except MediaError as error:
                 reason = str(error)
                 failure = (self.messages[reason] if reason in {
@@ -995,6 +999,7 @@ class OpenMusic:
                 if report_failure:
                     await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
+            confirmed_parts = None
             if qqmusic or track:
                 if qqmusic:
                     label = self.messages['qqmusic_trial' if trial else 'qqmusic_full'].format(seconds=seconds)
@@ -1012,16 +1017,18 @@ class OpenMusic:
                             credits += '\n' + preview
                 await notify(credits)
                 if parts and not file_only:
-                    try:
-                        await call('send_' + kind + '_msg', {
-                            'message': [{'type': 'record', 'data': {'file': mp3.as_uri()}}],
-                        }, 60)
-                    except (TimeoutError, OSError):
-                        await notify(self.messages['track_unconfirmed'])
-                        return True
-                    except RuntimeError:
-                        # NapCat rejected the voice. Deliver the full file instead.
-                        pass
+                    for index, voice in enumerate(parts):
+                        try:
+                            await call('send_' + kind + '_msg', {
+                                'message': [{'type': 'record', 'data': {'file': voice.as_uri()}}],
+                            }, 60)
+                        except (TimeoutError, OSError):
+                            await notify(self.messages['track_unconfirmed'])
+                            return True
+                        except RuntimeError:
+                            # Use the full file only after QQ explicitly rejects a voice clip.
+                            confirmed_parts = index
+                            break
                     else:
                         return True
             try:
@@ -1030,6 +1037,8 @@ class OpenMusic:
                 await notify(self.messages['file_failed'])
                 return True
             if qqmusic or track:
+                if confirmed_parts is not None:
+                    await notify(self.messages['voice_failed'].format(sent=confirmed_parts, total=len(parts)))
                 return True
             for index, voice in enumerate(parts):
                 try:
