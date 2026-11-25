@@ -1823,12 +1823,18 @@ async def handle_message_event(ws, data):
     if music_request:
         from bot_features import mention_targets
         mentions = mention_targets(raw_msg)
-        if (mentions and not is_at_me) or not (msg_type == 'private' or music_request[1] or is_at_me):
-            return
         command, value = music_request[2].lower(), (music_request[3] or '').strip()
+        quoted = re.search(r"\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]", raw_msg)
+        quoted_download = command == 'download audio' and not value and quoted and music_request[1]
+        if not quoted_download and ((mentions and not is_at_me) or not (msg_type == 'private' or music_request[1] or is_at_me)):
+            return
         if command == 'download audio':
-            reply = (open_music.start(ws, data, 'link', value)
-                     if re.fullmatch(r'https?://\S{1,2040}', value, re.I) else 'Usage: /download audio https://…')
+            if re.fullmatch(r'https?://\S{1,2040}', value, re.I):
+                reply = open_music.start(ws, data, 'link', value)
+            elif not value and quoted:
+                reply = open_music.start(ws, data, 'attachment', int(quoted[1]))
+            else:
+                reply = 'Use /download audio URL or reply to a media file with /download audio.'
         elif command == 'get track':
             reply = open_music.start(ws, data, 'download', int(value)) if value in {'1', '2', '3'} else 'Usage: /get track 1'
         elif not 0 < len(value) <= 100:
@@ -2615,6 +2621,7 @@ async def main():
     extensions = Extensions(sys.modules[__name__])
     open_music = OpenMusic(
         setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,
+        silk_module=setting('MEDIA_SILK_MODULE'),
     )
     media_separation = MediaSeparation(
         setting('MEDIA_SPLEETER_EXE'), setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,

@@ -96,6 +96,15 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         worker.start.assert_called_once_with(self.ws, event, 'link', url)
         self.assertEqual(self.sent, [])
 
+    async def test_audio_download_accepts_a_quoted_file(self):
+        worker = Mock()
+        worker.start.return_value = None
+        self.scope['open_music'] = worker
+        event = self.event('[CQ:reply,id=42][CQ:at,qq=11] /download audio')
+        await self.scope['handle_message_event'](self.ws, event)
+        worker.start.assert_called_once_with(self.ws, event, 'attachment', 42)
+        self.assertEqual(self.sent, [])
+
     async def test_mentioned_music_command_accepts_compact_syntax(self):
         worker = Mock()
         worker.start.return_value = None

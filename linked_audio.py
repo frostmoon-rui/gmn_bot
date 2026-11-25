@@ -6,13 +6,12 @@ from time import monotonic
 from urllib.parse import urldefrag, urljoin, urlsplit
 from xml.etree import ElementTree
 
+from hls_audio import HLS_TYPES, save_hls
 from media_separation import MediaError, normalize_audio, open_public_response, save_media_response
 
 
 PAGE_LIMIT = 1024 * 1024
 AUDIO_EXTENSIONS = {'.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.oga', '.aiff', '.wma'}
-PLAYLIST_TYPES = {'application/vnd.apple.mpegurl', 'application/x-mpegurl', 'audio/mpegurl',
-                  'audio/x-mpegurl', 'application/dash+xml'}
 FEED_TYPES = {'application/rss+xml', 'application/atom+xml', 'application/xml', 'text/xml'}
 
 
@@ -41,7 +40,10 @@ class AudioLinkParser(HTMLParser):
         if tag == 'audio':
             self.audio_depth += 1
             self.embedded.append(fields.get('src'))
-        elif tag == 'source' and (self.audio_depth or mime.startswith('audio/')):
+        elif tag == 'video' and _suffix(fields.get('src') or '') == '.m3u8':
+            self.embedded.append(fields.get('src'))
+        elif tag == 'source' and (self.audio_depth or mime.startswith('audio/') or mime in HLS_TYPES
+                                  or _suffix(fields.get('src') or '') == '.m3u8'):
             self.embedded.append(fields.get('src'))
         elif tag == 'meta':
             name = (fields.get('property') or fields.get('name') or '').lower()
@@ -49,7 +51,7 @@ class AudioLinkParser(HTMLParser):
                 self.embedded.append(fields.get('content'))
         elif tag in {'a', 'link'}:
             href = fields.get('href')
-            if href and (mime.startswith('audio/') or _suffix(href) in AUDIO_EXTENSIONS):
+            if href and (mime.startswith('audio/') or mime in HLS_TYPES or _suffix(href) in AUDIO_EXTENSIONS | {'.m3u8'}):
                 self.links.append(href)
 
     def handle_endtag(self, tag):
@@ -104,6 +106,15 @@ def _read_document(response):
     return bytes(data)
 
 
+def _save_playlist(response, final_url, target, mime):
+    if mime == 'application/dash+xml' or _suffix(final_url) in {'.mpd', '.m3u'}:
+        raise MediaError('playlist')
+    if mime in HLS_TYPES or _suffix(final_url) == '.m3u8':
+        save_hls(response, final_url, target)
+        return True
+    return False
+
+
 def fetch_linked_audio(url, target):
     """Download a direct file or return candidate media URLs from one public page."""
     if is_search_page(url):
@@ -112,8 +123,8 @@ def fetch_linked_audio(url, target):
         if is_search_page(final_url):
             raise MediaError('search_page')
         mime = response.getheader('Content-Type', '').partition(';')[0].strip().lower()
-        if mime in PLAYLIST_TYPES or _suffix(final_url) in {'.m3u8', '.mpd', '.m3u'}:
-            raise MediaError('playlist')
+        if _save_playlist(response, final_url, target, mime):
+            return []
         if mime not in FEED_TYPES and mime not in {'text/html', 'application/xhtml+xml'}:
             if mime.startswith(('text/', 'application/json')):
                 raise MediaError('page')
@@ -140,8 +151,8 @@ def fetch_linked_audio(url, target):
 def fetch_candidate(url, target):
     with open_public_response(url) as (response, final_url):
         mime = response.getheader('Content-Type', '').partition(';')[0].strip().lower()
-        if mime in PLAYLIST_TYPES or _suffix(final_url) in {'.m3u8', '.mpd', '.m3u'}:
-            raise MediaError('playlist')
+        if _save_playlist(response, final_url, target, mime):
+            return
         if mime.startswith(('text/', 'application/json')) or mime in FEED_TYPES | {'application/xhtml+xml'}:
             raise MediaError('page')
         save_media_response(response, target)

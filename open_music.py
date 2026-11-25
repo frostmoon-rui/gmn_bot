@@ -15,8 +15,10 @@ from pathlib import Path
 from unicodedata import normalize
 from urllib.parse import quote, urlencode, urlsplit
 
+from bot_features import message_text, reply_belongs_to
 from media_separation import (
-    MAX_BYTES, MediaError, _connect_public, download_media, encode_mp3, normalize_audio, open_public_response,
+    MAX_BYTES, MediaError, _connect_public, copy_napcat_file, download_media, encode_mp3, media_source,
+    normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
 
@@ -43,7 +45,10 @@ MESSAGES = {
     'credits': '{title} · {creator}\n{source}\n{license}\nConverted to MP3 and QQ voice.',
     'unknown_creator': 'Unknown creator',
     'page': 'No downloadable audio link was found on this page. Try a public media URL.',
-    'playlist': 'This link points to an HLS or DASH playlist. Try a downloadable audio file.',
+    'playlist': 'This playlist format is unsupported. Try a downloadable file or a standard HLS recording.',
+    'live_stream': 'This stream has not ended. Send a completed recording or an audio file.',
+    'protected_stream': 'This stream requires an encryption key. Use a file available for download.',
+    'attachment': 'Reply to an audio or video attachment in this chat.',
     'search_page': 'This is a music search page. Open a result and use its downloadable file or audio page.',
     'audio': 'The file has no readable audio track.',
     'size': 'The source must be at most 80 MiB and 10 minutes long.',
@@ -330,9 +335,10 @@ def prepare_link(url, ffmpeg, workspace):
 
 
 class OpenMusic:
-    def __init__(self, ffmpeg, spawn, send, *, messages=None):
+    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None):
         self.ffmpeg = Path(ffmpeg) if ffmpeg else None
         self.spawn, self.send = spawn, send
+        self.silk_module = silk_module
         self.messages = MESSAGES | (messages or {})
         self.results = {}
         self.active = set()
@@ -354,7 +360,10 @@ class OpenMusic:
                 track = entry[1][value - 1]
             if not self.ffmpeg or not self.ffmpeg.is_absolute() or not self.ffmpeg.is_file():
                 return self.messages['disabled']
-            job = self._deliver(ws, kind, group, user, track, value if track is None else None)
+            if operation == 'attachment':
+                job = self._deliver(ws, kind, group, user, None, None, attachment=(event, value))
+            else:
+                job = self._deliver(ws, kind, group, user, track, value if track is None else None)
         self.active.add(key)
 
         async def run():
@@ -392,7 +401,30 @@ class OpenMusic:
                 text = '\n'.join([text, self.messages['release_links'], *lines])
         await self.send(ws, kind, group, user, text)
 
-    async def _deliver(self, ws, kind, group, user, track, url):
+    async def _prepare_attachment(self, ws, workspace, event, message_id):
+        async def call(action, params, timeout):
+            return await ws.send(json.dumps({'action': action, 'params': params}), receipt_timeout=timeout)
+
+        original = await call('get_msg', {'message_id': message_id}, 12)
+        if not reply_belongs_to(original, event):
+            raise MediaError('attachment')
+        try:
+            kind, ident = media_source(original, message_text(original))
+        except MediaError as error:
+            raise MediaError('attachment' if str(error) == 'usage' else str(error)) from error
+        if kind == 'url':
+            raise MediaError('attachment')
+        data = await call('get_file', {'file': ident}, 60)
+        incoming = workspace / 'source.media'
+        await asyncio.to_thread(copy_napcat_file, data.get('file') if isinstance(data, dict) else None, incoming)
+
+        def convert():
+            normalized, duration = normalize_audio(self.ffmpeg, incoming, workspace, self.silk_module)
+            return _encode_track(self.ffmpeg, normalized, duration, workspace)
+
+        return await asyncio.to_thread(convert)
+
+    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -403,14 +435,20 @@ class OpenMusic:
         await notify(self.messages['sending'])
         with tempfile.TemporaryDirectory(prefix='gmn-music-', ignore_cleanup_errors=True) as folder:
             try:
-                prepare, source = (prepare_track, track) if track else (prepare_link, url)
-                mp3, parts = await asyncio.to_thread(prepare, source, self.ffmpeg, Path(folder))
+                workspace = Path(folder)
+                if attachment:
+                    mp3, parts = await self._prepare_attachment(ws, workspace, *attachment)
+                else:
+                    prepare, source = (prepare_track, track) if track else (prepare_link, url)
+                    mp3, parts = await asyncio.to_thread(prepare, source, self.ffmpeg, workspace)
             except MediaError as error:
                 reason = str(error)
-                await notify(self.messages[reason] if reason in {'page', 'search_page', 'playlist', 'audio', 'size'}
+                await notify(self.messages[reason] if reason in {
+                    'page', 'search_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'audio', 'size'
+                }
                              else self.messages['download'])
                 return False
-            except (OSError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
+            except (OSError, RuntimeError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
                 await notify(self.messages['download'])
                 return False
             if track:

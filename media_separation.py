@@ -22,7 +22,7 @@ MAX_SECONDS = 600
 VOICE_SECONDS = 180
 CHUNK = 64 * 1024
 FAKE_IP_RANGE = ipaddress.ip_network('198.18.0.0/15')
-DEMUXERS = 'aac,aiff,amr,asf,avi,caf,flac,flv,matroska,webm,mov,mp4,m4a,3gp,3g2,mj2,mp3,ogg,wav'
+DEMUXERS = 'aac,aiff,amr,asf,avi,caf,flac,flv,matroska,webm,mov,mp4,m4a,3gp,3g2,mj2,mpegts,mp3,ogg,wav'
 MESSAGES = {
     'usage': 'Reply to an audio file, video, voice message or direct media link with “separate audio”.',
     'multiple': 'Please reply to a message with exactly one file, voice message or direct media link.',
@@ -40,7 +40,9 @@ MESSAGES = {
     'voice_decoder': 'This QQ voice needs the local SILK decoder, which is unavailable.',
     'page': 'The page has no downloadable audio. Try a file or a direct media URL.',
     'search_page': 'This URL is a music search page. Reply to a downloaded file or an audio URL.',
-    'playlist': 'This link is an HLS or DASH playlist. Try a downloadable media file.',
+    'playlist': 'This playlist format is unsupported. Try a downloadable file or a standard HLS recording.',
+    'live_stream': 'This stream has not ended. Send a completed recording or an audio file.',
+    'protected_stream': 'This stream requires an encryption key. Use a file available for download.',
 }
 
 

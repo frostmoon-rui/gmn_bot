@@ -122,6 +122,41 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None)
             send.assert_not_awaited()
 
+    async def test_download_can_convert_a_file_captured_in_the_browser(self):
+        event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
+        tasks, actions = [], []
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'capture.mp4'
+            source.write_bytes(b'capture')
+
+            async def call(payload, *, receipt_timeout):
+                request = json.loads(payload)
+                action = request['action']
+                actions.append(action)
+                if action == 'get_msg':
+                    return {'group_id': 20, 'message': [{'type': 'file', 'data': {'file_id': 'opaque'}}]}
+                if action == 'get_file':
+                    self.assertEqual(request['params'], {'file': 'opaque'})
+                    return {'file': str(source)}
+
+            def normalize(ffmpeg, file, workspace, silk_module):
+                self.assertEqual(file.read_bytes(), b'capture')
+                return file, 1
+
+            def encode(ffmpeg, normalized, duration, folder):
+                target = folder / 'audio.mp3'
+                target.write_bytes(b'mp3')
+                return target, [target]
+
+            worker = OpenMusic(source, lambda coro: tasks.append(asyncio.create_task(coro)), AsyncMock())
+            with (
+                patch('open_music.normalize_audio', side_effect=normalize),
+                patch('open_music._encode_track', side_effect=encode),
+            ):
+                self.assertIsNone(worker.start(SimpleNamespace(send=call), event, 'attachment', 42))
+                await tasks[0]
+        self.assertEqual(actions, ['get_msg', 'get_file', 'upload_group_file', 'send_group_msg'])
+
     async def test_results_are_chat_scoped_and_voice_parts_are_sent_in_order(self):
         tasks, messages, actions, voices = [], [], [], []
 

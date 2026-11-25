@@ -43,9 +43,16 @@ class LinkedAudioTests(unittest.TestCase):
             self.assertEqual(fetch_linked_audio('https://example.test/rss', None), [
                 'https://media.example.test/episode.mp3',
             ])
-        with patch('linked_audio.open_public_response', page_response(b'#EXTM3U', 'application/vnd.apple.mpegurl')):
+        with patch('linked_audio.open_public_response', page_response(b'<MPD/>', 'application/dash+xml')):
             with self.assertRaisesRegex(MediaError, 'playlist'):
                 fetch_linked_audio('https://example.test/stream', None)
+
+    def test_html_discovers_HLS_playlists(self):
+        html = b'<video><source src="../song.m3u8" type="application/vnd.apple.mpegurl"></video>'
+        with patch('linked_audio.open_public_response', page_response(html, 'text/html')):
+            self.assertEqual(fetch_linked_audio('https://example.test/page', None), [
+                'https://media.example.test/song.m3u8',
+            ])
 
     def test_a_bad_candidate_does_not_discard_a_working_source(self):
         with (
