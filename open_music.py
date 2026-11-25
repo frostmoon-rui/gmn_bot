@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
 from media_separation import MediaError, _connect_public, download_media, encode_mp3, normalize_audio
+from linked_audio import fetch_candidate, fetch_linked_audio
 
 
 LICENSES = {
@@ -31,6 +32,10 @@ MESSAGES = {
     'voice_failed': 'The MP3 was sent. Delivery of the voice preview could not be confirmed.',
     'credits': '{title} · {creator}\n{source}\n{license}\nMP3 conversion and up to 30 seconds of QQ voice preview.',
     'unknown_creator': 'Unknown creator',
+    'page': 'No downloadable audio link was found on this page. Try a public media URL.',
+    'playlist': 'This link points to an HLS or DASH playlist. Try a downloadable audio file.',
+    'audio': 'The file has no readable audio track.',
+    'size': 'The source must be at most 80 MiB and 10 minutes long.',
 }
 
 
@@ -87,10 +92,33 @@ def search_tracks(query):
 def prepare_track(track, ffmpeg, workspace):
     incoming = workspace / 'music.media'
     download_media(track.url, incoming)
+    return _encode_track(ffmpeg, incoming, workspace)
+
+
+def _encode_track(ffmpeg, incoming, workspace):
     normalized, duration = normalize_audio(ffmpeg, incoming, workspace)
     mp3 = encode_mp3(ffmpeg, normalized, workspace / 'track.mp3')
     voice = mp3 if duration <= 30 else encode_mp3(ffmpeg, normalized, workspace / 'preview.mp3', 30)
     return mp3, voice
+
+
+def prepare_link(url, ffmpeg, workspace):
+    incoming = workspace / 'music.media'
+    candidates = fetch_linked_audio(url, incoming)
+    if not candidates:
+        return _encode_track(ffmpeg, incoming, workspace)
+    first_error = None
+    for index, candidate in enumerate(candidates):
+        folder = workspace / f'candidate-{index}'
+        folder.mkdir()
+        incoming = folder / 'music.media'
+        try:
+            fetch_candidate(candidate, incoming)
+            return _encode_track(ffmpeg, incoming, folder)
+        except MediaError as error:
+            if first_error is None:
+                first_error = error
+    raise first_error or MediaError('page')
 
 
 class OpenMusic:
@@ -110,12 +138,15 @@ class OpenMusic:
             self.results.pop(key, None)
             job = self._search(key, ws, kind, group, user, value, fallback)
         else:
-            entry = self.results.get(key)
-            if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
-                return self.messages['expired']
+            track = None
+            if operation == 'download':
+                entry = self.results.get(key)
+                if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
+                    return self.messages['expired']
+                track = entry[1][value - 1]
             if not self.ffmpeg or not self.ffmpeg.is_absolute() or not self.ffmpeg.is_file():
                 return self.messages['disabled']
-            job = self._deliver(ws, kind, group, user, entry[1][value - 1])
+            job = self._deliver(ws, kind, group, user, track, value if track is None else None)
         self.active.add(key)
 
         async def run():
@@ -144,7 +175,7 @@ class OpenMusic:
                 text = self.messages['none']
         await self.send(ws, kind, group, user, '\n'.join(filter(None, (text, fallback))))
 
-    async def _deliver(self, ws, kind, group, user, track):
+    async def _deliver(self, ws, kind, group, user, track, url):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -155,14 +186,20 @@ class OpenMusic:
         await notify(self.messages['sending'])
         with tempfile.TemporaryDirectory(prefix='gmn-music-', ignore_cleanup_errors=True) as folder:
             try:
-                mp3, voice = await asyncio.to_thread(prepare_track, track, self.ffmpeg, Path(folder))
-            except (MediaError, OSError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
+                prepare, source = (prepare_track, track) if track else (prepare_link, url)
+                mp3, voice = await asyncio.to_thread(prepare, source, self.ffmpeg, Path(folder))
+            except MediaError as error:
+                reason = str(error)
+                await notify(self.messages[reason] if reason in {'page', 'playlist', 'audio', 'size'} else self.messages['download'])
+                return
+            except (OSError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
                 await notify(self.messages['download'])
                 return
-            await notify(self.messages['credits'].format(
-                title=track.title, creator=track.creator or self.messages['unknown_creator'],
-                source=track.source, license=track.license_url,
-            ))
+            if track:
+                await notify(self.messages['credits'].format(
+                    title=track.title, creator=track.creator or self.messages['unknown_creator'],
+                    source=track.source, license=track.license_url,
+                ))
             try:
                 await call('upload_' + kind + '_file', {'file': str(mp3), 'name': 'track.mp3'}, 120)
             except (OSError, RuntimeError):

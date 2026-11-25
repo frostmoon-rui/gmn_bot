@@ -86,6 +86,16 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         await self.scope['handle_message_event'](self.ws, event)
         self.assertEqual(worker.start.call_args.args, (self.ws, event, '42', None, False))
 
+    async def test_audio_link_requests_use_music_worker(self):
+        url = 'https://example.test/music'
+        worker = Mock()
+        worker.start.return_value = None
+        self.scope['open_music'] = worker
+        event = self.event('/download audio' + ' ' + url)
+        await self.scope['handle_message_event'](self.ws, event)
+        worker.start.assert_called_once_with(self.ws, event, 'link', url)
+        self.assertEqual(self.sent, [])
+
     async def test_music_search_respects_mentions(self):
         await self.scope['handle_message_event'](self.ws, self.event('[CQ:at,qq=11] /kugou music Example'))
         self.assertEqual(self.sent, [])

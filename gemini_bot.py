@@ -1819,14 +1819,17 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
-    music_request = re.fullmatch(r'(/?)(play music|kugou music|get track)(?:\s+([^\r\n]+))?', cleaned_msg, re.I)
+    music_request = re.fullmatch(r'(/?)(play music|kugou music|get track|download audio)(?:\s+([^\r\n]+))?', cleaned_msg, re.I)
     if music_request:
         from bot_features import mention_targets
         mentions = mention_targets(raw_msg)
         if (mentions and not is_at_me) or not (msg_type == 'private' or music_request[1] or is_at_me):
             return
         command, value = music_request[2].lower(), (music_request[3] or '').strip()
-        if command == 'get track':
+        if command == 'download audio':
+            reply = (open_music.start(ws, data, 'link', value)
+                     if re.fullmatch(r'https?://\S{1,2040}', value, re.I) else 'Usage: /download audio https://…')
+        elif command == 'get track':
             reply = open_music.start(ws, data, 'download', int(value)) if value in {'1', '2', '3'} else 'Usage: /get track 1'
         elif not 0 < len(value) <= 100:
             reply = 'Usage: /play music SONG ARTIST'

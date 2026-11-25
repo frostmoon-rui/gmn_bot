@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import wave
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlsplit
 
@@ -173,7 +174,9 @@ def _copy_limited(reader, target):
         raise MediaError('format')
 
 
-def download_media(url, target):
+@contextmanager
+def open_public_response(url):
+    """Follow a bounded number of redirects with the same DNS checks on every hop."""
     try:
         for _ in range(5):
             conn, response = _connect_public(url)
@@ -181,13 +184,9 @@ def download_media(url, target):
                 if response.status in {301, 302, 303, 307, 308} and response.getheader('Location'):
                     url = urljoin(url, response.getheader('Location'))
                     continue
-                mime = response.getheader('Content-Type', '').lower()
-                if response.status != 200 or mime.startswith(('text/', 'application/json')):
+                if response.status != 200:
                     raise MediaError('source')
-                length = response.getheader('Content-Length', '')
-                if length.isdigit() and int(length) > MAX_BYTES:
-                    raise MediaError('size')
-                _copy_limited(response.read1, target)
+                yield response, url
                 return
             finally:
                 response.close()
@@ -195,6 +194,21 @@ def download_media(url, target):
     except (OSError, ValueError, http.client.HTTPException) as error:
         raise MediaError('source') from error
     raise MediaError('source')
+
+
+def save_media_response(response, target):
+    length = response.getheader('Content-Length', '')
+    if length.isdigit() and int(length) > MAX_BYTES:
+        raise MediaError('size')
+    _copy_limited(response.read1, target)
+
+
+def download_media(url, target):
+    with open_public_response(url) as (response, _):
+        mime = response.getheader('Content-Type', '').lower()
+        if mime.startswith(('text/', 'application/json')):
+            raise MediaError('source')
+        save_media_response(response, target)
 
 
 def copy_napcat_file(local, target):
