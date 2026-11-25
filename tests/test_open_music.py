@@ -60,7 +60,17 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 'open_music.search_tracks',
             ) as fallback:
                 await bot._search('key', 'ws', 'private', 0, 1, 'Sample - Performer')
-                deliver.assert_awaited_once_with('ws', 'private', 0, 1, None, None, qqmusic=release, report_failure=False)
+                deliver.assert_awaited_once_with('ws', 'private', 0, 1, None, None, qqmusic=release,
+                                                 report_failure=False, file_only=False, show_get_hint=True)
+                self.assertEqual(bot.results['key'][1], [[release]])
+                with patch.object(bot, '_deliver_group', AsyncMock()) as repeat:
+                    tasks = []
+                    bot.spawn = lambda coro: tasks.append(asyncio.create_task(coro))
+                    event = {'message_type': 'private', 'user_id': 1}
+                    bot.results[bot._session_key(event)] = bot.results['key']
+                    self.assertIsNone(bot.start('ws', event, 'download_file', 1))
+                    await tasks[0]
+                    repeat.assert_awaited_once_with('ws', 'private', 0, 1, [release], file_only=True)
                 fallback.assert_not_called()
 
     def test_qqmusic_capture_accepts_audio_formats_only_on_the_player_cdn(self):
@@ -355,39 +365,41 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('https://music.163.com/song?id=42', reply)
         self.assertNotIn('search.html', reply)
 
-    def test_music_uses_one_voice_up_to_three_minutes_and_splits_longer_tracks(self):
+    def test_music_keeps_the_full_mp3_and_caps_the_single_voice_preview(self):
         workspace = Path('workspace')
-        with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, source, output, *a, **kw: output) as encode:
-            mp3, parts = _encode_track('ffmpeg', workspace / 'track.wav', 180, workspace, compact=True)
+        source = workspace / 'track.wav'
+        with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, audio, output, *a, **kw: output) as encode:
+            mp3, parts = _encode_track('ffmpeg', source, 59, workspace, voice_preview=True)
             self.assertEqual(parts, [mp3])
-            mp3, parts = _encode_track('ffmpeg', workspace / 'track.wav', 222, workspace, compact=True)
-        self.assertEqual([part.name for part in parts], ['voice-1.mp3', 'voice-2.mp3'])
-        self.assertEqual([call.args[3] for call in encode.call_args_list[-2:]], [111, 111])
-        self.assertEqual([call.kwargs['start'] for call in encode.call_args_list[-2:]], [0, 111])
-        with patch('open_music.encode_mp3', return_value=mp3) as encode:
-            self.assertEqual(_encode_track('ffmpeg', workspace / 'track.wav', 222, workspace,
-                                           compact=True, file_only=True), (mp3, []))
-        encode.assert_called_once()
+            encode.assert_called_once_with('ffmpeg', source, workspace / 'track.mp3')
+            encode.reset_mock()
+            mp3, parts = _encode_track('ffmpeg', source, 222, workspace, voice_preview=True)
+            self.assertEqual(parts, [workspace / 'preview.mp3'])
+            self.assertEqual(encode.call_args_list[0].args, ('ffmpeg', source, workspace / 'track.mp3'))
+            self.assertEqual(encode.call_args_list[1].args, ('ffmpeg', source, workspace / 'preview.mp3', 60))
+            encode.reset_mock()
+            self.assertEqual(_encode_track('ffmpeg', source, 222, workspace,
+                                           voice_preview=True, file_only=True), (mp3, []))
+            encode.assert_called_once()
 
-    async def test_qqmusic_delivers_clips_in_order_or_falls_back_only_on_explicit_rejection(self):
+    async def test_qqmusic_uploads_the_mp3_and_sends_one_preview_independently(self):
         release = Release('Sample', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
 
         def prepare(release, ffmpeg, directory, *, file_only=False):
             mp3 = directory / 'track.mp3'
-            parts = [directory / 'voice-1.mp3', directory / 'voice-2.mp3']
-            for path in (mp3, *parts):
+            preview = directory / 'preview.mp3'
+            for path in (mp3, preview):
                 path.write_bytes(b'mock audio')
-            return mp3, parts, False, 222
+            return mp3, [preview], False, 222
 
         cases = [
-            (None, False, ['voice-1.mp3', 'voice-2.mp3'], None),
-            (RuntimeError('rejected'), False, ['voice-1.mp3', 'voice-2.mp3', 'track.mp3'],
-             MESSAGES['voice_failed'].format(sent=1, total=2)),
-            (TimeoutError('receipt unknown'), False, ['voice-1.mp3', 'voice-2.mp3'], MESSAGES['track_unconfirmed']),
-            (None, True, ['track.mp3'], None),
+            ('', False, ['track.mp3', 'preview.mp3'], None),
+            ('send_group_msg', False, ['track.mp3', 'preview.mp3'], MESSAGES['preview_failed']),
+            ('upload_group_file', False, ['track.mp3', 'preview.mp3'], MESSAGES['file_failed']),
+            ('', True, ['track.mp3'], None),
         ]
-        for error, file_only, expected_files, notice in cases:
-            with self.subTest(error=error, file_only=file_only):
+        for failed_action, file_only, expected_files, notice in cases:
+            with self.subTest(failed_action=failed_action, file_only=file_only):
                 files, uploads = [], []
 
                 async def call(payload, *, receipt_timeout):
@@ -398,23 +410,25 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                         voice = params['message'][0]
                         self.assertEqual(voice['type'], 'record')
                         files.append(voice['data']['file'].rsplit('/', 1)[-1])
-                        if files[-1] == 'voice-2.mp3' and error:
-                            raise error
                     else:
                         self.assertEqual(request['action'], 'upload_group_file')
                         uploaded = Path(params['file'])
                         self.assertTrue(uploaded.is_file())
                         uploads.append(uploaded)
                         files.append(uploaded.name)
+                    if request['action'] == failed_action:
+                        raise TimeoutError('receipt unknown')
 
                 send = AsyncMock()
                 worker = OpenMusic(None, None, send)
                 with patch('open_music.prepare_qqmusic', side_effect=prepare):
                     self.assertTrue(await worker._deliver(SimpleNamespace(send=call), 'group', 20, 30,
-                                                          None, None, qqmusic=release, file_only=file_only))
+                                                          None, None, qqmusic=release, file_only=file_only,
+                                                          show_get_hint=True))
                 self.assertEqual(files, expected_files)
                 self.assertTrue(all(not path.exists() for path in uploads))
                 self.assertEqual(send.await_count, 2 if notice else 1)
+                self.assertEqual(MESSAGES['get_again'] in send.await_args_list[0].args[-1], not file_only)
                 if notice:
                     self.assertEqual(send.await_args.args[-1], notice)
 
@@ -445,7 +459,8 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertIsNone(music.start(ws, event, 'search', 'Piano piece - Example'))
                 await tasks[0]
-            deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None, requested='Piano piece - Example')
+            deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None, requested='Piano piece - Example',
+                                             qqmusic=None, file_only=False, report_failure=True, show_get_hint=True)
             send.assert_not_awaited()
 
     async def test_same_recording_retries_source_without_sending_an_intermediate_error(self):
@@ -514,7 +529,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 await tasks[0]
         self.assertEqual(actions, ['get_msg', 'get_file', 'upload_group_file', 'send_group_msg'])
 
-    async def test_selection_is_chat_scoped_and_sends_one_voice_or_requested_file(self):
+    async def test_selection_is_chat_scoped_and_sends_mp3_with_voice_or_file_only(self):
         tasks, messages, actions, voices = [], [], [], []
 
         async def send(ws, kind, group, user, message):
@@ -554,7 +569,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 await tasks[-1]
                 self.assertIsNone(music.start(ws, event, 'download_file', 1))
                 await tasks[-1]
-        self.assertEqual(actions, ['send_group_msg', 'upload_group_file'])
+        self.assertEqual(actions, ['upload_group_file', 'send_group_msg', 'upload_group_file'])
         self.assertEqual(voices, ['sample.mp3'])
         self.assertEqual(len(messages), 3)
         for text in messages[1:]:

@@ -22,7 +22,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bot_features import message_text, reply_belongs_to
 from media_separation import (
-    MAX_BYTES, VOICE_SECONDS, MediaError, _connect_public, encode_mp3, fetch_napcat_media, kugou_search_url, media_source,
+    MAX_BYTES, MediaError, _connect_public, encode_mp3, fetch_napcat_media, kugou_search_url, media_source,
     normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
@@ -34,9 +34,11 @@ LICENSES = {
     'pdm': 'https://creativecommons.org/publicdomain/mark/1.0/',
 }
 VOICE_PART_SECONDS = 120
+MUSIC_PREVIEW_SECONDS = 60
 CATALOG_ERRORS = (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException)
 MESSAGES = {
-    'choose': 'Choose with /get track NUMBER.',
+    'choose': 'Use /get track 1 to choose result 1. Add file for the MP3 only.',
+    'get_again': 'Use /get track 1 to get this result again, or /get track 1 file for the MP3 only (10 minutes).',
     'none': 'No sendable audio was found.',
     'platform_only': 'I found the track. Audio delivery is unavailable, but you can play it here.',
     'related': 'Other versions you can play:',
@@ -59,7 +61,7 @@ MESSAGES = {
     'file_failed': 'Delivery of the MP3 could not be confirmed. Check the chat before retrying.',
     'voice_failed': 'The MP3 was sent. I confirmed {sent}/{total} voice messages.',
     'credits': '{title} · {creator}\n{source}\n{license}',
-    'track_unconfirmed': 'I could not confirm delivery. Check the chat before retrying.',
+    'preview_failed': 'Voice preview delivery could not be confirmed. Check the chat before retrying.',
     'unknown_creator': 'Unknown creator',
     'page': 'No downloadable audio link was found on this page. Try a public media URL.',
     'playlist': 'This playlist format is unsupported. Try a downloadable file or a standard HLS recording.',
@@ -645,15 +647,19 @@ def prepare_track(track, ffmpeg, workspace, *, file_only=False):
             break
         else:
             raise
-    return _encode_track(ffmpeg, *recording, workspace, compact=True, file_only=file_only)
+    return _encode_track(ffmpeg, *recording, workspace, voice_preview=True, file_only=file_only)
 
 
-def _encode_track(ffmpeg, normalized, duration, workspace, *, compact=False, file_only=False):
+def _encode_track(ffmpeg, normalized, duration, workspace, *, voice_preview=False, file_only=False):
     mp3 = encode_mp3(ffmpeg, normalized, workspace / 'track.mp3')
     if file_only:
         return mp3, []
-    single_voice_limit = VOICE_SECONDS if compact else VOICE_PART_SECONDS
-    if duration <= single_voice_limit:
+    if voice_preview:
+        if duration <= MUSIC_PREVIEW_SECONDS:
+            return mp3, [mp3]
+        preview = encode_mp3(ffmpeg, normalized, workspace / 'preview.mp3', MUSIC_PREVIEW_SECONDS)
+        return mp3, [preview]
+    if duration <= VOICE_PART_SECONDS:
         return mp3, [mp3]
     count = math.ceil(duration / VOICE_PART_SECONDS)
     seconds = duration / count
@@ -677,11 +683,12 @@ def prepare_qqmusic(release, ffmpeg, workspace, *, file_only=False):
     if trial:
         if not 0 < duration <= 61:
             raise MediaError('format')
-        mp3 = encode_mp3(ffmpeg, normalized, workspace / 'preview.mp3', min(duration, 60))
-        return mp3, [mp3], trial, round(min(duration, 60))
+        duration = min(duration, MUSIC_PREVIEW_SECONDS)
+        mp3 = encode_mp3(ffmpeg, normalized, workspace / 'preview.mp3', duration)
+        return mp3, [] if file_only else [mp3], trial, round(duration)
     if abs(duration - expected) > 3:
         raise MediaError('format')
-    mp3, parts = _encode_track(ffmpeg, normalized, duration, workspace, compact=True, file_only=file_only)
+    mp3, parts = _encode_track(ffmpeg, normalized, duration, workspace, voice_preview=True, file_only=file_only)
     return mp3, parts, trial, round(duration)
 
 
@@ -717,6 +724,11 @@ class OpenMusic:
             self.pending.pop(key, None)
             return None
         return pending
+
+    def _remember_results(self, key, recordings):
+        if len(self.results) >= 64:
+            self.results.pop(next(iter(self.results)))
+        self.results[key] = (time.monotonic() + 600, recordings)
 
     def _remember_choices(self, key, title, choices):
         if len(self.pending) >= 64:
@@ -761,23 +773,20 @@ class OpenMusic:
             self.pending.pop(key, None)
             job = self._search(key, ws, kind, group, user, value, file_only=operation == 'search_file')
         else:
-            track = None
             sources = ()
             if operation in {'download', 'download_file'}:
                 entry = self.results.get(key)
                 if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
                     return self.messages['expired']
                 sources = entry[1][value - 1]
-                track = sources[0]
             if not self.ffmpeg or not self.ffmpeg.is_absolute() or not self.ffmpeg.is_file():
                 return self.messages['disabled']
             if operation == 'attachment':
                 job = self._deliver(ws, kind, group, user, None, None, attachment=(event, value))
-            elif len(sources) > 1:
+            elif sources:
                 job = self._deliver_group(ws, kind, group, user, sources, file_only=operation == 'download_file')
             else:
-                job = self._deliver(ws, kind, group, user, track, value if track is None else None,
-                                    file_only=operation == 'download_file')
+                job = self._deliver(ws, kind, group, user, None, value)
         self.active.add(key)
 
         async def run():
@@ -830,11 +839,15 @@ class OpenMusic:
             previous = identity
         return '\n'.join(lines)
 
-    async def _deliver_group(self, ws, kind, group, user, sources, *, requested=None, file_only=False):
+    async def _deliver_group(self, ws, kind, group, user, sources, *, requested=None, file_only=False,
+                             show_get_hint=False):
         options = sources[:3]
-        for index, track in enumerate(options):
-            if await self._deliver(ws, kind, group, user, track, None, requested=requested,
-                                   file_only=file_only, report_failure=index == len(options) - 1):
+        for index, source in enumerate(options):
+            release = source if isinstance(source, Release) else None
+            track = None if release else source
+            if await self._deliver(ws, kind, group, user, track, None, requested=requested, qqmusic=release,
+                                   file_only=file_only, report_failure=index == len(options) - 1,
+                                   show_get_hint=show_get_hint):
                 return
 
     async def _search(self, key, ws, kind, group, user, query, *, file_only=False):
@@ -855,10 +868,11 @@ class OpenMusic:
             exact = [entry for entry in qq_candidates if _exact_track(entry, query)]
             options = {entry.source: entry for entry in exact or qq_candidates}
             if len({recording_key(entry) for entry in options.values()}) == 1:
-                delivery = {'file_only': True} if file_only else {}
-                for entry in list(options.values())[:2]:
+                sources = list(options.values())[:2]
+                for entry in sources:
                     if await self._deliver(ws, kind, group, user, None, None, qqmusic=entry,
-                                           report_failure=False, **delivery):
+                                           report_failure=False, file_only=file_only, show_get_hint=True):
+                        self._remember_results(key, [[entry, *(source for source in sources if source != entry)]])
                         return
         try:
             results = await asyncio.to_thread(search_tracks, query)
@@ -886,16 +900,10 @@ class OpenMusic:
                         await self.send(ws, kind, group, user, text)
                     return
             if recordings:
-                if len(self.results) >= 64:
-                    del self.results[next(iter(self.results))]
-                self.results[key] = (time.monotonic() + 600, recordings)
+                self._remember_results(key, recordings)
                 if len(recordings) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
-                    sources = recordings[0]
-                    if len(sources) == 1:
-                        delivery = {'file_only': True} if file_only else {}
-                        await self._deliver(ws, kind, group, user, sources[0], None, requested=query, **delivery)
-                    else:
-                        await self._deliver_group(ws, kind, group, user, sources, requested=query, file_only=file_only)
+                    await self._deliver_group(ws, kind, group, user, recordings[0], requested=query,
+                                              file_only=file_only, show_get_hint=True)
                     return
                 lines = [f'{i}. {track.title} · {track.creator or self.messages["unknown_creator"]}'
                          for i, (track, *_) in enumerate(recordings, 1)]
@@ -964,7 +972,7 @@ class OpenMusic:
         return await asyncio.to_thread(convert)
 
     async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None,
-                       report_failure=True, qqmusic=None):
+                       report_failure=True, qqmusic=None, show_get_hint=False):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -999,8 +1007,8 @@ class OpenMusic:
                 if report_failure:
                     await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
-            confirmed_parts = None
-            if qqmusic or track:
+            music_request = bool(qqmusic or track)
+            if music_request:
                 if qqmusic:
                     label = self.messages['qqmusic_trial' if trial else 'qqmusic_full'].format(seconds=seconds)
                     credits = f'{qqmusic.title} · {qqmusic.creator}\n{label}\n{qqmusic.source}'
@@ -1015,30 +1023,16 @@ class OpenMusic:
                         preview = await self._preview(f'{track.title} - {track.creator}', search_fallback=False)
                         if preview:
                             credits += '\n' + preview
+                if show_get_hint and not file_only:
+                    credits += '\n' + self.messages['get_again']
                 await notify(credits)
-                if parts and not file_only:
-                    for index, voice in enumerate(parts):
-                        try:
-                            await call('send_' + kind + '_msg', {
-                                'message': [{'type': 'record', 'data': {'file': voice.as_uri()}}],
-                            }, 60)
-                        except (TimeoutError, OSError):
-                            await notify(self.messages['track_unconfirmed'])
-                            return True
-                        except RuntimeError:
-                            # Use the full file only after QQ explicitly rejects a voice clip.
-                            confirmed_parts = index
-                            break
-                    else:
-                        return True
             try:
                 await call('upload_' + kind + '_file', {'file': str(mp3), 'name': mp3.name}, 120)
             except (TimeoutError, OSError, RuntimeError):
                 await notify(self.messages['file_failed'])
-                return True
-            if qqmusic or track:
-                if confirmed_parts is not None:
-                    await notify(self.messages['voice_failed'].format(sent=confirmed_parts, total=len(parts)))
+                if not music_request:
+                    return True
+            if file_only:
                 return True
             for index, voice in enumerate(parts):
                 try:
@@ -1046,6 +1040,7 @@ class OpenMusic:
                         'message': [{'type': 'record', 'data': {'file': voice.as_uri()}}],
                     }, 60)
                 except (TimeoutError, OSError, RuntimeError):
-                    await notify(self.messages['voice_failed'].format(sent=index, total=len(parts)))
+                    message = self.messages['preview_failed'] if music_request else self.messages['voice_failed']
+                    await notify(message.format(sent=index, total=len(parts)))
                     break
             return True
