@@ -22,7 +22,10 @@ def is_search_page(url):
     except ValueError:
         return False
     host = (parts.hostname or '').lower().rstrip('.')
-    return (host in {'kugou.com', 'www.kugou.com'} and parts.path.rstrip('/') == '/yy/html/search.html')
+    return (
+        (host in {'kugou.com', 'www.kugou.com'} and parts.path.rstrip('/') == '/yy/html/search.html')
+        or (host == 'music.163.com' and parts.fragment.startswith('/search/'))
+    )
 
 
 class AudioLinkParser(HTMLParser):

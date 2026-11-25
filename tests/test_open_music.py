@@ -6,7 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from open_music import MESSAGES, OpenMusic, _encode_track, _exact_track, _query_parts, _track, search_tracks
+from open_music import (
+    MESSAGES, OpenMusic, _archive, _encode_track, _exact_track, _query_parts, _track,
+    search_release_links, search_tracks,
+)
 
 
 SAMPLE = {
@@ -20,6 +23,32 @@ SAMPLE = {
 
 
 class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patcher = patch('open_music._archive', return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_archive_requires_licensed_single_track_and_uses_the_public_download(self):
+        row = {'identifier': 'recording', 'title': 'Piano piece', 'creator': 'Example',
+               'licenseurl': 'https://creativecommons.org/licenses/by/4.0/'}
+        fields = {'response': {'docs': [row]}}
+        file = {'name': 'piano piece.flac', 'size': '12345', 'source': 'original'}
+        with patch('open_music._catalog_json', side_effect=[fields, {'files': [file]}]):
+            [track] = _archive('Piano piece')
+        self.assertEqual(track.url, 'https://archive.org/download/recording/piano%20piece.flac')
+        with patch('open_music._catalog_json', return_value={'response': {'docs': [row | {'licenseurl': ''}]}}) as request:
+            self.assertEqual(_archive('Piano piece'), [])
+            request.assert_called_once()
+
+    def test_apple_release_search_returns_exact_public_links_only(self):
+        row = {'kind': 'song', 'trackId': 123, 'trackName': 'Piano piece (Live)',
+               'artistName': 'Example', 'collectionName': 'Concert', 'previewUrl': 'https://example.test/clip'}
+        with patch('open_music._catalog_json', return_value={'results': [row | {'artistName': 'Other'}, row]}):
+            [release] = search_release_links('Piano piece (Live) - Example')
+        self.assertEqual(release.source, 'https://music.apple.com/us/song/123')
+        self.assertEqual(release.album, 'Concert')
+        self.assertFalse(hasattr(release, 'url'))
+
     def test_download_list_requires_usable_license_metadata(self):
         self.assertIsNotNone(_track(SAMPLE))
         for change in ({'license': 'by-nd'}, {'creator': ''}, {'url': 'file:///tmp/private'}):

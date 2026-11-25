@@ -23,7 +23,7 @@ from bot_care import care_reply
 from bot_runtime import OneBotSocket, SessionDispatcher, EventDeduplicator
 from reply_style import parse_search_request
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
-from open_music import OpenMusic
+from open_music import OpenMusic, netease_search_url
 from sticker_store import sticker_reply_probability
 
 

@@ -4,7 +4,7 @@ if __name__ == '__main__':
 
 from local_settings import setting
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
-from open_music import OpenMusic
+from open_music import OpenMusic, netease_search_url
 from model_proxy import select_model_proxy
 import asyncio
 import base64
@@ -1819,7 +1819,7 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
-    music_request = re.fullmatch(r'(/?)(play music|kugou music|get track|download audio)(?:(?:[ \t]*:[ \t]*|[ \t]+)([^\r\n]*))?', cleaned_msg, re.I)
+    music_request = re.fullmatch(r'(/?)(play music|kugou music|netease music|get track|download audio)(?:(?:[ \t]*:[ \t]*|[ \t]+)([^\r\n]*))?', cleaned_msg, re.I)
     if music_request:
         from bot_features import mention_targets
         mentions = mention_targets(raw_msg)
@@ -1835,7 +1835,10 @@ async def handle_message_event(ws, data):
             reply = 'Usage: /play music SONG ARTIST'
         else:
             link = 'Kugou Music' + ' · ' + value + '\n' + kugou_search_url(value)
-            reply = link if command == 'kugou music' else open_music.start(ws, data, 'search', value)
+            if command == 'netease music':
+                reply = 'NetEase Cloud Music · ' + value + '\n' + netease_search_url(value)
+            else:
+                reply = link if command == 'kugou music' else open_music.start(ws, data, 'search', value)
         if reply:
             await extensions.send(ws, msg_type, group_id, user_id, reply)
         return

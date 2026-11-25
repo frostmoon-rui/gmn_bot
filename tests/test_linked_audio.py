@@ -65,3 +65,9 @@ class LinkedAudioTests(unittest.TestCase):
             with self.assertRaisesRegex(MediaError, 'search_page'):
                 fetch_linked_audio('https://www.kugou.com/yy/html/search.html#searchKeyWord=Example', None)
             connect.assert_not_called()
+
+    def test_netease_search_page_is_not_an_audio_file(self):
+        with patch('linked_audio.open_public_response') as connect:
+            with self.assertRaisesRegex(MediaError, 'search_page'):
+                fetch_linked_audio('https://music.163.com/#/search/m/?s=Example&type=1', None)
+            connect.assert_not_called()

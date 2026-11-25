@@ -13,10 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from unicodedata import normalize
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from media_separation import (
-    MediaError, _connect_public, download_media, encode_mp3, normalize_audio, open_public_response,
+    MAX_BYTES, MediaError, _connect_public, download_media, encode_mp3, normalize_audio, open_public_response,
 )
 from linked_audio import normalize_link_audio
 
@@ -26,10 +26,12 @@ LICENSES = {
     'pdm': 'https://creativecommons.org/publicdomain/mark/1.0/',
 }
 VOICE_PART_SECONDS = 120
+CATALOG_ERRORS = (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException)
 MESSAGES = {
     'choose': 'Use /get track 1, 2 or 3 to receive the MP3 and full QQ voice playback. Results expire after 10 minutes.',
     'none': 'No matching downloadable recording was found. You can send the file or use /download audio with a media URL.',
     'search_error': 'The music catalogs are temporarily unavailable.',
+    'release_links': 'Matching release pages · playback on the source platform',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
     'disabled': 'The local music downloader is unavailable.',
@@ -55,6 +57,14 @@ class Track:
     url: str
     source: str
     license_url: str
+
+
+@dataclass(frozen=True)
+class Release:
+    title: str
+    creator: str
+    album: str
+    source: str
 
 
 def _web_url(value):
@@ -140,6 +150,72 @@ def _commons(query):
     return [track for item in sorted(items, key=lambda row: row.get('index', 0)) if (track := _commons_track(item))]
 
 
+def _catalog_json(url, limit=256 * 1024):
+    with open_public_response(url) as (response, _):
+        payload = json.loads(response.read(limit))
+    if not isinstance(payload, dict) or 'error' in payload:
+        raise MediaError('search_error')
+    return payload
+
+
+def _archive_track(item):
+    ident = item.get('identifier') or ''
+    title = item.get('title') or ''
+    creator = item.get('creator') or ''
+    if isinstance(creator, list):
+        creator = ', '.join(creator)
+    license_url = urlsplit(item.get('licenseurl') or '')
+    if not (isinstance(ident, str) and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', ident)
+            and isinstance(title, str) and title and license_url.hostname in {'creativecommons.org', 'www.creativecommons.org'}):
+        return None
+    license_path = license_url.path.rstrip('/') + '/'
+    if license_path not in {'/publicdomain/zero/1.0/', '/publicdomain/mark/1.0/'}:
+        if not creator or not re.fullmatch(r'/licenses/by/(?:1\.0|2\.0|2\.5|3\.0|4\.0)/', license_path):
+            return None
+    payload = _catalog_json('https://archive.org/metadata/' + ident, 512 * 1024)
+    if str(payload.get('metadata', {}).get('access-restricted-item', '')).lower() == 'true':
+        return None
+    files = []
+    for file in payload.get('files', []):
+        name = file.get('name', '')
+        size = str(file.get('size', ''))
+        if (file.get('source') == 'original' and str(file.get('private', '')).lower() != 'true'
+                and name and '/' not in name and '\\' not in name
+                and Path(name).suffix.lower() in {'.mp3', '.flac', '.ogg', '.wav', '.m4a'}
+                and size.isdecimal() and 0 < int(size) <= MAX_BYTES):
+            files.append(name)
+    if len(files) != 1:
+        return None
+    source = f'https://archive.org/details/{ident}'
+    audio = f'https://archive.org/download/{ident}/{quote(files[0], safe="")}'
+    return Track(title[:120], str(creator)[:120], audio, source, 'https://creativecommons.org' + license_path)
+
+
+def _archive(query):
+    phrase = re.sub(r'["\\\r\n]', ' ', query)
+    params = urlencode([
+        ('q', f'mediatype:audio AND collection:opensource_audio AND title:"{phrase}" AND licenseurl:*'),
+        *(('fl[]', field) for field in ('identifier', 'title', 'creator', 'licenseurl')),
+        ('rows', '4'), ('output', 'json'),
+    ])
+    items = _catalog_json('https://archive.org/advancedsearch.php?' + params).get('response', {}).get('docs', [])
+    tracks = []
+    inspected = 0
+    for item in items:
+        if not isinstance(item, dict) or _key(str(item.get('title', ''))) != _key(query):
+            continue
+        inspected += 1
+        try:
+            track = _archive_track(item)
+            if track:
+                tracks.append(track)
+        except CATALOG_ERRORS:
+            pass
+        if inspected >= 2:
+            break
+    return tracks
+
+
 def _clean_title(title):
     return re.sub(r'\s*\(\s*(?:feat\.?|ft\.?)\s+[^)]*\)', '', normalize('NFKC', title), flags=re.I).strip()
 
@@ -181,15 +257,15 @@ def search_tracks(query):
     strict = bool(artist or version)
     short_title = re.split(r'[([{【]', title, maxsplit=1)[0].strip()
     completed = 0
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         for term in dict.fromkeys([title, short_title] if len(_key(short_title)) >= 2 else [title]):
             results = []
-            providers = [executor.submit(provider, term) for provider in (_openverse, _commons)]
+            providers = [executor.submit(provider, term) for provider in (_openverse, _commons, _archive)]
             for job in providers:
                 try:
                     results.extend(job.result())
                     completed += 1
-                except (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
+                except CATALOG_ERRORS:
                     continue
             if strict:
                 results = [track for track in results if _exact_track(track, query)]
@@ -199,6 +275,36 @@ def search_tracks(query):
     if not completed:
         raise MediaError('search_error')
     return []
+
+
+def search_release_links(query):
+    title, artist = _query_parts(query)
+    countries = ('JP', 'TW') if re.search(r'[\u3400-\u9fff]', title) else ('US', 'HK')
+    term = ' '.join(part for part in (title, artist) if part)
+    for country in countries:
+        params = urlencode({'term': term, 'country': country, 'media': 'music', 'entity': 'song', 'limit': 15})
+        try:
+            payload = _catalog_json('https://itunes.apple.com/search?' + params)
+        except CATALOG_ERRORS:
+            continue
+        releases = []
+        for item in payload.get('results', []):
+            if not isinstance(item, dict) or item.get('kind') != 'song':
+                continue
+            ident = str(item.get('trackId', ''))
+            fields = [item.get(key) for key in ('trackName', 'artistName', 'collectionName')]
+            if not ident.isdecimal() or not all(isinstance(field, str) and field for field in fields):
+                continue
+            release = Release(*(field[:120] for field in fields), f'https://music.apple.com/{country.lower()}/song/{ident}')
+            if _exact_track(release, query) and release not in releases:
+                releases.append(release)
+        if releases:
+            return releases[:3]
+    return []
+
+
+def netease_search_url(title):
+    return 'https://music.163.com/#/search/m/?' + urlencode({'s': title, 'type': 1})
 
 
 def prepare_track(track, ffmpeg, workspace):
@@ -279,6 +385,11 @@ class OpenMusic:
                 text = '\n'.join([*lines, self.messages['choose']])
             else:
                 text = self.messages['none']
+        if text in (self.messages['none'], self.messages['search_error']):
+            releases = await asyncio.to_thread(search_release_links, query)
+            if releases:
+                lines = [f'{item.title} · {item.creator} · {item.album}\n{item.source}' for item in releases]
+                text = '\n'.join([text, self.messages['release_links'], *lines])
         await self.send(ws, kind, group, user, text)
 
     async def _deliver(self, ws, kind, group, user, track, url):
