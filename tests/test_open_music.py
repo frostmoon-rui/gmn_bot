@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from open_music import MESSAGES, OpenMusic, _exact_track, _query_parts, _track, search_tracks
+from open_music import MESSAGES, OpenMusic, _encode_track, _exact_track, _query_parts, _track, search_tracks
 
 
 SAMPLE = {
@@ -48,6 +48,18 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                              ['Piano piece (live) Example', 'Piano piece'])
         self.assertFalse(_exact_track(track, 'Piano piece (live) Example'))
 
+    def test_voice_parts_cover_the_whole_track(self):
+        root = Path('workspace')
+        with patch('open_music.encode_mp3', side_effect=lambda ffmpeg, source, output, *a, **kw: output) as encode:
+            mp3, parts = _encode_track('ffmpeg', root / 'track.wav', 350, root)
+        self.assertEqual(mp3.name, 'track.mp3')
+        self.assertEqual([part.name for part in parts], ['voice-1.mp3', 'voice-2.mp3', 'voice-3.mp3'])
+        clips = encode.call_args_list[1:]
+        self.assertAlmostEqual(sum(call.args[3] for call in clips), 350)
+        for index, call in enumerate(clips):
+            self.assertLessEqual(call.args[3], 120)
+            self.assertAlmostEqual(call.kwargs['start'], index * 350 / 3)
+
     async def test_a_unique_exact_result_is_downloaded_without_selection(self):
         event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
         track = _track(SAMPLE)
@@ -66,8 +78,8 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None)
             send.assert_not_awaited()
 
-    async def test_results_are_chat_scoped_and_selected_track_is_sent_twice(self):
-        tasks, messages, actions = [], [], []
+    async def test_results_are_chat_scoped_and_voice_parts_are_sent_in_order(self):
+        tasks, messages, actions, voices = [], [], [], []
 
         async def send(ws, kind, group, user, message):
             messages.append(message)
@@ -79,12 +91,17 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             path = request['params'].get('file')
             if path:
                 self.assertTrue(Path(path).is_file())
+            else:
+                voices.append(request['params']['message'][0]['data']['file'].rsplit('/', 1)[-1])
 
         def prepare(track, ffmpeg, directory):
             self.assertEqual(track, _track(SAMPLE))
             output = directory / 'sample.mp3'
             output.write_bytes(b'mock audio')
-            return output, output
+            parts = [directory / f'voice-{index}.mp3' for index in (1, 2)]
+            for part in parts:
+                part.write_bytes(b'mock voice')
+            return output, parts
 
         event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
         ws = SimpleNamespace(send=call)
@@ -101,5 +118,6 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             with patch('open_music.prepare_track', side_effect=prepare):
                 self.assertIsNone(music.start(ws, event, 'download', 1))
                 await tasks[-1]
-        self.assertEqual(actions, ['upload_group_file', 'send_group_msg'])
-        self.assertIn('https://creativecommons.org/licenses/by/4.0/', messages[-1])
+        self.assertEqual(actions, ['upload_group_file', 'send_group_msg', 'send_group_msg'])
+        self.assertEqual(voices, ['voice-1.mp3', 'voice-2.mp3'])
+        self.assertTrue(any('https://creativecommons.org/licenses/by/4.0/' in text for text in messages))

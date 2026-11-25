@@ -8,10 +8,24 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock,patch
 
-from runtime_maintenance import cleanup_generated,release_expired,DAY
+from runtime_maintenance import cleanup_generated, cleanup_media_workspaces, release_expired, DAY
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_stale_media_workspaces_are_cleaned_with_a_narrow_scope(self):
+        now = 2_000_000_000
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name, age in (('gmn-music-123abc_0', DAY + 1), ('gmn-media-b7654321', 30),
+                              ('gmn-media-archive-original', 2 * DAY), ('downloads', 2 * DAY)):
+                workspace = root / name
+                workspace.mkdir()
+                (workspace / 'file.mp3').write_bytes(b'audio')
+                os.utime(workspace, (now - age, now - age))
+            self.assertEqual(cleanup_media_workspaces(root, now=now), (1, 0))
+            self.assertEqual({path.name for path in root.iterdir()},
+                             {'gmn-media-b7654321', 'gmn-media-archive-original', 'downloads'})
+
     def test_dry_run_and_apply_preserve_backups_records_and_active_files(self):
         now=2_000_000_000
         with tempfile.TemporaryDirectory() as folder:

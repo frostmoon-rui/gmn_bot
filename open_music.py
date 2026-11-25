@@ -3,6 +3,7 @@
 import asyncio
 import http.client
 import json
+import math
 import re
 import subprocess
 import tempfile
@@ -24,18 +25,20 @@ LICENSES = {
     'cc0': 'https://creativecommons.org/publicdomain/zero/1.0/',
     'pdm': 'https://creativecommons.org/publicdomain/mark/1.0/',
 }
+VOICE_PART_SECONDS = 120
 MESSAGES = {
-    'choose': 'Use /get track 1, 2 or 3 to receive the MP3 and a short voice preview. Results expire after 10 minutes.',
+    'choose': 'Use /get track 1, 2 or 3 to receive the MP3 and full QQ voice playback. Results expire after 10 minutes.',
     'none': 'No downloadable recording was found. You can send a file or use /download audio with a media URL.',
     'search_error': 'The music catalogs are temporarily unavailable.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
     'disabled': 'The local music downloader is unavailable.',
     'download': 'Could not download or process this recording. Try another result.',
-    'sending': 'I’ll download the recording and make a voice preview.',
+    'sending': 'I’ll download the recording and prepare QQ voice playback.',
     'file_failed': 'Delivery of the MP3 could not be confirmed. Check the chat before retrying.',
-    'voice_failed': 'The MP3 was sent. Delivery of the voice preview could not be confirmed.',
-    'credits': '{title} · {creator}\n{source}\n{license}\nMP3 conversion and up to 30 seconds of QQ voice preview.',
+    'voice_failed': 'The MP3 was sent. I confirmed {sent}/{total} voice messages.',
+    'voice_parts': 'The full recording will be sent in {total} voice messages. Play them in order.',
+    'credits': '{title} · {creator}\n{source}\n{license}\nConverted to MP3 and QQ voice.',
     'unknown_creator': 'Unknown creator',
     'page': 'No downloadable audio link was found on this page. Try a public media URL.',
     'playlist': 'This link points to an HLS or DASH playlist. Try a downloadable audio file.',
@@ -189,8 +192,14 @@ def prepare_track(track, ffmpeg, workspace):
 
 def _encode_track(ffmpeg, normalized, duration, workspace):
     mp3 = encode_mp3(ffmpeg, normalized, workspace / 'track.mp3')
-    voice = mp3 if duration <= 30 else encode_mp3(ffmpeg, normalized, workspace / 'preview.mp3', 30)
-    return mp3, voice
+    count = math.ceil(duration / VOICE_PART_SECONDS)
+    if count == 1:
+        return mp3, [mp3]
+    seconds = duration / count
+    parts = [encode_mp3(ffmpeg, normalized, workspace / f'voice-{index + 1}.mp3',
+                        seconds, start=index * seconds)
+             for index in range(count)]
+    return mp3, parts
 
 
 def prepare_link(url, ffmpeg, workspace):
@@ -267,7 +276,7 @@ class OpenMusic:
         with tempfile.TemporaryDirectory(prefix='gmn-music-', ignore_cleanup_errors=True) as folder:
             try:
                 prepare, source = (prepare_track, track) if track else (prepare_link, url)
-                mp3, voice = await asyncio.to_thread(prepare, source, self.ffmpeg, Path(folder))
+                mp3, parts = await asyncio.to_thread(prepare, source, self.ffmpeg, Path(folder))
             except MediaError as error:
                 reason = str(error)
                 await notify(self.messages[reason] if reason in {'page', 'search_page', 'playlist', 'audio', 'size'}
@@ -286,10 +295,14 @@ class OpenMusic:
             except (OSError, RuntimeError):
                 await notify(self.messages['file_failed'])
                 return True
-            try:
-                await call('send_' + kind + '_msg', {
-                    'message': [{'type': 'record', 'data': {'file': voice.as_uri()}}],
-                }, 60)
-            except (OSError, RuntimeError):
-                await notify(self.messages['voice_failed'])
+            if len(parts) > 1:
+                await notify(self.messages['voice_parts'].format(total=len(parts)))
+            for index, voice in enumerate(parts):
+                try:
+                    await call('send_' + kind + '_msg', {
+                        'message': [{'type': 'record', 'data': {'file': voice.as_uri()}}],
+                    }, 60)
+                except (OSError, RuntimeError):
+                    await notify(self.messages['voice_failed'].format(sent=index, total=len(parts)))
+                    break
             return True

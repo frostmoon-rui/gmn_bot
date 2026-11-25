@@ -296,9 +296,10 @@ def normalize_audio(ffmpeg, source, workspace, silk_module=None):
     return normalized, duration
 
 
-def encode_mp3(ffmpeg, source, output, seconds=None):
+def encode_mp3(ffmpeg, source, output, seconds=None, *, start=0):
     clip = ['-t', str(seconds)] if seconds else []
-    encoded = _run([ffmpeg, '-nostdin', '-v', 'error', '-i', source, *clip,
+    seek = ['-ss', str(start)] if start else []
+    encoded = _run([ffmpeg, '-nostdin', '-v', 'error', *seek, '-i', source, *clip,
                     '-c:a', 'libmp3lame', '-b:a', '192k', output], 60)
     if encoded.returncode or not output.is_file() or not output.stat().st_size:
         raise MediaError('processing')

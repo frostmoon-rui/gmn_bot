@@ -5,6 +5,9 @@ import gc
 import math
 import os
 from pathlib import Path
+import re
+import shutil
+import tempfile
 import time
 
 
@@ -89,6 +92,26 @@ def prune_timed(mapping, now, *, ttl=None):
     return removed
 
 
+def cleanup_media_workspaces(root=None, *, now=None):
+    """Recover expired media workspaces left by an interrupted worker."""
+    root = Path(root if root is not None else tempfile.gettempdir()).resolve(strict=True)
+    cutoff = (time.time() if now is None else now) - DAY
+    removed = errors = 0
+    for path in root.iterdir():
+        if not re.fullmatch(r'gmn-(?:music|media)-[a-z0-9_]{8}', path.name):
+            continue
+        try:
+            if linked(path) or not path.is_dir() or path.stat().st_mtime > cutoff or path.resolve() != path:
+                continue
+            shutil.rmtree(path)
+            removed += 1
+        except OSError:
+            errors += 1
+        if removed + errors >= 32:
+            break
+    return removed, errors
+
+
 def release_expired(bot, now=None):
     now=time.monotonic() if now is None else now
     removed=0
@@ -108,6 +131,9 @@ def release_expired(bot, now=None):
     if videos:
         removed+=prune_timed(getattr(videos,'cache',None),now,ttl=600)
         removed+=prune_timed(getattr(videos,'messages',None),now,ttl=1800)
+    music = getattr(bot, 'open_music', None)
+    if music:
+        removed += prune_timed(music.results, now)
     return removed
 
 
@@ -118,13 +144,15 @@ async def maintenance_loop(bot, root, interval=DAY):
         try:
             removed=release_expired(bot)
             report=await asyncio.to_thread(cleanup_generated,root,dry_run=False)
+            media_workspaces, media_errors = await asyncio.to_thread(cleanup_media_workspaces)
             vision=getattr(bot,'vision_recognizer',None)
             cache=getattr(vision,'result_cache',None)
             rows=await asyncio.to_thread(cache.prune) if cache and hasattr(cache,'prune') else 0
             collected=await asyncio.to_thread(gc.collect)
             print('[Maintenance]: expired memory entries',removed,'vision rows',rows,
                   'generated files',report['files'],'disk MiB',round(report['bytes']/1024**2,2),
-                  'GC objects',collected,'file errors',report['errors'])
+                  'media workspaces', media_workspaces, 'GC objects',collected,
+                  'file errors',report['errors'] + media_errors)
             if vision:
                 print('[AI cache counters]:',getattr(vision,'cache_stats',{}))
         except Exception as error:
