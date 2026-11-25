@@ -119,6 +119,16 @@ Use `website screenshot:friends en dark`, `recommended links`, or `friend applic
 
 The project has not adopted a single open-source license. Third-party material remains subject to its own terms; public access does not grant unrestricted republication rights.
 
+## Local audio separation
+
+Reply to an uploaded audio file, a video with audio, a QQ voice message, or a public direct media link with `separate audio`. You can also send `separate audio: URL` or put the command in an attachment caption. The bot returns separate MP3 files for vocals and accompaniment. Add `voice` after the command for two additional QQ voice messages if the input is at most three minutes.
+
+- Set `MEDIA_SPLEETER_EXE` to an absolute path to the Spleeter CLI with a working `2stems` model. Keep the model and required libraries beside the executable. Set `MEDIA_FFMPEG_EXE` to an FFmpeg executable with the LAME MP3 encoder.
+- For SILK voice input, install Node.js and run `npm install --ignore-scripts --prefix PATH silk-wasm@3.7.1` in a local tools directory. Set `MEDIA_SILK_MODULE` to the absolute path to `PATH/node_modules/silk-wasm/lib/index.cjs`.
+- The bot checks for a decodable audio track first. It accepts up to 80 MiB and 10 minutes per job. One job runs at a time, with up to three active or queued jobs. Files are processed locally.
+- URL inputs must point to downloadable audio or video over public HTTP or HTTPS. Redirects are validated. If the system resolver only returns synthetic proxy addresses, public DNS resolution uses Cloudflare DNS over HTTPS. Streaming playlists and player pages are outside this input format.
+- `/kugou music SONG ARTIST` produces an official Kugou search link. Playback and subscription entitlements are handled on Kugou.
+
 ## Community maps and visual help
 
 Use `heatmap china/world` after mentioning the bot in a group, or directly in a private chat. All recognizable saved regions are included by default across chats, once per account; single-member regions are displayed. No individual locations or member list is published. `heatmap leave` excludes yourself globally; `heatmap join` restores participation. Existing saved weather/profile records are preserved.

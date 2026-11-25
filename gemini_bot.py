@@ -3,6 +3,7 @@ if __name__ == '__main__':
     _instance_lock = require_instance(__file__)
 
 from local_settings import setting
+from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
 from model_proxy import select_model_proxy
 import asyncio
 import base64
@@ -1817,6 +1818,29 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
+    music_request = re.fullmatch(r'(/?)(?:kugou music)(?:\s+([^\r\n]+))?', cleaned_msg, re.I)
+    if music_request:
+        from bot_features import mention_targets
+        mentions = mention_targets(raw_msg)
+        if (mentions and not is_at_me) or not (msg_type == 'private' or music_request[1] or is_at_me):
+            return
+        title = (music_request[2] or '').strip()
+        link = kugou_search_url(title) if 0 < len(title) <= 100 else None
+        await extensions.send(ws, msg_type, group_id, user_id, 'Usage: /kugou music SONG ARTIST' if link is None else 'Kugou Music' + ' · ' + title + '\n' + link)
+        return
+
+    media_command = parse_media_command(cleaned_msg, 'separate audio', 'voice')
+    if media_command is not None:
+        reply_match = re.search(r"\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]", raw_msg)
+        voice, url = media_command
+        reply = media_separation.start(
+            ws, data, reply_match[1] if reply_match else None, url, voice,
+            belongs=reply_belongs_to, text=message_text,
+        )
+        if reply:
+            await extensions.send(ws, msg_type, group_id, user_id, reply)
+        return
+
     sender = data.get("sender", {})
     raw_nickname = sender.get("card") or sender.get("nickname") or f"member_{user_id}"
     nickname = strip_zero_width_chars(raw_nickname)
@@ -2573,7 +2597,12 @@ async def main():
     global features
     global videos
     features = Features(sys.modules[__name__])
+    global media_separation
     extensions = Extensions(sys.modules[__name__])
+    media_separation = MediaSeparation(
+        setting('MEDIA_SPLEETER_EXE'), setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,
+        silk_module=setting('MEDIA_SILK_MODULE'),
+    )
     videos = VideoSummaries(sys.modules[__name__])
     # Resolve locations lazily when their weather or map information is requested.
     extensions.spawn(extensions.nightly())

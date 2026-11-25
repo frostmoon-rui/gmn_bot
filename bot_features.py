@@ -63,6 +63,7 @@ HELP = {'celestial-weather': 'Celestial weather: Sun weather | Moon weather | Ma
             'More: help search / video / maps / food map / website / identity / admin | bot status',
  'video': '🎬 Video information summary\n'
           'Reply to a shared card and mention me with summarize video, or use summarize video:URL. '
+          'Reply to an audio file, video, voice message or direct link with separate audio. Add voice for short playback copies. Use /kugou music SONG to open Kugou search. '
           'You can also ask about your most recent card from the last 30 minutes.\n'
           'Public information is fetched in the background; MiMo 2.6 Flash returns 2–3 sentences '
           'within 3 minutes. Use view sources to check references.\n'

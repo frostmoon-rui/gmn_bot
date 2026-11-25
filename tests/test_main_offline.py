@@ -22,6 +22,7 @@ from bot_features import Features, HELP, event_text, message_text, safe_segments
 from bot_care import care_reply
 from bot_runtime import OneBotSocket, SessionDispatcher, EventDeduplicator
 from reply_style import parse_search_request
+from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
 from sticker_store import sticker_reply_probability
 
 
@@ -75,6 +76,21 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         async def multiline(ws, action, params, text):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline
+
+    async def test_media_reply_runs_before_chat_addressing(self):
+        worker = Mock()
+        worker.start.return_value = None
+        self.scope['media_separation'] = worker
+        event = self.event('[CQ:reply,id=42][CQ:at,qq=11] separate audio')
+        await self.scope['handle_message_event'](self.ws, event)
+        self.assertEqual(worker.start.call_args.args, (self.ws, event, '42', None, False))
+
+    async def test_music_search_respects_mentions(self):
+        await self.scope['handle_message_event'](self.ws, self.event('[CQ:at,qq=11] /kugou music Example'))
+        self.assertEqual(self.sent, [])
+        await self.scope['handle_message_event'](self.ws, self.event('/kugou music Example'))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('https://www.kugou.com/', self.sent[0]['text'])
 
     async def test_morning_greeting_at_night_replies_without_weather(self):
         self.scope['datetime'] = Mock()
