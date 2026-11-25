@@ -25,6 +25,7 @@ from reply_style import parse_search_request
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
 from open_music import OpenMusic, netease_search_url
 from sticker_store import sticker_reply_probability
+from vision_recognition import ImageDownloadTooLarge, VISION_INLINE_LIMIT
 
 
 def handler_environment():
@@ -192,7 +193,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.scope['describe_image_via_ai'] = AsyncMock(return_value='')
         self.scope['call_gemini_with_history'] = AsyncMock()
         await self.scope['handle_message_event'](self.ws, event)
-        self.scope['download_image_as_bytes'].assert_awaited_once_with('https://example.invalid/photo.png')
+        self.scope['download_image_as_bytes'].assert_awaited_once_with('https://example.invalid/photo.png', for_vision=True)
         self.scope['describe_image_via_ai'].assert_awaited_once()
         self.scope['call_gemini_with_history'].assert_not_awaited()
         self.assertEqual(len(self.sent), 1)
@@ -204,6 +205,16 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             'Describe this image [CQ:image,url=https://example.invalid/missing.png]', True))
         self.scope['call_gemini_with_history'].assert_not_awaited()
         self.assertEqual(len(self.sent), 1)
+
+    async def test_large_explicit_photo_reports_the_download_limit(self):
+        self.scope['download_image_as_bytes'] = AsyncMock(side_effect=ImageDownloadTooLarge('24 MiB'))
+        self.scope['describe_image_via_ai'] = AsyncMock()
+        await self.scope['handle_message_event'](self.ws, self.event(
+            'Describe this image [CQ:image,url=https://example.invalid/large.png]', True))
+        self.scope['download_image_as_bytes'].assert_awaited_once_with(
+            'https://example.invalid/large.png', for_vision=True)
+        self.scope['describe_image_via_ai'].assert_not_awaited()
+        self.assertIn('24 MiB', self.sent[-1]['text'])
 
     async def test_ordinary_photo_without_recognition_request_is_not_recognized_or_collected(self):
         blob = b'\x89PNG\r\n\x1a\n' + b'x' * 24

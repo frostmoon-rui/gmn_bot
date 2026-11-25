@@ -36,7 +36,7 @@ from bot_runtime import (JsonStore, OneBotSocket, SessionDispatcher, EventDedupl
 from video_summary import VideoSummaries
 from reply_style import parse_search_request, english_provider_text
 from gemini_research import is_research_model, rank_research_models, research_model_score
-from vision_recognition import VisionRecognizer
+from vision_recognition import ImageDownloadTooLarge, VISION_DOWNLOAD_LIMIT, VISION_INLINE_LIMIT, VisionRecognizer
 from sticker_store import StickerStore, sticker_reply_probability
 from sticker_moderation import StickerModeration
 from admin_registry import AdminRegistry
@@ -975,7 +975,7 @@ def is_sticker_image(segment: dict, mime_type: str = "", image_bytes: bytes = No
 
 
 
-async def download_image_as_bytes(raw_url: str, report_error: bool = True) -> tuple[bytes, str]:
+async def download_image_as_bytes(raw_url: str, report_error: bool = True, *, for_vision: bool = False) -> tuple[bytes, str]:
     """Download image bytes and MIME type, decoding HTML and using direct QQ media connections."""
     clean_url = html.unescape(raw_url).strip()
     markdown = re.fullmatch(r'\[([^\]]*)\]\((https?://[^\s]+)\)', clean_url)
@@ -995,16 +995,23 @@ async def download_image_as_bytes(raw_url: str, report_error: bool = True) -> tu
         else:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': TARGET_PROXY, 'https': TARGET_PROXY}))
 
+        limit = VISION_DOWNLOAD_LIMIT if for_vision else VISION_INLINE_LIMIT
         with opener.open(req, timeout=12) as resp:
-            blob = resp.read(8 * 1024 * 1024 + 1)
-            if len(blob) > 8 * 1024 * 1024:
-                raise ValueError('Image exceeds 8 MiB; skipped')
+            blob = resp.read(limit + 1)
+            if len(blob) > limit:
+                raise ImageDownloadTooLarge(f'{limit // (1024 * 1024)} MiB')
             mime_type = image_mime(blob)
             if not mime_type:
                 raise ValueError('Response is not a supported image; skipped')
             return blob, mime_type
     try:
         return await asyncio.to_thread(_download)
+    except ImageDownloadTooLarge as error:
+        if for_vision:
+            raise
+        if report_error:
+            print(f"[Image download failed]: Image exceeds {error}")
+        return None, ""
     except Exception as e:
         if report_error:
             print(f"[Image download failed]: {e}")
@@ -2431,6 +2438,7 @@ async def handle_message_event(ws, data):
         r'(?i)(?:recogniz|identif|describe|image|photo|picture|'
         r'what.*(?:this|mean)|read.*(?:this|text)|translate)', cleaned_msg))
     image_downloaded = False
+    image_too_large = False
 
     if all_img_segments and not will_trigger:
         # Run passive image work in the background to avoid blocking this group and other sessions.
@@ -2444,7 +2452,11 @@ async def handle_message_event(ws, data):
         if should_recognize_images or should_collect_images:
             for segment in all_img_segments[:3]:
                 img_url = segment["url"]
-                img_bytes, mime_type = await download_image_as_bytes(img_url)
+                try:
+                    img_bytes, mime_type = await download_image_as_bytes(img_url, for_vision=should_recognize_images)
+                except ImageDownloadTooLarge:
+                    image_too_large = True
+                    continue
                 image_downloaded = image_downloaded or bool(img_bytes)
                 if img_bytes and should_recognize_images:
                     print('[Requested image recognition]:', 'quoted' if is_reply_img else 'attached', mime_type)
@@ -2457,7 +2469,7 @@ async def handle_message_event(ws, data):
                     if desc:
                         image_descriptions.append(desc)
                 # Collect only explicit stickers/GIFs; ordinary photos never enter the library.
-                if img_bytes and should_collect_images and is_sticker_image(segment, mime_type, img_bytes):
+                if img_bytes and len(img_bytes) <= VISION_INLINE_LIMIT and should_collect_images and is_sticker_image(segment, mime_type, img_bytes):
                     sticker_img_segments.append(segment)
                     await save_stolen_emoji_async(
                         img_url,
@@ -2471,6 +2483,9 @@ async def handle_message_event(ws, data):
         failure = ('The image was downloaded, but vision is temporarily unavailable. Please retry shortly.' if image_downloaded else
                    'The image link could not be downloaded or has expired. Please resend the original image.')
         print('[Requested image recognition failed]:', 'vision unavailable' if image_downloaded else 'download unavailable')
+        if image_too_large and not image_downloaded:
+            failure = 'This image exceeds the 24 MiB vision download limit. Try a smaller copy or crop the area you want me to inspect.'
+            print('[Requested image recognition limit]: 24 MiB')
         await extensions.send(ws, msg_type, group_id, user_id, failure)
         return
 

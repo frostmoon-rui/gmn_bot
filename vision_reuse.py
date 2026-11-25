@@ -7,6 +7,8 @@ import unicodedata
 
 from PIL import Image
 
+from vision_recognition import VISION_INLINE_LIMIT
+
 
 def normalize_request(text):
     return unicodedata.normalize('NFC', str(text or '').replace('\r\n','\n')).strip()
@@ -20,7 +22,7 @@ def record_stat(worker, name):
 
 def pixel_fingerprint(blob):
     """Never alias animations, profiles/EXIF, oversized images or similar pixels."""
-    if blob[:6] in (b'GIF87a', b'GIF89a'):
+    if len(blob) > VISION_INLINE_LIMIT or blob[:6] in (b'GIF87a', b'GIF89a'):
         return None
     try:
         with Image.open(BytesIO(blob)) as image:

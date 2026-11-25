@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from vision_recognition import VisionRecognizer, prepare_vision_image
+from vision_recognition import VISION_INLINE_LIMIT, VisionRecognizer, prepare_vision_image
 from bot_runtime import JsonStore
 
 
@@ -22,6 +22,25 @@ def recognizer(generate, **kwargs):
 
 
 class VisionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_large_photo_uses_a_smaller_copy_and_exact_file_cache(self):
+        from PIL import Image
+
+        image = Image.new('RGB', (2600, 1400), 'salmon')
+        raw = io.BytesIO()
+        image.save(raw, format='PNG', compress_level=0)
+        blob = raw.getvalue()
+        self.assertGreater(len(blob), VISION_INLINE_LIMIT)
+        model = AsyncMock(return_value=SimpleNamespace(text='A solid color.'))
+        worker = recognizer(model)
+        for _ in range(2):
+            self.assertEqual(await worker.describe(blob, 'image/png', question='Describe the color'), 'A solid color.')
+        model.assert_awaited_once()
+        part = model.call_args.kwargs['contents'][0]
+        self.assertEqual(part['mime_type'], 'image/jpeg')
+        self.assertLess(len(part['data']), VISION_INLINE_LIMIT)
+        with Image.open(io.BytesIO(part['data'])) as copy:
+            self.assertEqual(max(copy.size), 2048)
+
     async def test_question_uses_detailed_vision_and_separate_cache_from_sticker(self):
         detailed = ('Visible circuit board text: 12 V. ' * 12).strip()
         call = AsyncMock(side_effect=[SimpleNamespace(text='A sticker.'), SimpleNamespace(text=detailed)])
