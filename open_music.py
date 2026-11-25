@@ -36,7 +36,7 @@ MESSAGES = {
     'choose': 'Choose with /get track NUMBER.',
     'none': 'No full recording was available to send.',
     'search_error': 'The music catalogs are temporarily unavailable.',
-    'ambiguous': 'Several recordings have this title. Add the artist to /play music.',
+    'ambiguous': 'Several recordings match. Add the artist or version to /play music.',
     'approximate': 'Closest downloadable result for {query}',
     'preview_search': 'Search on Kugou',
     'netease': 'NetEase Cloud Music',
@@ -247,8 +247,28 @@ def _key(text):
 
 def _artist_key(artist):
     name = re.sub(r'\s*\([^()]*\)', '', normalize('NFKC', artist))
-    pieces = re.split(r'[/&、]|\s+and\s+', name, flags=re.I)
+    pieces = re.split(r'[/&、,]|\s+and\s+', name, flags=re.I)
     return sorted(key for piece in pieces if (key := _key(piece)))
+
+
+def recording_key(recording):
+    return _key(recording.title), tuple(_artist_key(recording.creator))
+
+
+def group_recordings(tracks):
+    groups = []
+    for track in tracks:
+        for group in groups:
+            if recording_key(group[0]) != recording_key(track):
+                continue
+            if track.duration and any(item.duration and abs(item.duration - track.duration) > 6 for item in group):
+                continue
+            if all(item.url != track.url for item in group):
+                group.append(track)
+            break
+        else:
+            groups.append([track])
+    return groups
 
 
 def _exact_track(track, query):
@@ -295,12 +315,17 @@ def _closest_track(tracks, query):
 
 
 def search_tracks(query):
-    title, _ = _query_parts(query)
+    title, artist = _query_parts(query)
     short_title = re.split(r'[([{【]', title, maxsplit=1)[0].strip()
     completed = 0
     candidates = []
+    terms = [title]
+    if len(_key(short_title)) >= 2:
+        terms.append(short_title)
+    if artist:
+        terms.append(f'{title} {artist}')
     with ThreadPoolExecutor(max_workers=3) as executor:
-        for term in dict.fromkeys([title, short_title] if len(_key(short_title)) >= 2 else [title]):
+        for term in dict.fromkeys(terms):
             results = []
             providers = [executor.submit(provider, term) for provider in (_openverse, _commons, _archive)]
             for job in providers:
@@ -419,16 +444,13 @@ def search_platform_tracks(query):
 
     with ThreadPoolExecutor(max_workers=2) as worker:
         kugou, netease = worker.map(search, ('kugou', 'netease'))
-    if not kugou:
-        identities = {(_key(entry.title), tuple(_artist_key(entry.creator))) for entry in netease}
-        return [('netease', netease[0])] if len(identities) == 1 else []
-    selected = kugou[0]
-    links = [('kugou', selected)]
-    for entry in netease:
-        if _key(entry.title) == _key(selected.title) and _same_artist(entry, selected.creator):
-            links.append(('netease', entry))
-            break
-    return links
+    groups = {}
+    for platform, entries in (('kugou', kugou), ('netease', netease)):
+        for entry in entries:
+            groups.setdefault(recording_key(entry), {}).setdefault(platform, entry)
+    if len(groups) == 1:
+        return list(next(iter(groups.values())).items())
+    return [next(iter(recording.items())) for recording in list(groups.values())[:2]]
 
 
 def configured_platform_track(entries, query):
@@ -510,6 +532,7 @@ class OpenMusic:
         self.silk_module = silk_module
         self.messages = MESSAGES | (messages or {})
         self.preview_catalog = preview_catalog
+        self.preview_cache = {}
         self.results = {}
         self.active = set()
 
@@ -523,15 +546,19 @@ class OpenMusic:
             job = self._search(key, ws, kind, group, user, value)
         else:
             track = None
+            sources = ()
             if operation in {'download', 'download_file'}:
                 entry = self.results.get(key)
                 if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
                     return self.messages['expired']
-                track = entry[1][value - 1]
+                sources = entry[1][value - 1]
+                track = sources[0]
             if not self.ffmpeg or not self.ffmpeg.is_absolute() or not self.ffmpeg.is_file():
                 return self.messages['disabled']
             if operation == 'attachment':
                 job = self._deliver(ws, kind, group, user, None, None, attachment=(event, value))
+            elif len(sources) > 1:
+                job = self._deliver_group(ws, kind, group, user, sources, file_only=operation == 'download_file')
             else:
                 job = self._deliver(ws, kind, group, user, track, value if track is None else None,
                                     file_only=operation == 'download_file')
@@ -546,16 +573,43 @@ class OpenMusic:
         self.spawn(run())
         return None
 
-    async def _preview(self, query):
+    async def _platform_previews(self, query):
         configured = configured_platform_track(self.preview_catalog, query)
-        links = [configured] if configured else await asyncio.to_thread(search_platform_tracks, query)
+        if configured:
+            return [configured]
+        title, artist = _query_parts(query)
+        key = (_key(title), tuple(_artist_key(artist)))
+        current = time.monotonic()
+        cached = self.preview_cache.get(key)
+        if cached and cached[0] > current:
+            return cached[1]
+        links = await asyncio.to_thread(search_platform_tracks, query)
+        if links:
+            if len(self.preview_cache) >= 128:
+                self.preview_cache.pop(next(iter(self.preview_cache)))
+            self.preview_cache[key] = (time.monotonic() + 900, links)
+        return links
+
+    async def _preview(self, query, *, search_fallback=True):
+        links = await self._platform_previews(query)
         if not links:
-            return f"{self.messages['preview_search']} {kugou_search_url(query)}"
-        recording = links[0][1]
-        return '\n'.join([
-            f"{recording.title} · {recording.creator}",
-            *(f"{self.messages[platform]} {track.source}" for platform, track in links),
-        ])
+            return f"{self.messages['preview_search']} {kugou_search_url(query)}" if search_fallback else ''
+        lines = []
+        previous = None
+        for platform, track in links:
+            identity = recording_key(track)
+            if identity != previous:
+                lines.append(f'{track.title} · {track.creator}')
+            lines.append(f"{self.messages[platform]} {track.source}")
+            previous = identity
+        return '\n'.join(lines)
+
+    async def _deliver_group(self, ws, kind, group, user, sources, *, requested=None, file_only=False):
+        options = sources[:3]
+        for index, track in enumerate(options):
+            if await self._deliver(ws, kind, group, user, track, None, requested=requested,
+                                   file_only=file_only, report_failure=index == len(options) - 1):
+                return
 
     async def _search(self, key, ws, kind, group, user, query):
         configured = configured_platform_track(self.preview_catalog, query)
@@ -571,23 +625,32 @@ class OpenMusic:
             nearest = _closest_track(results, query) if not tracks and not configured else None
             if nearest:
                 tracks = [nearest]
-            if len(tracks) == 1 and not _query_parts(query)[1]:
-                releases = await asyncio.to_thread(search_release_links, query)
-                track = tracks[0]
-                if any(not _same_artist(track, item.creator) for item in releases):
-                    artists = list(dict.fromkeys(item.creator for item in releases))
-                    text = '\n'.join([self.messages['ambiguous'], ' / '.join(artists), await self._preview(query)])
+            recordings = group_recordings(tracks)
+            if len(recordings) == 1 and not _query_parts(query)[1]:
+                platform_links = await self._platform_previews(query)
+                releases = [entry for _, entry in platform_links]
+                if not releases:
+                    releases = await asyncio.to_thread(search_release_links, query)
+                track = recordings[0][0]
+                if any(recording_key(track) != recording_key(entry) for entry in releases):
+                    artists = list(dict.fromkeys(entry.creator for entry in releases))
+                    preview = await self._preview(query) if platform_links else ''
+                    text = '\n'.join(filter(None, [self.messages['ambiguous'], ' / '.join(artists), preview]))
                     await self.send(ws, kind, group, user, text)
                     return
-            if tracks:
+            if recordings:
                 if len(self.results) >= 64:
                     del self.results[next(iter(self.results))]
-                self.results[key] = (time.monotonic() + 600, tracks)
-                if len(tracks) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
-                    await self._deliver(ws, kind, group, user, tracks[0], None, requested=query)
+                self.results[key] = (time.monotonic() + 600, recordings)
+                if len(recordings) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
+                    sources = recordings[0]
+                    if len(sources) == 1:
+                        await self._deliver(ws, kind, group, user, sources[0], None, requested=query)
+                    else:
+                        await self._deliver_group(ws, kind, group, user, sources, requested=query)
                     return
                 lines = [f'{i}. {track.title} · {track.creator or self.messages["unknown_creator"]}'
-                         for i, track in enumerate(tracks, 1)]
+                         for i, (track, *_) in enumerate(recordings, 1)]
                 text = '\n'.join([*lines, self.messages['choose']])
             else:
                 text = self.messages['none']
@@ -615,7 +678,7 @@ class OpenMusic:
 
         return await asyncio.to_thread(convert)
 
-    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None):
+    async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None, report_failure=True):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -637,11 +700,13 @@ class OpenMusic:
                     'page', 'search_page', 'release_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'qq_video', 'audio', 'size'
                 }
                            else self.messages['download'])
-                await notify(failure + '\n' + await self._preview(requested) if requested else failure)
+                if report_failure:
+                    await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
             except (OSError, RuntimeError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
                 failure = self.messages['download']
-                await notify(failure + '\n' + await self._preview(requested) if requested else failure)
+                if report_failure:
+                    await notify(failure + '\n' + await self._preview(requested) if requested else failure)
                 return False
             if track:
                 credits = self.messages['credits'].format(
@@ -650,8 +715,10 @@ class OpenMusic:
                 )
                 if requested and not _exact_track(track, requested):
                     credits = self.messages['approximate'].format(query=requested) + '\n' + credits
-                if requested:
-                    credits += '\n' + await self._preview(requested)
+                if requested and track.creator:
+                    preview = await self._preview(f'{track.title} - {track.creator}', search_fallback=False)
+                    if preview:
+                        credits += '\n' + preview
                 await notify(credits)
                 if parts and not file_only:
                     try:

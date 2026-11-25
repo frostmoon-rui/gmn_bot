@@ -169,7 +169,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             return {'result': {'songs': [netease | {'artists': [{'name': 'Unrelated'}]}, netease]}}
 
         with patch('open_music._platform_response', side_effect=response):
-            links = search_platform_tracks('Sample')
+            links = search_platform_tracks('Sample - Performer')
             self.assertEqual([platform for platform, _ in links], ['kugou', 'netease'])
             self.assertEqual(links[0][1].title, 'Sample (Studio)')
             self.assertTrue(links[0][1].source.endswith('album_id=123'))
@@ -241,6 +241,37 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 await tasks[0]
             deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None, requested='Piano piece - Example')
             send.assert_not_awaited()
+
+    async def test_same_recording_retries_source_without_sending_an_intermediate_error(self):
+        event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
+        first = _track(SAMPLE)
+        second = _track(SAMPLE | {'url': 'https://mirror.example.test/track.mp3'})
+        tasks, send = [], AsyncMock()
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'ffmpeg'
+            executable.touch()
+            worker = OpenMusic(executable, lambda coro: tasks.append(asyncio.create_task(coro)), send)
+            with (
+                patch('open_music.search_tracks', return_value=[first, second]),
+                patch.object(worker, '_deliver', new_callable=AsyncMock, side_effect=[False, True]) as deliver,
+            ):
+                worker.start(object(), event, 'search', 'Piano piece - Example')
+                await tasks[0]
+            self.assertEqual([call.args[4] for call in deliver.await_args_list], [first, second])
+            self.assertEqual([call.kwargs['report_failure'] for call in deliver.await_args_list], [False, True])
+            send.assert_not_awaited()
+
+    async def test_platform_choices_are_distinct_and_successful_metadata_is_reused(self):
+        first = Release('Piano piece', 'First artist', '', 'https://example.test/first')
+        second = Release('Piano piece', 'Second artist', '', 'https://example.test/second')
+        worker = OpenMusic(None, None, None)
+        with patch('open_music._platform_candidates', side_effect=[[first], [second]]) as catalog:
+            response = await worker._preview('Piano piece')
+            repeated = await worker._preview('piano piece')
+        self.assertEqual(response, repeated)
+        self.assertIn('Piano piece · First artist', response)
+        self.assertIn('Piano piece · Second artist', response)
+        self.assertEqual(catalog.call_count, 2)
 
     async def test_download_can_convert_a_file_captured_in_the_browser(self):
         event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
