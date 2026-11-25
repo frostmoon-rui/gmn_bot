@@ -1,6 +1,7 @@
 """Extract NapCat cards, collect public page information and summarize video metadata on request; no login or video download."""
 from reply_style import english_provider_text
 import asyncio
+from job_progress import with_progress
 import html
 import ipaddress
 import json
@@ -398,8 +399,11 @@ class VideoSummaries:
             except Exception as error:
                 print('[QQ video URL refresh failed]:', type(error).__name__)
         self.busy.add(user)
-        self.b.extensions.spawn(self.job(ws, event, candidate))
-        return 'Reading public video information in the background; a reply will follow within 3 minutes.'
+        job = self.job(ws, event, candidate)
+        self.b.extensions.spawn(with_progress(
+            job, self.b.extensions.send, ws, event['message_type'], event.get('group_id', 0), user,
+        ))
+        return ''
 
     async def job(self, ws, event, candidate):
         async def run():

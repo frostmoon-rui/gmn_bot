@@ -50,7 +50,7 @@ class WebsiteCommandTests(unittest.IsolatedAsyncioTestCase):
         ext.website_job = AsyncMock()
         ws = SimpleNamespace(send=AsyncMock())
         reply = await ext.command('website screenshot:friends ja light', ws, 'group', 20, 10, False, False, mentioned=True)
-        self.assertIn('background', reply)
+        self.assertEqual(reply, '')
         await asyncio.gather(*ext.tasks)
         ext.website_job.assert_awaited_once_with(ws, 'group', 20, 10, 'friends', 'ja', 'light')
         reply = await ext.command('website screenshot:friends', ws, 'group', 20, 10, False, False, mentioned=True)

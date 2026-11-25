@@ -103,7 +103,7 @@ class VideoFlowTests(unittest.IsolatedAsyncioTestCase):
         self.service.fetcher.collect = lambda candidate: {'url': candidate['url'], 'title': 'Title',
             'description': 'Description', 'comments': ['A viewer comment'], 'warnings': []}
         reply = await self.service.command(event('summarize video'), 'summarize video', True, self.ws)
-        self.assertIn('background', reply)
+        self.assertEqual(reply, '')
         await asyncio.gather(*self.jobs)
         self.assertIn('video footage was not watched', self.sent[0])
         self.assertEqual(self.ai.call_args.args[1], 'mimo-v2.6-flash')

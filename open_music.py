@@ -1,6 +1,7 @@
 """Search downloadable, openly licensed recordings and deliver them in QQ."""
 
 import asyncio
+from job_progress import with_progress
 import http.client
 import json
 import math
@@ -686,7 +687,7 @@ class OpenMusic:
 
         async def run():
             try:
-                await job
+                await with_progress(job, self.send, ws, kind, group, user)
             finally:
                 self.active.discard(key)
 

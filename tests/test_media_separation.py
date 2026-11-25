@@ -181,4 +181,4 @@ class MediaDeliveryTests(unittest.IsolatedAsyncioTestCase):
             ])
             self.assertEqual(sent[1][1], {'file': 'voice-id'})
             self.assertFalse(job.queue)
-            self.assertEqual(len(notices), 1)
+            self.assertEqual(notices, [])

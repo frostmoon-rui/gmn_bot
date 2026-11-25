@@ -229,7 +229,7 @@ class AmapIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_command_mention_and_text_segment_safety(self):
         args = (self.ws, 'group', 7, 8, False, False)
         self.assertIsNone(await self.ext.command('search places:Beijing|pharmacy', *args, mentioned=False))
-        self.assertEqual(await self.ext.command('search places:Beijing|pharmacy', *args, mentioned=True), 'Retrieving map data.')
+        self.assertEqual(await self.ext.command('search places:Beijing|pharmacy', *args, mentioned=True), '')
         await asyncio.gather(*self.ext.tasks)
         message = json.loads(self.ws.send.call_args.args[0])['params']['message']
         self.assertEqual([segment['type'] for segment in message], ['at', 'text'])

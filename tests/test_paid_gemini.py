@@ -148,7 +148,11 @@ class DirectCommandTests(unittest.IsolatedAsyncioTestCase):
         ext = Extensions.__new__(Extensions)
         ext.search_users = set()
         ext.argon_job = AsyncMock()
-        ext.spawn = lambda coro: coro.close()
+        def spawn(coro):
+            task = asyncio.create_task(coro)
+            self.addAsyncCleanup(asyncio.gather, task)
+            return task
+        ext.spawn = spawn
         return ext
 
     async def test_direct_command_requires_allowlist_and_group_mention(self):

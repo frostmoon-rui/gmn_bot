@@ -1949,7 +1949,8 @@ async def handle_message_event(ws, data):
         videos.observe(data)
         video_reply = await videos.command(data, cleaned_msg, addressed, ws)
         if video_reply is not None:
-            await extensions.send(ws, msg_type, group_id, user_id, video_reply)
+            if video_reply:
+                await extensions.send(ws, msg_type, group_id, user_id, video_reply)
             return
     is_master = is_superadmin(user_id)
     is_whitelist = user_id in WHITELIST_QQ or is_master
@@ -2057,14 +2058,14 @@ async def handle_message_event(ws, data):
                 cmd_reply = "The assistant is still working on your previous question. Please wait for the answer."
             else:
                 mimo_question_sessions.add(task_key)
-                task = asyncio.create_task(
-                    handle_mimo_question(
-                        ws, msg_type, group_id, user_id, question, nickname
-                    )
-                )
+                from job_progress import with_progress
+                task = asyncio.create_task(with_progress(
+                    handle_mimo_question(ws, msg_type, group_id, user_id, question, nickname),
+                    extensions.send, ws, msg_type, group_id, user_id,
+                ))
                 mimo_question_tasks.add(task)
                 task.add_done_callback(mimo_question_tasks.discard)
-                cmd_reply = "The assistant is working in the background and will reply when the answer is ready, meow."
+                return
 
     model_switch_match = re.fullmatch(r"switch model to\s*(Gemini|GPT|Claude|DeepSeek)", cleaned_msg, re.IGNORECASE)
     if cmd_reply is None and model_switch_match:
@@ -2576,7 +2577,8 @@ async def handle_message_event(ws, data):
     search_plan = parse_search_request(reply_raw)
     if search_plan and not is_random_chime and (addressed or hit_keyword or msg_type == 'private'):
         tip = extensions.start_model_search(ws, msg_type, group_id, user_id, search_plan)
-        await extensions.send(ws, msg_type, group_id, user_id, tip)
+        if tip:
+            await extensions.send(ws, msg_type, group_id, user_id, tip)
         return
     if '[SEARCH_REQUEST:' in reply_raw:
         # Never expose invalid or passive-context search plans as ordinary answers.

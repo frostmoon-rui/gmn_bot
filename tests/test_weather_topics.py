@@ -156,12 +156,12 @@ class WeatherMapDeliveryTests(unittest.IsolatedAsyncioTestCase):
         ext.b = SimpleNamespace(features=SimpleNamespace(language='en'))
         ext.weather_map_job = AsyncMock()
         ext.weather_at = AsyncMock()
-        def start(user, operation, coro):
+        def start(user, operation, coro, *, chat):
             coro.close()
             return True
         ext.start_user_job = Mock(side_effect=start)
         answer = await ext.command('/current temperature', None, 'group', 20, 10, False, True, mentioned=True)
-        self.assertIn('national weather map', answer)
+        self.assertEqual(answer, '')
         ext.weather_map_job.assert_called_once_with(None, 'group', 20, 10, 'temperature_current')
         ext.weather_at.assert_not_called()
 

@@ -1,6 +1,7 @@
 """Bounded local audio separation for files and direct media links."""
 
 import asyncio
+from job_progress import with_progress
 import http.client
 import ipaddress
 import json
@@ -28,7 +29,6 @@ MESSAGES = {
     'multiple': 'Please reply to a message with exactly one file, voice message or direct media link.',
     'disabled': 'Local audio separation is unavailable on this host.',
     'busy': 'The audio worker is busy. Please try again shortly.',
-    'started': 'I’ll separate the vocals and accompaniment in the background.',
     'audio': 'This file has no readable audio track.',
     'format': 'Could not read this media file. Try an audio file or a video with an audio track.',
     'size': 'The media must be under 80 MiB and at most 10 minutes long.',
@@ -440,7 +440,8 @@ class MediaSeparation:
         if key in self.queue or len(self.queue) >= 3:
             return self.messages['busy']
         self.queue.add(key)
-        self.spawn(self._job(ws, event, key, source, reply_id, voice, belongs, text))
+        job = self._job(ws, event, key, source, reply_id, voice, belongs, text)
+        self.spawn(with_progress(job, self.send, ws, event['message_type'], event.get('group_id', 0), event['user_id']))
         return None
 
     async def _job(self, ws, event, key, source, reply_id, voice, belongs, text):
@@ -472,13 +473,11 @@ class MediaSeparation:
                         normalized, duration = await asyncio.to_thread(
                             normalize_link_audio, self.ffmpeg, value, workspace, self.silk_module,
                         )
-                        await notify('started')
                         duration, outputs = await asyncio.to_thread(
                             split_normalized_audio, self.engine, self.ffmpeg, normalized, duration, workspace,
                         )
                     else:
                         await fetch_napcat_media(call, original, source, incoming)
-                        await notify('started')
                         duration, outputs = await asyncio.to_thread(
                             separate_media, self.engine, self.ffmpeg, incoming, workspace, self.silk_module,
                         )

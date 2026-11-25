@@ -1,6 +1,7 @@
 from local_settings import setting
 """Person records, Google weather and independent background research tasks."""
 import asyncio
+from job_progress import with_progress
 import base64
 import html
 import ipaddress
@@ -111,7 +112,7 @@ class Extensions:
         task.add_done_callback(finished)
         return task
 
-    def start_user_job(self, user, operation, coro, *, timeout=120):
+    def start_user_job(self, user, operation, coro, *, timeout=120, chat=None):
         key = (user, operation)
         if key in self.user_jobs or len(self.user_jobs) >= 16:
             coro.close()
@@ -122,7 +123,8 @@ class Extensions:
                 await asyncio.wait_for(coro, timeout)
             finally:
                 self.user_jobs.discard(key)
-        self.spawn(run())
+        job = run()
+        self.spawn(with_progress(job, self.send, *chat) if chat is not None else job)
         return True
 
     async def send(self, ws, kind, group, user, text):
@@ -429,7 +431,7 @@ class Extensions:
 
     def start_forecast(self, ws, kind, group, user, location='', target='today'):
         operation = ('weather', kind, group, location.strip(), target)
-        return self.start_user_job(user, operation, self.weather_at(ws, kind, group, user, location, target), timeout=180)
+        return self.start_user_job(user, operation, self.weather_at(ws, kind, group, user, location, target), timeout=180, chat=(ws, kind, group, user))
 
     async def send_weather(self, ws, kind, group, user, report):
         from weather_delivery import render_report
@@ -479,9 +481,9 @@ class Extensions:
         if topic and (mentioned or kind == 'private'):
             product, local = topic['product'], topic['scope']=='local'
             job = self.weather_local_job(ws, kind, group, user, product, topic['location']) if local else self.weather_map_job(ws, kind, group, user, product)
-            if not self.start_user_job(user, 'weather-map', job):
+            if not self.start_user_job(user, 'weather-map', job, chat=(ws, kind, group, user)):
                 return 'A weather chart is already running, meow.'
-            return 'Fetching local data and drawing a large chart, meow.' if local else 'Fetching the latest published national weather map, meow.'
+            return ''
         from celestial_weather import celestial_request
         celestial = celestial_request(text)
         if celestial is not None:
@@ -504,16 +506,16 @@ class Extensions:
             if now-self.website_times.get(user, -30) < 30:
                 return 'Please wait 30 seconds between website screenshots.'
             language, theme = ((website[2] or 'en', website[3] or 'dark') if website else ('en', 'dark'))
-            if not self.start_user_job(user, 'website screenshot', self.website_job(ws, kind, group, user, page, language, theme)):
+            if not self.start_user_job(user, 'website screenshot', self.website_job(ws, kind, group, user, page, language, theme), chat=(ws, kind, group, user)):
                 return 'Your website screenshot is already running. Please wait.'
             self.website_times[user] = now
-            return 'Opening the public website for a live background screenshot, without owner sessions or private records.'
+            return ''
         if (mentioned or kind == 'private') and text.lower() == 'cachetide blog':
             return 'CacheTide’s blog, Inn by the Clouds: https://cachetide.top'
         if (mentioned or kind == 'private') and text.lower() in {'food map'}:
-            if not self.start_user_job(user, 'food atlas', self.food_atlas_job(ws, kind, group, user), timeout=165):
+            if not self.start_user_job(user, 'food atlas', self.food_atlas_job(ws, kind, group, user), timeout=165, chat=(ws, kind, group, user)):
                 return 'A food map is already being generated. Please wait.'
-            return 'Generating the food map.'
+            return ''
         match = re.fullmatch(r'superadmin add\s*[:：]\s*(\d{5,12})\|(.{1,20})', text)
         if match and (mentioned or kind == 'private'):
             try:
@@ -522,14 +524,14 @@ class Extensions:
             except (PermissionError, ValueError) as error:
                 return str(error)
         if text in {'earthquake warning', 'earthquake report', 'latest earthquake', 'earthquake bulletin', 'check earthquakes'} and (mentioned or kind == 'private'):
-            if not self.start_user_job(user, 'earthquake query', self.earthquake_job(ws, kind, group, user)):
+            if not self.start_user_job(user, 'earthquake query', self.earthquake_job(ws, kind, group, user), chat=(ws, kind, group, user)):
                 return 'Your earthquake query is still running. Please wait.'
-            return 'Checking earthquake warnings and post-event reports.'
+            return ''
         match = re.fullmatch(r'(submit food|approve food|remove food)\s*[:：]\s*(.+)', text, re.S)
         if match and (mentioned or kind == 'private'):
-            if not self.start_user_job(user, 'food map', self.food_job(ws, kind, group, user, *match.groups(), master)):
+            if not self.start_user_job(user, 'food map', self.food_job(ws, kind, group, user, *match.groups(), master), chat=(ws, kind, group, user)):
                 return 'Your food submission is still being processed. Please wait.'
-            return 'Processing food-map information; non-admin submissions require review before publication.'
+            return ''
         if text == 'pending food' and master and (mentioned or kind == 'private'):
             records = await asyncio.to_thread(self.food.store.entries, True)
             return '\n'.join(f'{r["id"]} {r["city"]} {r["name"]}' for r in records[:15]) or 'No food submissions awaiting review.'
@@ -578,17 +580,17 @@ class Extensions:
                 return 'That weather lookup is already running or the queue is full, meow.'
             return ''
         if text == 'my maps' and (mentioned or kind == 'private'):
-            if not self.start_user_job(user, 'map', self.amap_job(ws, kind, group, user, 'my maps', '')):
+            if not self.start_user_job(user, 'map', self.amap_job(ws, kind, group, user, 'my maps', ''), chat=(ws, kind, group, user)):
                 return 'Your map query is still running. Please wait.'
-            return 'Opening your maps.'
+            return ''
         operations = '|'.join(re.escape(name) for name in (*OPERATIONS, 'Google map', 'Google search places', 'Google route', 'air quality', 'local timezone'))
         map_match = re.fullmatch(r'('+operations+r')\s*[:：]\s*(.+)', text, re.S)
         if map_match and (mentioned or kind == 'private'):
             operation, query = map_match.groups()
             worker = self.amap_job if operation in OPERATIONS else self.map_job
-            if not self.start_user_job(user, 'map', worker(ws, kind, group, user, operation.removeprefix('Google '), query)):
+            if not self.start_user_job(user, 'map', worker(ws, kind, group, user, operation.removeprefix('Google '), query), chat=(ws, kind, group, user)):
                 return 'Your map query is still running. Please wait.'
-            return 'Retrieving map data.'
+            return ''
         match = re.fullmatch(r'person record\s*[:：]\s*(\d+)\s+(.+)', text, re.S)
         if match:
             if not master:
@@ -628,15 +630,20 @@ class Extensions:
                 return 'Keep the research question within 2000 characters.'
             self.search_users.add(user)
             if direct_carbon:
-                self.spawn(self.argon_job(ws, kind, group, user, match[2], model='Carbon'))
-                return 'Carbon is working in the background.'
+                self.spawn(with_progress(
+                    self.argon_job(ws, kind, group, user, match[2], model='Carbon'), self.send, ws, kind, group, user,
+                ))
+                return ''
             if direct_argon:
-                self.spawn(self.argon_job(ws, kind, group, user, match[2]))
-                return 'Argon is thinking in the background; an answer will follow.'
+                self.spawn(with_progress(
+                    self.argon_job(ws, kind, group, user, match[2]), self.send, ws, kind, group, user,
+                ))
+                return ''
             model = RESEARCH_MODE if match[1] == 'ask assistant' else 'mimo-v2.6-flash'
-            self.spawn(self.search_job(ws, kind, group, user, match[2], model))
-            return ('The assistant is researching in the background; an answer will follow.'
-                    if model == RESEARCH_MODE else 'Research is running in the background; a short conclusion will follow.')
+            self.spawn(with_progress(
+                self.search_job(ws, kind, group, user, match[2], model), self.send, ws, kind, group, user,
+            ))
+            return ''
         return None
 
     def contextual_question(self, feature, kind, group, user, query):
@@ -692,9 +699,11 @@ class Extensions:
         if len(self.auto_search_times) > 1000:
             self.auto_search_times.pop(next(iter(self.auto_search_times)))
         self.search_users.add(user)
-        self.spawn(self.search_job(ws, kind, group, user, plan['query'], mode=plan['mode'], topic=plan.get('topic', '')))
+        self.spawn(with_progress(
+            self.search_job(ws, kind, group, user, plan['query'], mode=plan['mode'], topic=plan.get('topic', '')), self.send, ws, kind, group, user,
+        ))
         print('[Model-requested research]:', plan['mode'], 'background retrieval started')
-        return 'I will check the sources and give you a short answer shortly.'
+        return ''
 
     async def python_search(self, query, mode='web', topic=''):
         from vision_reuse import normalize_request

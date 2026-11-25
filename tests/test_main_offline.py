@@ -568,11 +568,15 @@ class EnglishExtensionTests(unittest.IsolatedAsyncioTestCase):
         ext = self.extension()
         ext.search_users = set()
         ext.search_job = AsyncMock()
-        ext.spawn = lambda coroutine: coroutine.close()
+        def spawn(coro):
+            task = asyncio.create_task(coro)
+            self.addAsyncCleanup(asyncio.gather, task)
+            return task
+        ext.spawn = spawn
         for command, model in (('ask assistant', 'gemini-research'), ('search', 'mimo-v2.6-flash')):
             ext.search_users.clear()
             reply = await ext.command(command+':Explain capacitance', None, 'private', 0, 10, False, True)
-            self.assertIn('background', reply)
+            self.assertEqual(reply, '')
             self.assertEqual(ext.search_job.call_args.args[-1], model)
 
     def test_english_province_and_legacy_private_location_are_supported(self):
