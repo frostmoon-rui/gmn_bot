@@ -28,7 +28,7 @@ LICENSES = {
 VOICE_PART_SECONDS = 120
 MESSAGES = {
     'choose': 'Use /get track 1, 2 or 3 to receive the MP3 and full QQ voice playback. Results expire after 10 minutes.',
-    'none': 'No downloadable recording was found. You can send a file or use /download audio with a media URL.',
+    'none': 'No matching downloadable recording was found. You can send the file or use /download audio with a media URL.',
     'search_error': 'The music catalogs are temporarily unavailable.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
@@ -92,7 +92,7 @@ def _openverse(query):
             raise MediaError('search_error')
         return list(dict.fromkeys(
             track for item in items if isinstance(item, dict) and (track := _track(item))
-        ))[:3]
+        ))
     finally:
         response.close()
         conn.close()
@@ -140,30 +140,45 @@ def _commons(query):
     return [track for item in sorted(items, key=lambda row: row.get('index', 0)) if (track := _commons_track(item))]
 
 
+def _clean_title(title):
+    return re.sub(r'\s*\(\s*(?:feat\.?|ft\.?)\s+[^)]*\)', '', normalize('NFKC', title), flags=re.I).strip()
+
+
 def _query_parts(query):
     fields = re.split(r'\s+[–—-]\s+', normalize('NFKC', query), maxsplit=1)
-    title = re.sub(r'\s*\(\s*(?:feat\.?|ft\.?)\s+[^)]*\)', '', fields[0], flags=re.I).strip()
-    return title or query, fields[1] if len(fields) > 1 else ''
+    return _clean_title(fields[0]) or query, fields[1] if len(fields) > 1 else ''
 
 
 def _key(text):
     return ''.join(char for char in normalize('NFKC', text).casefold() if char.isalnum())
 
 
+def _artist_key(artist):
+    name = re.sub(r'\s*\([^()]*\)', '', normalize('NFKC', artist))
+    pieces = re.split(r'[/&、]|\s+and\s+', name, flags=re.I)
+    return sorted(key for piece in pieces if (key := _key(piece)))
+
+
 def _exact_track(track, query):
     title, artist = _query_parts(query)
-    clean_title, _ = _query_parts(track.title)
+    clean_title = _clean_title(track.title)
     if not _key(title) or _key(clean_title) != _key(title):
         return False
     if not artist:
         return True
-    required = [_key(name) for name in re.split(r'[/&、]', artist.split('(')[0]) if _key(name)]
-    creator = _key(track.creator)
-    return bool(required) and all(name in creator for name in required)
+    required = _artist_key(artist)
+    primary = re.split(r',|\s+(?:feat\.?|ft\.?)\s+', track.creator, maxsplit=1, flags=re.I)[0]
+    return bool(required) and required in (_artist_key(track.creator), _artist_key(primary))
 
 
 def search_tracks(query):
-    title, _ = _query_parts(query)
+    title, artist = _query_parts(query)
+    # A specified recording must never resolve to a cover, instrumental or another version.
+    version = re.search(
+        r'[(\[]\s*(?:live|acoustic|remix|remaster(?:ed)?|instrumental|demo|cover|现场版|現場版|伴奏|翻唱)\b',
+        title, re.I,
+    )
+    strict = bool(artist or version)
     short_title = re.split(r'[([{【]', title, maxsplit=1)[0].strip()
     completed = 0
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -176,6 +191,8 @@ def search_tracks(query):
                     completed += 1
                 except (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
                     continue
+            if strict:
+                results = [track for track in results if _exact_track(track, query)]
             if results:
                 unique = {track.url: track for track in results}
                 return sorted(unique.values(), key=lambda track: not _exact_track(track, query))[:3]

@@ -64,7 +64,7 @@ HELP = {'celestial-weather': 'Celestial weather: Sun weather | Moon weather | Ma
             'More: help search / video / maps / food map / website / identity / admin | bot status',
  'video': '🎬 Video information summary\n'
           'Reply to a shared card and mention me with summarize video, or use summarize video:URL. '
-          'Reply to an audio file, video, voice message, direct link or downloadable audio page with separate audio. Add voice for short playback copies. Use /play music SONG - ARTIST to find downloadable recordings. A unique exact match is downloaded automatically. Use /get track 1 to select from multiple results. /kugou music SONG opens Kugou search. '
+          'Reply to an audio file, video, voice message, direct link or downloadable audio page with separate audio. Add voice for short playback copies. Use /play music SONG - ARTIST to find downloadable recordings. A specified artist or version filters out other recordings. A unique exact match is downloaded automatically. Use /get track 1 to select from multiple results. /kugou music SONG opens Kugou search. '
           'Use /download audio URL to get a full MP3 and complete QQ voice playback in parts up to two minutes from a public file, an embedded audio link or a podcast feed. Limit: 80 MiB and 10 minutes.\n'
           'You can also ask about your most recent card from the last 30 minutes.\n'
           'Public information is fetched in the background; MiMo 2.6 Flash returns 2–3 sentences '
