@@ -1,5 +1,11 @@
 # Lucky Cat user guide
 
+## Audio and background tasks
+
+- `/play music SONG - ARTIST` tries the official QQ Music player first for a unique match when browser capture is configured. VIP preview replies show the measured duration. When capture fails, existing download catalogs and official release links remain available.
+- Reply to audio, a video with sound, or a QQ voice message with `separate audio`. Processing stays local. Add `voice` to request QQ voice copies for short outputs.
+- Music, separation, weather, maps, screenshots, research, and video summaries send results directly when ready. A job still running after 30 seconds sends one progress message. Command errors and rate limits are reported immediately.
+
 ## Website interaction
 
 Use `help website` for the in-chat guide. Mention the bot in groups; private-chat commands can be sent directly.

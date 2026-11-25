@@ -50,9 +50,10 @@ HELP = {'celestial-weather': 'Celestial weather: Sun weather | Moon weather | Ma
             'Fixed public pages only; no studio, unlisted room, automatic edits or publication.',
         'general': '🐾 Lucky Cat · Quick guide\n'
             'Mention me in groups; speak directly in private. Use cat help to open this guide.\n'
+            'A background job sends one progress notice after 30 seconds if still running.\n'
             'Chat: ask a question | generate image:description\n'
             'Video: reply to a card and mention me with summarize video, or summarize video:URL\n'
-            'Audio: /download audio PAGE or FILE | see help video\n'
+            'Audio: /play music SONG - ARTIST | /download audio URL | separate audio (help video)\n'
             'Sticker correction: reply to my image and mention me with delete; retract and image-blocklist it.\n'
             'Weather: set location:city | weather today | weather tomorrow (complete weather image + Gemini briefing)\n'
             'Natural requests can invoke weather, deep research, maps, screenshots and other output tools; existing permissions still apply.\n'
@@ -64,7 +65,7 @@ HELP = {'celestial-weather': 'Celestial weather: Sun weather | Moon weather | Ma
             'More: help search / video / maps / food map / website / identity / admin | bot status',
  'video': '🎬 Video information summary\n'
           'Reply to a shared card and mention me with summarize video, or use summarize video:URL. '
-          'Reply to an audio file, video, voice message, direct link or downloadable audio page with separate audio. Add voice for short playback copies. Use /play music SONG - ARTIST to find downloadable recordings. The title, requested version, and specified artist must match. A unique recording is sent as one full voice message or as an MP3 if it exceeds three minutes. Use /get track 1 for multiple results or /get track 1 file for an MP3. /kugou music SONG or /netease music SONG opens the platform search. Preview links open matching tracks on NetEase Cloud Music or Kugou. High-confidence nearby titles by the specified artist are labelled as approximate matches. '
+          'Reply to audio, video or a QQ voice message with separate audio. Add voice for short playback copies.\nUse /play music SONG - ARTIST. A unique QQ Music match is tried first when configured. VIP previews show their duration. Complete tracks up to three minutes can be sent as voice. Use /get track 1 or /get track 1 file for listed downloads. /kugou music and /netease music open official search pages.\n'
           'Use /download audio URL to get a full MP3 and complete QQ voice playback in parts up to two minutes from a public file, an embedded audio or video player, a podcast feed or an unencrypted HLS recording. Limit: 80 MiB and 10 minutes. Reply to a QQ video or audio attachment with /download audio to extract its audio.\n'
           'You can also ask about your most recent card from the last 30 minutes.\n'
           'Public information is fetched in the background; MiMo 2.6 Flash returns 2–3 sentences '
