@@ -4,7 +4,7 @@ if __name__ == '__main__':
 
 from local_settings import setting
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
-from open_music import OpenMusic, netease_search_url
+from open_music import OfficialMusic, OpenMusic, netease_search_url
 from model_proxy import select_model_proxy
 import asyncio
 import base64
@@ -2643,6 +2643,7 @@ async def main():
         setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,
         silk_module=setting('MEDIA_SILK_MODULE'),
         preview_catalog=setting('MUSIC_PREVIEW_CATALOG', []),
+        official=OfficialMusic(qq_key=setting('QQMUSIC_API_KEY'), netease_cli=setting('NCM_CLI_JS')),
     )
     media_separation = MediaSeparation(
         setting('MEDIA_SPLEETER_EXE'), setting('MEDIA_FFMPEG_EXE'), extensions.spawn, extensions.send,

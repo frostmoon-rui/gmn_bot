@@ -4,7 +4,9 @@ import asyncio
 import http.client
 import json
 import math
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -40,6 +42,7 @@ MESSAGES = {
     'approximate': 'Closest downloadable result for {query}',
     'preview_search': 'Search on Kugou',
     'netease': 'NetEase Cloud Music',
+    'qqmusic': 'QQ Music',
     'kugou': 'Kugou',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
@@ -435,19 +438,113 @@ def _platform_candidates(platform, query):
     return results
 
 
-def search_platform_tracks(query):
+def _qqmusic_rows(key, keyword):
+    request = Request('https://a.y.qq.com/discover/search', data=json.dumps({
+        'params': {'keyword': keyword, 'type': '0'},
+        'comm': {'skill_version': '0.0.3'},
+    }).encode('utf-8'), headers={
+        'Authorization': f'Bearer {key}', 'Content-Type': 'application/json',
+    })
+    with build_opener(_NoCatalogRedirect()).open(request, timeout=5) as response:
+        payload = json.loads(response.read(512 * 1024))
+    return payload.get('songs') or []
+
+
+def _netease_cli_rows(node, script, keyword):
+    result = subprocess.run(
+        [node, str(script), 'search', 'song', f'--keyword={keyword}',
+         f'--userInput=Find the recording {keyword}'],
+        capture_output=True, timeout=6, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+    )
+    if result.returncode != 0 or len(result.stdout) > 512 * 1024:
+        return []
+    # The CLI can print status lines alongside its JSON result.
+    output = result.stdout.decode('utf-8-sig').strip()
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'(?m)^\s*(?=[\[{])', output):
+        try:
+            payload, _ = decoder.raw_decode(output, match.end())
+        except ValueError:
+            continue
+        for field in ('data', 'result', 'songs', 'items'):
+            if isinstance(payload, dict) and field in payload:
+                payload = payload[field]
+        if isinstance(payload, list):
+            return payload
+    return []
+
+
+class OfficialMusic:
+    def __init__(self, qq_key='', netease_cli=''):
+        self.qq_key = qq_key.strip() if isinstance(qq_key, str) else ''
+        local = os.environ.get('LOCALAPPDATA')
+        default = Path(local, 'GMN-Bot/ncm-cli/node_modules/@music163/ncm-cli/dist/index.js') if local else None
+        script = Path(netease_cli) if netease_cli else default
+        self.netease_cli = script if script and script.is_absolute() and script.is_file() else None
+        self.node = shutil.which('node') if self.netease_cli else None
+
+    def search(self, platform, query):
+        title, artist = _query_parts(query)
+        keyword = ' '.join(f'{title} {artist}'.split())[:160]
+        if platform == 'qqmusic':
+            rows = _qqmusic_rows(self.qq_key, keyword)
+        elif self.node:
+            rows = _netease_cli_rows(self.node, self.netease_cli, keyword)
+        else:
+            return []
+        results = []
+        for row in rows[:25]:
+            if not isinstance(row, dict):
+                continue
+            if platform == 'qqmusic':
+                ident = str(row.get('songMid') or '')
+                if not re.fullmatch(r'[a-zA-Z0-9]{1,32}', ident):
+                    continue
+                name, creator = row.get('songName'), row.get('singerName')
+                url = f'https://i2.y.qq.com/a/song/{ident}'
+            else:
+                ident = str(row.get('originalId') or '')
+                if row.get('visible') is False or not re.fullmatch(r'[0-9]{1,16}', ident):
+                    continue
+                name = row.get('name') or row.get('title')
+                creator = row.get('artists') or row.get('artist')
+                if isinstance(creator, list):
+                    creator = ' / '.join(str(item.get('name') or '') for item in creator if isinstance(item, dict))
+                url = f'https://music.163.com/#/song?id={ident}'
+            if not all(isinstance(field, str) and field.strip() for field in (name, creator)):
+                continue
+            track = Release(' '.join(name.split())[:120], ' '.join(creator.split())[:120], '', url)
+            base = re.sub(r'\s*\([^()]+\)\s*$', '', _clean_title(track.title))
+            if _exact_track(track, query) or (
+                _key(base) == _key(title) and _version_tags(track.title) == _version_tags(title)
+                and (not artist or _same_artist(track, artist))
+            ):
+                results.append(track)
+        return results
+
+
+def search_platform_tracks(query, official=None):
     def search(platform):
+        if official and platform in ('netease', 'qqmusic'):
+            try:
+                results = official.search(platform, query)
+                if results:
+                    return results
+            except (*CATALOG_ERRORS, subprocess.TimeoutExpired):
+                pass
+        if platform == 'qqmusic':
+            return []
         try:
             return _platform_candidates(platform, query)
         except CATALOG_ERRORS:
             return []
 
-    with ThreadPoolExecutor(max_workers=2) as worker:
-        kugou, netease = worker.map(search, ('kugou', 'netease'))
+    platforms = ('qqmusic', 'netease', 'kugou') if official and official.qq_key else ('kugou', 'netease')
     groups = {}
-    for platform, entries in (('kugou', kugou), ('netease', netease)):
-        for entry in entries:
-            groups.setdefault(recording_key(entry), {}).setdefault(platform, entry)
+    with ThreadPoolExecutor(max_workers=len(platforms)) as worker:
+        for platform, entries in zip(platforms, worker.map(search, platforms)):
+            for entry in entries:
+                groups.setdefault(recording_key(entry), {}).setdefault(platform, entry)
     if len(groups) == 1:
         return list(next(iter(groups.values())).items())
     return [next(iter(recording.items())) for recording in list(groups.values())[:2]]
@@ -526,12 +623,13 @@ def prepare_link(url, ffmpeg, workspace):
 
 
 class OpenMusic:
-    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None, preview_catalog=None):
+    def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None, preview_catalog=None, official=None):
         self.ffmpeg = Path(ffmpeg) if ffmpeg else None
         self.spawn, self.send = spawn, send
         self.silk_module = silk_module
         self.messages = MESSAGES | (messages or {})
         self.preview_catalog = preview_catalog
+        self.official = official
         self.preview_cache = {}
         self.results = {}
         self.active = set()
@@ -576,18 +674,25 @@ class OpenMusic:
     async def _platform_previews(self, query):
         configured = configured_platform_track(self.preview_catalog, query)
         if configured:
-            return [configured]
+            if not self.official or not (self.official.qq_key or self.official.node):
+                return [configured]
+            track = configured[1]
+            query = f'{track.title} - {track.creator}'
         title, artist = _query_parts(query)
         key = (_key(title), tuple(_artist_key(artist)))
         current = time.monotonic()
         cached = self.preview_cache.get(key)
         if cached and cached[0] > current:
-            return cached[1]
-        links = await asyncio.to_thread(search_platform_tracks, query)
-        if links:
-            if len(self.preview_cache) >= 128:
-                self.preview_cache.pop(next(iter(self.preview_cache)))
-            self.preview_cache[key] = (time.monotonic() + 900, links)
+            links = cached[1]
+        else:
+            links = await asyncio.to_thread(search_platform_tracks, query, self.official)
+            if links:
+                if len(self.preview_cache) >= 128:
+                    self.preview_cache.pop(next(iter(self.preview_cache)))
+                self.preview_cache[key] = (time.monotonic() + 900, links)
+        if configured:
+            return [configured, *(item for item in links if item[0] != configured[0]
+                                   and recording_key(item[1]) == recording_key(configured[1]))]
         return links
 
     async def _preview(self, query, *, search_fallback=True):

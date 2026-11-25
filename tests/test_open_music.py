@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from music_capture import jamendo_track_id, match_jamendo_media
 from open_music import (
+    OfficialMusic,
     MESSAGES, OpenMusic, Release, configured_platform_track, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
     search_platform_tracks, search_release_links, search_tracks,
 )
@@ -31,6 +32,48 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
         patcher = patch('open_music._archive', return_value=[])
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_official_qq_search_posts_only_the_keyword_and_checks_the_recording(self):
+        with patch('open_music.build_opener') as opener:
+            response = opener.return_value.open.return_value.__enter__.return_value
+            response.read.return_value = json.dumps({'songs': [
+                {'songMid': 'Ab123', 'songName': 'Sample', 'singerName': 'Performer'},
+                {'songMid': 'Live23', 'songName': 'Sample (Live)', 'singerName': 'Performer'},
+                {'songMid': '../bad', 'songName': 'Sample', 'singerName': 'Performer'},
+            ]}).encode()
+            [(provider, track)] = search_platform_tracks('Sample - Performer', OfficialMusic(qq_key='test-key'))
+            self.assertEqual((provider, track.source), ('qqmusic', 'https://i2.y.qq.com/a/song/Ab123'))
+            request = opener.return_value.open.call_args_list[0].args[0]
+            self.assertEqual(request.get_method(), 'POST')
+            self.assertEqual(request.get_header('Authorization'), 'Bearer test-key')
+            self.assertEqual(json.loads(request.data)['params'], {'keyword': 'Sample Performer', 'type': '0'})
+
+    def test_official_netease_uses_public_ids_and_skips_hidden_results(self):
+        payload = {'data': {'songs': [
+            {'id': 'encrypted', 'originalId': 42, 'name': 'Sample', 'artists': [{'name': 'Performer'}]},
+            {'id': 'not-a-public-id', 'name': 'Sample', 'artist': 'Performer'},
+            {'originalId': 43, 'title': 'Sample', 'artist': 'Performer', 'visible': False},
+        ]}}
+        stdout = b'[status]\n' + json.dumps(payload, indent=2).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory, 'cli.js')
+            script.touch()
+            with patch('open_music.shutil.which', return_value='node'):
+                official = OfficialMusic(netease_cli=script)
+            with patch('open_music.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=stdout)) as run:
+                [(provider, track)] = search_platform_tracks('Sample - Performer', official)
+                self.assertEqual((provider, track.source), ('netease', 'https://music.163.com/#/song?id=42'))
+                self.assertEqual(run.call_args.args[0][2:], [
+                    'search', 'song', '--keyword=Sample Performer', '--userInput=Find the recording Sample Performer',
+                ])
+
+    def test_official_netease_failure_uses_existing_catalog(self):
+        official = OfficialMusic()
+        track = Release('Sample', 'Performer', '', 'https://music.163.com/song?id=42')
+        with patch.object(official, 'search', side_effect=ValueError), patch(
+            'open_music._platform_candidates', side_effect=lambda platform, query: [track] if platform == 'netease' else [],
+        ):
+            self.assertEqual(search_platform_tracks('Sample', official), [('netease', track)])
 
     def test_archive_requires_licensed_single_track_and_uses_the_public_download(self):
         row = {'identifier': 'recording', 'title': 'Piano piece', 'creator': 'Example',
