@@ -17,14 +17,15 @@ class MaintenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             for name, age in (('gmn-music-123abc_0', DAY + 1), ('gmn-media-b7654321', 30),
+                              ('gmn-media-browser-123abc_0', DAY + 1), ('gmn-media-browser-b7654321', 30),
                               ('gmn-media-archive-original', 2 * DAY), ('downloads', 2 * DAY)):
                 workspace = root / name
                 workspace.mkdir()
                 (workspace / 'file.mp3').write_bytes(b'audio')
                 os.utime(workspace, (now - age, now - age))
-            self.assertEqual(cleanup_media_workspaces(root, now=now), (1, 0))
+            self.assertEqual(cleanup_media_workspaces(root, now=now), (2, 0))
             self.assertEqual({path.name for path in root.iterdir()},
-                             {'gmn-media-b7654321', 'gmn-media-archive-original', 'downloads'})
+                             {'gmn-media-b7654321', 'gmn-media-browser-b7654321', 'gmn-media-archive-original', 'downloads'})
 
     def test_dry_run_and_apply_preserve_backups_records_and_active_files(self):
         now=2_000_000_000
@@ -69,11 +70,15 @@ class MaintenanceTests(unittest.TestCase):
     def test_memory_expiry_does_not_clear_live_jobs_or_conversation(self):
         live=object()
         vision=SimpleNamespace(cache={'old':(1,'old'),'new':(200,'new')},backoff={'done':1,'waiting':200},inflight={'live':live})
-        bot=SimpleNamespace(vision_recognizer=vision,chat_histories={'person':['context']})
-        self.assertEqual(release_expired(bot,now=100),2)
+        music = SimpleNamespace(results={'old': (1, [])}, preview_cache={'old': (1, []), 'new': (200, ['link'])},
+                                active={'live'})
+        bot=SimpleNamespace(vision_recognizer=vision,chat_histories={'person':['context']}, open_music=music)
+        self.assertEqual(release_expired(bot,now=100),4)
         self.assertEqual(vision.cache,{'new':(200,'new')})
         self.assertIs(vision.inflight['live'],live)
         self.assertEqual(bot.chat_histories,{'person':['context']})
+        self.assertEqual(music.preview_cache, {'new': (200, ['link'])})
+        self.assertEqual(music.active, {'live'})
 
 
 class SearchReuseTests(unittest.IsolatedAsyncioTestCase):

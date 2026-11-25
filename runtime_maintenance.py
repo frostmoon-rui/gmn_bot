@@ -98,7 +98,7 @@ def cleanup_media_workspaces(root=None, *, now=None):
     cutoff = (time.time() if now is None else now) - DAY
     removed = errors = 0
     for path in root.iterdir():
-        if not re.fullmatch(r'gmn-(?:music|media)-[a-z0-9_]{8}', path.name):
+        if not re.fullmatch(r'gmn-(?:music|media|media-browser)-[a-z0-9_]{8}', path.name):
             continue
         try:
             if linked(path) or not path.is_dir() or path.stat().st_mtime > cutoff or path.resolve() != path:
@@ -134,6 +134,7 @@ def release_expired(bot, now=None):
     music = getattr(bot, 'open_music', None)
     if music:
         removed += prune_timed(music.results, now)
+        removed += prune_timed(getattr(music, 'preview_cache', None), now)
     return removed
 
 
