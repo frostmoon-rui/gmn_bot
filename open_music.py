@@ -161,20 +161,24 @@ def _exact_track(track, query):
 
 def search_tracks(query):
     title, _ = _query_parts(query)
-    results = []
+    short_title = re.split(r'[([{【]', title, maxsplit=1)[0].strip()
     completed = 0
     with ThreadPoolExecutor(max_workers=2) as executor:
-        providers = [executor.submit(provider, title) for provider in (_openverse, _commons)]
-        for job in providers:
-            try:
-                results.extend(job.result())
-                completed += 1
-            except (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
-                continue
+        for term in dict.fromkeys([title, short_title] if len(_key(short_title)) >= 2 else [title]):
+            results = []
+            providers = [executor.submit(provider, term) for provider in (_openverse, _commons)]
+            for job in providers:
+                try:
+                    results.extend(job.result())
+                    completed += 1
+                except (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
+                    continue
+            if results:
+                unique = {track.url: track for track in results}
+                return sorted(unique.values(), key=lambda track: not _exact_track(track, query))[:3]
     if not completed:
         raise MediaError('search_error')
-    unique = {track.url: track for track in results}
-    return sorted(unique.values(), key=lambda track: not _exact_track(track, query))[:3]
+    return []
 
 
 def prepare_track(track, ffmpeg, workspace):

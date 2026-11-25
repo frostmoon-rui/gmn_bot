@@ -37,6 +37,17 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(search_tracks('Piano piece (feat. Guest) - Example'), [track])
             commons.assert_called_once_with('Piano piece')
 
+    def test_shorter_query_is_a_fallback_without_automatic_version_substitution(self):
+        track = _track(SAMPLE)
+        with (
+            patch('open_music._openverse', side_effect=[[], [track]]) as search,
+            patch('open_music._commons', return_value=[]),
+        ):
+            self.assertEqual(search_tracks('Piano piece (live) Example'), [track])
+            self.assertEqual([call.args[0] for call in search.call_args_list],
+                             ['Piano piece (live) Example', 'Piano piece'])
+        self.assertFalse(_exact_track(track, 'Piano piece (live) Example'))
+
     async def test_a_unique_exact_result_is_downloaded_without_selection(self):
         event = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
         track = _track(SAMPLE)

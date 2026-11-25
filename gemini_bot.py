@@ -1819,7 +1819,7 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
-    music_request = re.fullmatch(r'(/?)(play music|kugou music|get track|download audio)(?:\s+([^\r\n]+))?', cleaned_msg, re.I)
+    music_request = re.fullmatch(r'(/?)(play music|kugou music|get track|download audio)(?:(?:[ \t]*:[ \t]*|[ \t]+)([^\r\n]*))?', cleaned_msg, re.I)
     if music_request:
         from bot_features import mention_targets
         mentions = mention_targets(raw_msg)
