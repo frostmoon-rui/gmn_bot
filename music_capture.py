@@ -121,7 +121,7 @@ def _qqmusic_media(url):
         return (parts.scheme == 'https' and parts.port in (None, 443) and parts.username is None
                 and '\\' not in url and len(url) <= 4096
                 and bool(re.fullmatch(r'[a-z0-9-]+\.stream\.qqmusic\.qq\.com', parts.hostname or ''))
-                and bool(re.fullmatch(r'/[A-Za-z0-9]+\.mp3', parts.path)))
+                and bool(re.fullmatch(r'/[A-Za-z0-9]+\.(?:mp3|m4a|aac|flac|ogg|opus|wav)', parts.path, re.I)))
     except ValueError:
         return False
 

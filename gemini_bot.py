@@ -1861,6 +1861,16 @@ async def handle_message_event(ws, data):
             await extensions.send(ws, msg_type, group_id, user_id, reply)
         return
 
+    if 'open_music' in globals() and cleaned_msg and (is_at_me or msg_type == 'private'):
+        from bot_features import mention_targets
+        if not mention_targets(raw_msg) or is_at_me:
+            query = open_music.followup(data, cleaned_msg)
+            if query:
+                reply = open_music.start(ws, data, 'search', query)
+                if reply:
+                    await extensions.send(ws, msg_type, group_id, user_id, reply)
+                return
+
     media_command = parse_media_command(cleaned_msg, 'separate audio', 'voice')
     if media_command is not None:
         reply_match = re.search(r"\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]", raw_msg)

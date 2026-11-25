@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from music_capture import jamendo_track_id, match_jamendo_media
+from music_capture import _qqmusic_media, jamendo_track_id, match_jamendo_media
 from open_music import (
     OfficialMusic, prepare_qqmusic,
     MESSAGES, OpenMusic, Release, configured_platform_track, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
@@ -62,6 +62,85 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 await bot._search('key', 'ws', 'private', 0, 1, 'Sample - Performer')
                 deliver.assert_awaited_once_with('ws', 'private', 0, 1, None, None, qqmusic=release, report_failure=False)
                 fallback.assert_not_called()
+
+    def test_qqmusic_capture_accepts_audio_formats_only_on_the_player_cdn(self):
+        root = 'https://ws6.stream.qqmusic.qq.com/'
+        for filename in ('A1.mp3', 'A1.m4a', 'A1.aac', 'A1.flac'):
+            self.assertTrue(_qqmusic_media(root + filename + '?token=fixture'))
+        for url in (root + 'A1.js', root + 'A1.m4a.exe', root + 'other/A1.m4a',
+                    'https://ws6.stream.qqmusic.qq.com.example.test/A1.m4a',
+                    'https://ws6.stream.qqmusic.qq.com:80/A1.m4a'):
+            self.assertFalse(_qqmusic_media(url), url)
+
+    async def test_ambiguous_song_stays_in_scope_and_artist_followup_retries_duplicate_catalog_ids(self):
+        first = Release('Signal', 'Example Band', '', 'https://i2.y.qq.com/a/song/One')
+        duplicate = Release(first.title, first.creator, '', 'https://i2.y.qq.com/a/song/Two')
+        karaoke = Release('Signal', 'Karaoke Artist', '', 'https://i2.y.qq.com/a/song/Three')
+        rows = [first, duplicate, karaoke]
+        official = SimpleNamespace(qq_key='test-key', search=lambda *_: rows)
+        sender = {'self_id': 9, 'message_type': 'group', 'group_id': 20, 'user_id': 30}
+        tasks, send = [], AsyncMock()
+        with tempfile.TemporaryDirectory() as directory:
+            ffmpeg = Path(directory, 'ffmpeg')
+            ffmpeg.touch()
+            worker = OpenMusic(ffmpeg, lambda coro: tasks.append(asyncio.create_task(coro)), send,
+                               official=official, qqmusic_browser=True)
+            with (
+                patch('open_music.search_tracks', return_value=[]),
+                patch.object(worker, '_platform_previews', AsyncMock(return_value=[
+                    ('qqmusic', first), ('qqmusic', karaoke),
+                ])),
+                patch.object(worker, '_deliver', AsyncMock(side_effect=[False, True])) as deliver,
+            ):
+                worker.start('ws', sender, 'search', 'Signal')
+                await tasks[-1]
+                deliver.assert_not_awaited()
+                self.assertIn('1. Signal · Example Band', send.call_args.args[-1])
+                self.assertIn('2. Signal · Karaoke Artist', send.call_args.args[-1])
+                self.assertIsNone(worker.followup(sender, 'thanks'))
+                for changed in ({'user_id': 31}, {'group_id': 21}, {'self_id': 10}, {'message_type': 'private'}):
+                    self.assertIsNone(worker.followup(sender | changed, 'Example Band'))
+                query = worker.followup(sender, 'Example Band')
+                self.assertEqual(query, 'Signal - Example Band')
+                worker.start('ws', sender, 'search', query)
+                await tasks[-1]
+                self.assertEqual([attempt.kwargs['qqmusic'] for attempt in deliver.await_args_list], [first, duplicate])
+                self.assertIsNone(worker.followup(sender, 'Example Band'))
+            send.assert_awaited_once()
+
+    async def test_related_live_version_is_labelled_and_can_be_requested_without_retyping_title(self):
+        studio = Release('Signal', 'Example Band', '', 'https://i2.y.qq.com/a/song/One')
+        live = Release('Signal (Live)', 'Example Band', '', 'https://music.163.com/song?id=2')
+        event = {'self_id': 9, 'message_type': 'private', 'user_id': 30}
+        send = AsyncMock()
+        worker = OpenMusic(None, None, send)
+        key = worker._session_key(event)
+        await worker._send_platform_options(key, 'ws', 'private', 0, 30, 'Signal - Example Band',
+                                            [('qqmusic', studio), ('netease', live)])
+        self.assertIn(MESSAGES['platform_only'], send.call_args.args[-1])
+        self.assertIn(MESSAGES['related'], send.call_args.args[-1])
+        self.assertEqual(worker.followup(event, 'live version'), 'Signal (Live) - Example Band')
+        self.assertEqual(worker.followup(event, 'studio version'), 'Signal - Example Band')
+        await worker._send_platform_options(key, 'ws', 'private', 0, 30, 'Signal', [('netease', live)])
+        self.assertEqual(worker.followup(event, 'Example Band'), 'Signal - Example Band')
+        self.assertEqual(worker.followup(event, 'artist: Another Band'), 'Signal - Another Band')
+        with patch('open_music.time.monotonic', return_value=worker.pending[key].expires):
+            self.assertIsNone(worker.followup(event, 'Example Band'))
+            self.assertEqual(worker.start('ws', event, 'download', 1), MESSAGES['expired'])
+
+    async def test_numbered_platform_choice_restarts_the_search_in_file_mode(self):
+        event = {'self_id': 9, 'message_type': 'private', 'user_id': 30}
+        tasks = []
+        worker = OpenMusic(None, lambda coro: tasks.append(asyncio.create_task(coro)), AsyncMock())
+        key = worker._session_key(event)
+        worker._remember_choices(key, 'Signal', [
+            Release('Signal', 'Band One', '', 'https://i2.y.qq.com/a/song/One'),
+            Release('Signal', 'Band Two', '', 'https://i2.y.qq.com/a/song/Two'),
+        ])
+        with patch.object(worker, '_search', AsyncMock()) as search:
+            self.assertIsNone(worker.start('ws', event, 'download_file', 2))
+            await tasks[-1]
+        search.assert_awaited_once_with(key, 'ws', 'private', 0, 30, 'Signal - Band Two', file_only=True)
 
     def test_official_qq_search_posts_only_the_keyword_and_checks_the_recording(self):
         with patch('open_music.build_opener') as opener:

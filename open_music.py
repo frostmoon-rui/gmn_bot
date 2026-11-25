@@ -37,7 +37,11 @@ VOICE_PART_SECONDS = 120
 CATALOG_ERRORS = (MediaError, OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException)
 MESSAGES = {
     'choose': 'Choose with /get track NUMBER.',
-    'none': 'No full recording was available to send.',
+    'none': 'No sendable audio was found.',
+    'platform_only': 'I found the track. Audio delivery is unavailable, but you can play it here.',
+    'related': 'Other versions you can play:',
+    'refine': 'Reply with the artist, or use /get track NUMBER (valid for 10 minutes).',
+    'refine_group': 'Mention me with the artist, or use /get track NUMBER (valid for 10 minutes).',
     'search_error': 'The music catalogs are temporarily unavailable.',
     'ambiguous': 'Several recordings match. Add the artist or version to /play music.',
     'approximate': 'Closest downloadable result for {query}',
@@ -243,7 +247,7 @@ def _clean_title(title):
 
 
 def _query_parts(query):
-    fields = re.split(r'\s+[–—-]\s+', normalize('NFKC', query), maxsplit=1)
+    fields = re.split(r'\s+[–—/|-]\s+|\s*[·・]\s*', normalize('NFKC', query), maxsplit=1)
     return _clean_title(fields[0]) or query, fields[1] if len(fields) > 1 else ''
 
 
@@ -285,18 +289,57 @@ def _exact_track(track, query):
     return not artist or _same_artist(track, artist)
 
 
+def _title_matches(track, title):
+    candidate = _clean_title(track.title)
+    if not _key(title):
+        return False
+    if _key(candidate) == _key(title):
+        return True
+    base = re.sub(r'\s*\([^()]+\)\s*$', '', candidate)
+    return _key(base) == _key(title) and _version_tags(candidate) == _version_tags(title)
+
+
 def _same_artist(track, artist):
     required = _artist_key(artist)
     primary = re.split(r',|\s+(?:feat\.?|ft\.?)\s+', track.creator, maxsplit=1, flags=re.I)[0]
     return bool(required) and required in (_artist_key(track.creator), _artist_key(primary))
 
 
+VERSION_NAMES = {
+    'live': r'live|现场|現場|演唱会|演唱會',
+    'acoustic': r'acoustic|unplugged|不插电|不插電',
+    'instrumental': r'instrumental|伴奏|纯音乐|純音樂',
+    'remix': r'remix|混音',
+    'remaster': r'remaster(?:ed)?|重制|重製',
+    'demo': r'demo|小样|小樣',
+    'cover': r'cover|翻唱',
+    'karaoke': r'karaoke|卡拉ok',
+    'dj': r'dj',
+    'edit': r'edit',
+    'extended': r'extended|加长|加長',
+    'rerecorded': r're[- ]?record(?:ed|ing)?|重录|重錄',
+    'sped': r'sped(?:\s+up)?|加速',
+    'slowed': r'slowed(?:\s+down)?|降速|慢速',
+}
+
+VERSION_PATTERNS = {
+    tag: re.compile(r'(?<![a-z])(?:' + names + r')(?![a-z])', re.I)
+    for tag, names in VERSION_NAMES.items()
+}
+
+
 def _version_tags(title):
-    return set(re.findall(
-        r'(?i)\b(?:live|remix|instrumental|acoustic|remaster(?:ed)?|demo|cover|karaoke|dj|edit|sped|slowed)\b'
-        r'|现场|現場|翻唱|伴奏|纯音乐|純音樂|混音|重制|重製|原声|原聲|加速|降速|DJ(?=版)',
-        normalize('NFKC', title).lower(),
-    ))
+    title = normalize('NFKC', title)
+    return {tag for tag, pattern in VERSION_PATTERNS.items() if pattern.search(title)}
+
+
+def _version_refinement(text):
+    value = normalize('NFKC', text).casefold().strip()
+    if value in {'studio', 'studio version', 'original', 'original version', '原版', '录音室版', '錄音室版'}:
+        return set()
+    value = re.sub(r'(?:\s+version|版)$', '', value).rstrip()
+    tags = {tag for tag, names in VERSION_NAMES.items() if re.fullmatch(names, value)}
+    return tags or None
 
 
 def _closest_track(tracks, query):
@@ -517,11 +560,7 @@ class OfficialMusic:
             if not all(isinstance(field, str) and field.strip() for field in (name, creator)):
                 continue
             track = Release(' '.join(name.split())[:120], ' '.join(creator.split())[:120], '', url)
-            base = re.sub(r'\s*\([^()]+\)\s*$', '', _clean_title(track.title))
-            if _exact_track(track, query) or (
-                _key(base) == _key(title) and _version_tags(track.title) == _version_tags(title)
-                and (not artist or _same_artist(track, artist))
-            ):
+            if _title_matches(track, title) and (not artist or _same_artist(track, artist)):
                 results.append(track)
         return results
 
@@ -548,9 +587,11 @@ def search_platform_tracks(query, official=None):
         for platform, entries in zip(platforms, worker.map(search, platforms)):
             for entry in entries:
                 groups.setdefault(recording_key(entry), {}).setdefault(platform, entry)
-    if len(groups) == 1:
-        return list(next(iter(groups.values())).items())
-    return [next(iter(recording.items())) for recording in list(groups.values())[:2]]
+    title, _ = _query_parts(query)
+    ranked = sorted(groups.values(), key=lambda sources: not _title_matches(next(iter(sources.values())), title))
+    if len(ranked) == 1:
+        return list(ranked[0].items())
+    return [next(iter(sources.items())) for sources in ranked[:3]]
 
 
 def configured_platform_track(entries, query):
@@ -643,6 +684,13 @@ def prepare_qqmusic(release, ffmpeg, workspace):
     return mp3, parts, trial, round(duration)
 
 
+@dataclass(frozen=True)
+class PendingMusic:
+    expires: float
+    title: str
+    choices: tuple[Release, ...]
+
+
 class OpenMusic:
     def __init__(self, ffmpeg, spawn, send, *, silk_module=None, messages=None, preview_catalog=None, official=None,
                  qqmusic_browser=False):
@@ -655,16 +703,62 @@ class OpenMusic:
         self.qqmusic_browser = qqmusic_browser
         self.preview_cache = {}
         self.results = {}
+        self.pending = {}
         self.active = set()
+
+    @staticmethod
+    def _session_key(event):
+        return event.get('self_id'), event['message_type'], event.get('group_id', 0), event['user_id']
+
+    def _pending(self, key):
+        pending = self.pending.get(key)
+        if pending and pending.expires <= time.monotonic():
+            self.pending.pop(key, None)
+            return None
+        return pending
+
+    def _remember_choices(self, key, title, choices):
+        if len(self.pending) >= 64:
+            self.pending.pop(next(iter(self.pending)))
+        self.pending[key] = PendingMusic(time.monotonic() + 600, title, tuple(choices))
+
+    def followup(self, event, text):
+        pending = self._pending(self._session_key(event))
+        if not pending or not 0 < len(text) <= 100:
+            return None
+        prefix = self.messages.get('artist_pattern', r'artist\s*[:：]\s*(.+)')
+        explicit = re.fullmatch(prefix, text, re.I)
+        if explicit:
+            return f'{pending.title} - {explicit[1].strip()}'
+        artist = next((track.creator for track in pending.choices if _same_artist(track, text)), None)
+        if artist:
+            return f'{pending.title} - {artist}'
+        text_key = _key(text)
+        version = _version_refinement(text)
+        choice = [track for track in pending.choices
+                  if _key(f'{track.title} {track.creator}') == text_key
+                  or (_version_tags(track.title) and _key(track.title) == text_key)
+                  or (version is not None and _version_tags(track.title) == version)]
+        if len(choice) == 1:
+            return f'{choice[0].title} - {choice[0].creator}'
+        return None
 
     def start(self, ws, event, operation, value):
         kind, group, user = event['message_type'], event.get('group_id', 0), event['user_id']
-        key = (event.get('self_id'), kind, group, user)
+        key = self._session_key(event)
         if key in self.active or len(self.active) >= 3:
             return self.messages['busy']
-        if operation == 'search':
+        pending = self._pending(key)
+        if operation in {'download', 'download_file'} and key not in self.results and pending:
+            if not 1 <= value <= len(pending.choices):
+                return self.messages['expired']
+            track = pending.choices[value - 1]
+            value = f'{track.title} - {track.creator}'
+            operation = 'search_file' if operation == 'download_file' else 'search'
+        if operation in {'search', 'search_file'}:
             self.results.pop(key, None)
-            job = self._search(key, ws, kind, group, user, value)
+            self.pending.pop(key, None)
+            job = self._search(key, ws, kind, group, user, value, file_only=operation == 'search_file')
         else:
             track = None
             sources = ()
@@ -722,6 +816,9 @@ class OpenMusic:
         links = await self._platform_previews(query)
         if not links:
             return f"{self.messages['preview_search']} {kugou_search_url(query)}" if search_fallback else ''
+        return self._format_links(links)
+
+    def _format_links(self, links):
         lines = []
         previous = None
         for platform, track in links:
@@ -739,26 +836,29 @@ class OpenMusic:
                                    file_only=file_only, report_failure=index == len(options) - 1):
                 return
 
-    async def _search(self, key, ws, kind, group, user, query):
+    async def _search(self, key, ws, kind, group, user, query, *, file_only=False):
         configured = configured_platform_track(self.preview_catalog, query)
-        original_query = query
         if configured:
             track = configured[1]
             query = f'{track.title} - {track.creator}'
+        qq_candidates = []
         if (self.qqmusic_browser and self.official and self.official.qq_key
                 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file()):
             try:
-                candidates = await asyncio.to_thread(self.official.search, 'qqmusic', original_query)
+                candidates = await asyncio.to_thread(self.official.search, 'qqmusic', query)
             except CATALOG_ERRORS:
                 candidates = []
-            if configured:
-                candidates = [entry for entry in candidates if recording_key(entry) == recording_key(configured[1])]
-            exact = [entry for entry in candidates if _exact_track(entry, query)]
-            options = {entry.source: entry for entry in exact or candidates}
-            if len(options) == 1 and await self._deliver(
-                ws, kind, group, user, None, None, qqmusic=next(iter(options.values())), report_failure=False,
-            ):
-                return
+            title, artist = _query_parts(query)
+            qq_candidates = [entry for entry in candidates if _title_matches(entry, title)
+                             and (not artist or _same_artist(entry, artist))]
+            exact = [entry for entry in qq_candidates if _exact_track(entry, query)]
+            options = {entry.source: entry for entry in exact or qq_candidates}
+            if len({recording_key(entry) for entry in options.values()}) == 1:
+                delivery = {'file_only': True} if file_only else {}
+                for entry in list(options.values())[:2]:
+                    if await self._deliver(ws, kind, group, user, None, None, qqmusic=entry,
+                                           report_failure=False, **delivery):
+                        return
         try:
             results = await asyncio.to_thread(search_tracks, query)
         except (MediaError, OSError, ValueError, KeyError, http.client.HTTPException):
@@ -777,9 +877,12 @@ class OpenMusic:
                 track = recordings[0][0]
                 if any(recording_key(track) != recording_key(entry) for entry in releases):
                     artists = list(dict.fromkeys(entry.creator for entry in releases))
-                    preview = await self._preview(query) if platform_links else ''
-                    text = '\n'.join(filter(None, [self.messages['ambiguous'], ' / '.join(artists), preview]))
-                    await self.send(ws, kind, group, user, text)
+                    if platform_links:
+                        await self._send_platform_options(key, ws, kind, group, user, query, platform_links)
+                    else:
+                        self._remember_choices(key, _query_parts(query)[0], releases)
+                        text = '\n'.join([self.messages['ambiguous'], ' / '.join(artists)])
+                        await self.send(ws, kind, group, user, text)
                     return
             if recordings:
                 if len(self.results) >= 64:
@@ -788,16 +891,54 @@ class OpenMusic:
                 if len(recordings) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
                     sources = recordings[0]
                     if len(sources) == 1:
-                        await self._deliver(ws, kind, group, user, sources[0], None, requested=query)
+                        delivery = {'file_only': True} if file_only else {}
+                        await self._deliver(ws, kind, group, user, sources[0], None, requested=query, **delivery)
                     else:
-                        await self._deliver_group(ws, kind, group, user, sources, requested=query)
+                        await self._deliver_group(ws, kind, group, user, sources, requested=query, file_only=file_only)
                     return
                 lines = [f'{i}. {track.title} · {track.creator or self.messages["unknown_creator"]}'
                          for i, (track, *_) in enumerate(recordings, 1)]
-                text = '\n'.join([*lines, self.messages['choose']])
-            else:
-                text = self.messages['none']
-        await self.send(ws, kind, group, user, text + '\n' + await self._preview(query))
+                await self.send(ws, kind, group, user, '\n'.join([*lines, self.messages['choose']]))
+                return
+            text = self.messages['none']
+        links = await self._platform_previews(query)
+        if links or qq_candidates:
+            known = {recording_key(entry) for _, entry in links}
+            links = list(links)
+            for entry in qq_candidates:
+                if recording_key(entry) not in known:
+                    known.add(recording_key(entry))
+                    links.append(('qqmusic', entry))
+            await self._send_platform_options(key, ws, kind, group, user, query, links)
+        else:
+            await self.send(ws, kind, group, user, text + '\n' +
+                            f"{self.messages['preview_search']} {kugou_search_url(query)}")
+
+    async def _send_platform_options(self, key, ws, kind, group, user, query, links):
+        title, artist = _query_parts(query)
+        matches = [(platform, track) for platform, track in links
+                   if _title_matches(track, title) and (not artist or _same_artist(track, artist))]
+        related = [(platform, track) for platform, track in links if (platform, track) not in matches]
+        choices = {}
+        for platform, track in matches or related:
+            choices.setdefault(recording_key(track), (platform, track))
+        options = list(choices.values())[:3]
+        if len(options) > 1 and matches:
+            lines = [self.messages['ambiguous']]
+            for index, (platform, track) in enumerate(options, 1):
+                lines.append(f'{index}. {track.title} · {track.creator} · {self.messages[platform]} {track.source}')
+            lines.append(self.messages['refine_group' if kind == 'group' else 'refine'])
+        elif matches:
+            lines = [self.messages['platform_only'], self._format_links(matches[:3])]
+            if related:
+                lines.extend((self.messages['related'], self._format_links(related[:1])))
+        else:
+            lines = [self.messages['none'], self.messages['related'], self._format_links(options)]
+        refinements = [track for _, track in options]
+        if len(options) == 1 and matches and related:
+            refinements.append(related[0][1])
+        self._remember_choices(key, title, refinements)
+        await self.send(ws, kind, group, user, '\n'.join(lines))
 
     async def _prepare_attachment(self, ws, workspace, event, message_id):
         async def call(action, params, timeout):

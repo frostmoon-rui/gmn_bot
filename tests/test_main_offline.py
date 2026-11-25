@@ -115,6 +115,17 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         worker.start.assert_called_once_with(self.ws, event, 'search', 'Example')
         self.assertEqual(self.sent, [])
 
+    async def test_mentioned_artist_followup_runs_before_normal_chat(self):
+        worker = Mock()
+        worker.followup.return_value = 'Signal - Example Band'
+        worker.start.return_value = None
+        self.scope['open_music'] = worker
+        event = self.event('Example Band', True)
+        await self.scope['handle_message_event'](self.ws, event)
+        worker.followup.assert_called_once_with(event, 'Example Band')
+        worker.start.assert_called_once_with(self.ws, event, 'search', 'Signal - Example Band')
+        self.assertEqual(self.sent, [])
+
     async def test_music_search_respects_mentions(self):
         await self.scope['handle_message_event'](self.ws, self.event('[CQ:at,qq=11] /kugou music Example'))
         self.assertEqual(self.sent, [])

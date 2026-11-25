@@ -65,7 +65,7 @@ HELP = {'celestial-weather': 'Celestial weather: Sun weather | Moon weather | Ma
             'More: help search / video / maps / food map / website / identity / admin | bot status',
  'video': '🎬 Video information summary\n'
           'Reply to a shared card and mention me with summarize video, or use summarize video:URL. '
-          'Reply to audio, video or a QQ voice message with separate audio. Add voice for short playback copies.\nUse /play music SONG - ARTIST. A unique QQ Music match is tried first when configured. VIP previews show their duration. Complete tracks up to three minutes can be sent as voice. Use /get track 1 or /get track 1 file for listed downloads. /kugou music and /netease music open official search pages.\n'
+          'Reply to audio, video or a QQ voice message with separate audio. Add voice for short playback copies.\nUse /play music SONG - ARTIST. A unique QQ Music match is tried first when configured. VIP previews show their duration. Complete tracks up to three minutes can be sent as voice. For same-title tracks, mention the bot with the artist within 10 minutes, or use /get track 1. Add file for MP3. /kugou music and /netease music open official search pages.\n'
           'Use /download audio URL to get a full MP3 and complete QQ voice playback in parts up to two minutes from a public file, an embedded audio or video player, a podcast feed or an unencrypted HLS recording. Limit: 80 MiB and 10 minutes. Reply to a QQ video or audio attachment with /download audio to extract its audio.\n'
           'You can also ask about your most recent card from the last 30 minutes.\n'
           'Public information is fetched in the background; MiMo 2.6 Flash returns 2–3 sentences '
