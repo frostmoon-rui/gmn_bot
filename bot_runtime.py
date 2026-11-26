@@ -1,5 +1,6 @@
 """Atomic local storage, OneBot receipts and bounded session queues; no startup side effects."""
 import asyncio
+from job_progress import finish_progress
 import copy
 import json
 import os
@@ -161,6 +162,12 @@ class OneBotSocket:
                 action.startswith(('send_group_', 'get_group_', 'set_group_', 'get_qun_')) or
                 (action == 'send_msg' and (data.get('params') or {}).get('message_type') == 'group')):
             raise PermissionError('Group actions are disabled for this OneBot account')
+        if action in {'send_group_msg', 'send_private_msg', 'send_msg',
+                      'send_group_forward_msg', 'send_private_forward_msg',
+                      'upload_group_file', 'upload_private_file'}:
+            params = data.get('params') or {}
+            kind = 'group' if 'group_id' in params else 'private'
+            await finish_progress(self, kind, params.get('group_id' if kind == 'group' else 'user_id'))
         if self.image_policy is not None and not await self.image_policy.before_send(data):
             return {'suppressed': True}
         echo = 'gmn_' + uuid.uuid4().hex
