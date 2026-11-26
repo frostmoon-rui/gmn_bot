@@ -12,6 +12,10 @@ $session=[Diagnostics.Process]::GetCurrentProcess().SessionId
 if($session -eq 0 -or $identity.Name -ine $config.UserName -or -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
     throw 'Use the elevated interactive task under the configured account.'
 }
+if($config.StandaloneNapCat -eq $true){
+    Write-Output 'Standalone NapCat is configured. The startup task retains receiver ownership.'
+    exit 0
+}
 if(-not $config.NapCatDesktopExecutable -or -not (Test-Path -LiteralPath $config.NapCatDesktopExecutable)){
     throw 'Desktop manager executable is missing.'
 }

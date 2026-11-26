@@ -20,6 +20,16 @@ function Write-BootLog([string]$Message) {
     Write-Host $line
 }
 
+function Assert-PinnedQQ {
+    if ($config.StandaloneNapCat -ne $true) { return }
+    $pin = [string]$config.QQCompatibilityVersion
+    if ($pin -notmatch '^\d+\.\d+\.\d+-\d+$') { throw 'Set the isolated QQ compatibility version.' }
+    $exe = Get-Item -LiteralPath $config.QQExecutable
+    if ($exe.VersionInfo.FileVersion -ne $pin.Replace('-', '.')) { throw 'Isolated QQ executable version differs from the configured pin.' }
+    $versions = Get-Content -LiteralPath (Join-Path $exe.DirectoryName 'versions\config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($versions.curVersion -ne $pin) { throw 'The active isolated QQ build differs from the configured pin.' }
+}
+
 function Assert-Configuration {
     foreach ($name in @('ProjectDirectory','PythonExecutable','ProxyExecutable','ProxyDirectory',
         'ProxyConfiguration','NapCatDirectory','QQExecutable','UserName','TaskName','BotAccount')) {
@@ -37,6 +47,7 @@ function Assert-Configuration {
         }
         if ($path -match '["\r\n]') { throw 'Paths cannot contain quotes or line breaks.' }
     }
+    Assert-PinnedQQ
     if ([string]$config.BotAccount -notmatch '^\d+$') { throw 'Invalid bot account.' }
     foreach ($port in @($config.ProxyPort,$config.NapCatPort)) {
         if ([int]$port -lt 1 -or [int]$port -gt 65535) { throw 'Invalid local port.' }
@@ -91,6 +102,7 @@ function Test-DesktopBotControl {
 }
 
 function Test-DesktopNapCatControl {
+    if ($config.StandaloneNapCat -eq $true) { return $false }
     $marker=Join-Path $root 'windows_napcat_desktop.local.json'
     if(-not (Test-Path -LiteralPath $marker)){return $false}
     try{
@@ -243,6 +255,7 @@ try {
     $env:NAPCAT_INJECT_PATH = Join-Path $config.NapCatDirectory 'NapCatWinBootHook.dll'
     $env:NAPCAT_LAUNCHER_PATH = Join-Path $config.NapCatDirectory 'NapCatWinBootMain.exe'
     $env:NAPCAT_MAIN_PATH = (Join-Path $config.NapCatDirectory 'napcat.mjs').Replace('\','/')
+    $env:NAPCAT_WORKDIR = $config.NapCatDirectory
     $nativeLauncher = Join-Path $config.NapCatDirectory 'NapCatWinBootMain.exe'
     $lastProxy = [datetime]::MinValue
     $lastNapCat = [datetime]::MinValue
@@ -250,6 +263,7 @@ try {
     $lastNotice = [datetime]::MinValue
     $bootKey = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks.ToString()
     Write-BootLog 'Supervisor started. Waiting for the local proxy and NapCat before Python.'
+    if ($config.StandaloneNapCat -eq $true) { Write-BootLog ('Standalone NapCat uses isolated QQ '+$config.QQCompatibilityVersion+'.') }
     while ($true) {
         $now = Get-Date
         $proxyReady = Test-Listening $config.ProxyPort
@@ -268,10 +282,21 @@ try {
                 try {$receiverLocked=$receiverMutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$receiverLocked=$true}
                 if ($receiverLocked -and -not (Test-DesktopNapCatControl) -and -not (Test-Listening $config.NapCatPort)) {
                     # Existing QQ may be starting or waiting for QR authorization.
-                    if (@(Find-SessionComponent $nativeLauncher ([string]$config.BotAccount)).Count -eq 0 -and
-                        @(Find-SessionComponent $config.QQExecutable).Count -eq 0) {
-                        $null = Start-Component 'napcat' $nativeLauncher @($config.QQExecutable,$env:NAPCAT_INJECT_PATH,[string]$config.BotAccount) $config.NapCatDirectory
+                    $findReceiver = if ($config.StandaloneNapCat -eq $true) {'Find-Component'} else {'Find-SessionComponent'}
+                    if (@(& $findReceiver $nativeLauncher ([string]$config.BotAccount)).Count -eq 0 -and
+                        @(& $findReceiver $config.QQExecutable).Count -eq 0) {
                         $lastNapCat = $now
+                        try {
+                            Assert-PinnedQQ
+                            if ($config.StandaloneNapCat -eq $true) {
+                                $env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''
+                            }
+                            $null = Start-Component 'napcat' $nativeLauncher @($config.QQExecutable,$env:NAPCAT_INJECT_PATH,[string]$config.BotAccount) $config.NapCatDirectory
+                        } catch {
+                            Write-BootLog ('Receiver launch delayed: '+$_.Exception.Message)
+                        } finally {
+                            $env:HTTP_PROXY=$bootProxy; $env:HTTPS_PROXY=$bootProxy; $env:ALL_PROXY=$bootProxy
+                        }
                     }
                 }
             } finally {
@@ -294,7 +319,7 @@ try {
                     $tail=Get-Content -LiteralPath $receiverLog.FullName -Tail 100 -ErrorAction SilentlyContinue
                     $expired='\u8eab\u4efd\u5df2\u5931\u6548|\u8bf7\u626b\u63cf|\u4e8c\u7ef4\u7801'
                     if($tail -match $expired){
-                        Write-BootLog 'QQ authorization is required. Approve the login in NapCat Desktop after signing in.'
+                        Write-BootLog 'QQ authorization is required. Use the receiver login prompt after signing in.'
                     }
                 }
             }

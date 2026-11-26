@@ -52,6 +52,26 @@ $logRoot={quote(self.root)};$config=[pscustomobject]@{{}}
         self.assertIn(b'no processes started',result.stdout)
         self.assertEqual({p.name for p in self.root.iterdir()},{'config.json'})
 
+    def test_standalone_mode_uses_only_the_pinned_qq_build(self):
+        self.script = self.script.with_name('windows_boot.ps1')
+        directory = self.root / 'versions'
+        directory.mkdir()
+        config = directory / 'config.json'
+        config.write_text(json.dumps({'curVersion':'9.9.36-53644'}), 'utf-8')
+        code = self.function_scope('Assert-PinnedQQ') + r'''
+function Get-Item {param($LiteralPath) [pscustomobject]@{
+ DirectoryName=$logRoot; VersionInfo=[pscustomobject]@{FileVersion='9.9.36.53644'}
+}}
+$config=[pscustomobject]@{StandaloneNapCat=$true;QQCompatibilityVersion='9.9.36-53644';QQExecutable=(Join-Path $logRoot 'QQ.exe')}
+Assert-PinnedQQ
+Set-Content -LiteralPath (Join-Path $logRoot 'versions/config.json') -Value '{"curVersion":"9.9.37-54395"}'
+try{Assert-PinnedQQ;throw 'Accepted the wrong build'}catch{
+ if($_.Exception.Message -notmatch 'differs from the configured pin'){throw}
+}
+'Pin verified and changed build rejected'
+'''
+        self.assertIn('Pin verified and changed build rejected',self.run_ps(code))
+
     def test_new_log_selected_even_when_an_old_file_has_recent_writes(self):
         (self.root/'bot-20260101-000000-000.out.log').write_text('old','utf-8')
         (self.root/'bot-20260101-000001-000.out.log').write_text('new','utf-8')

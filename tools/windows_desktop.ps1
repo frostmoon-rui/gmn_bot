@@ -130,7 +130,8 @@ if($Mode -eq 'Install'){
 }
 
 if($Mode -eq 'Activate'){
-    if($config.NapCatDesktopExecutable){
+    $useManager=$config.NapCatDesktopExecutable -and $config.StandaloneNapCat -ne $true
+    if($useManager){
         & (Join-Path $PSScriptRoot 'windows_napcat_desktop.ps1') -Mode Activate -ConfigPath $ConfigPath
         if($LASTEXITCODE -ne 0){throw 'Desktop receiver handoff failed.'}
     }
@@ -151,11 +152,15 @@ if($Mode -eq 'Activate'){
     $connected=@([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
         Where-Object {$_.Port -eq [int]$config.NapCatPort}).Count -gt 0
     $loginCode=Get-LoginCodePath $connected
-    if($loginCode -and -not $config.NapCatDesktopExecutable){
+    if($loginCode -and -not $useManager){
         Start-Process -FilePath $loginCode -WindowStyle Normal
         Write-DesktopLog 'QQ authorization is pending; the existing local QR image was opened for the user.'
     }
-    Write-DesktopLog 'Desktop activation complete: bot hidden with file logs; receiver uses native tray settings. Log views remain available manually.'
+    if($useManager){
+        Write-DesktopLog 'Desktop activation complete: the receiver uses native tray settings and Python runs in the background.'
+    }else{
+        Write-DesktopLog 'Desktop activation complete: the boot receiver remains active and Python runs in the background.'
+    }
     exit 0
 }
 
