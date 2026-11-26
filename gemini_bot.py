@@ -1889,6 +1889,8 @@ async def handle_message_event(ws, data):
     raw_nickname = sender.get("card") or sender.get("nickname") or f"member_{user_id}"
     nickname = strip_zero_width_chars(raw_nickname)
 
+    from quoted_weather_location import quoted_map_place
+
     reply_info = None
     reply_raw_msg = ""
 
@@ -1901,7 +1903,8 @@ async def handle_message_event(ws, data):
         reply_raw_msg = message_text(rep)
         rep_text = re.sub(r"\[CQ:[^\]]+\]", "", reply_raw_msg).strip()
         rep_text = strip_zero_width_chars(rep_text)
-        reply_info = {"user_id": rep_uid, "nickname": rep_name, "text": rep_text, "raw_message": reply_raw_msg}
+        reply_info = {"user_id": rep_uid, "nickname": rep_name, "text": rep_text, "raw_message": reply_raw_msg,
+                      "weather_place": quoted_map_place(rep)}
     else:
         rep_match = re.search(r"\[CQ:reply,id=(-?\d+)\]", raw_msg)
         if rep_match:
@@ -1920,7 +1923,7 @@ async def handle_message_event(ws, data):
                             'nickname': original_sender.get('card') or original_sender.get('nickname') or 'quoted message',
                             'text': re.sub(r'\[CQ:[^\]]+\]', '', reply_raw_msg).strip(), 'raw_message': reply_raw_msg,
                             'message_type': msg_type, 'group_id': group_id,
-                            'peer_user_id': user_id if msg_type == 'private' else None}
+                            'weather_place': quoted_map_place(original), 'peer_user_id': user_id if msg_type == 'private' else None}
                         msg_cache[r_id] = reply_info
                         print('[Reference fetched]:', f'group_{group_id}' if msg_type == 'group' else f'private_{user_id}', 'reply relationship restored')
                 except Exception as error:
@@ -1988,6 +1991,7 @@ async def handle_message_event(ws, data):
             "user_id": user_id,
             "text": cleaned_msg,
             "raw_message": raw_msg,
+            "weather_place": quoted_map_place(data),
             "message_type": msg_type, "group_id": group_id,
             "peer_user_id": user_id if msg_type == 'private' else None
         }
@@ -2053,7 +2057,8 @@ async def handle_message_event(ws, data):
     is_whitelist = (user_id in WHITELIST_QQ or is_master)
     await extensions.observe(user_id, nickname, group_id if msg_type == 'group' else None)
     extension_reply = await extensions.command(cleaned_msg, ws, msg_type, group_id,
-        user_id, is_master, is_whitelist, mentioned=addressed)
+        user_id, is_master, is_whitelist, mentioned=addressed,
+        quoted_place=reply_info.get("weather_place") if reply_info else None)
     if extension_reply is not None:
         if extension_reply:
             await extensions.send(ws, msg_type, group_id, user_id, extension_reply)

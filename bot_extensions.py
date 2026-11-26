@@ -429,9 +429,11 @@ class Extensions:
         from weather_report import format_weather
         return format_weather(data, target, translate=english_provider_text)
 
-    def start_forecast(self, ws, kind, group, user, location='', target='today'):
+    def start_forecast(self, ws, kind, group, user, location='', target='today', *, shared_place=False):
         operation = ('weather', kind, group, location.strip(), target)
-        return self.start_user_job(user, operation, self.weather_at(ws, kind, group, user, location, target), timeout=180, chat=(ws, kind, group, user))
+        options = {'shared_place': True} if shared_place else {}
+        job = self.weather_at(ws, kind, group, user, location, target, **options)
+        return self.start_user_job(user, operation, job, timeout=180, chat=(ws, kind, group, user))
 
     async def send_weather(self, ws, kind, group, user, report):
         from weather_delivery import render_report
@@ -470,7 +472,7 @@ class Extensions:
         from weather_local_delivery import deliver_local_topic
         await deliver_local_topic(self, ws, kind, group, user, product, location)
 
-    async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False):
+    async def command(self, text, ws, kind, group, user, master, whitelist, mentioned=False, *, quoted_place=None):
         community = getattr(self, 'community', None)
         if community is not None:
             result = await community.command(text, ws, kind, group, user, mentioned or kind == 'private', self.send)
@@ -493,7 +495,13 @@ class Extensions:
         from bot_actions import english_weather_request as weather_request
         weather = weather_request(text)
         if weather is not None:
-            if not self.start_forecast(ws, kind, group, user, **weather):
+            shared = quoted_place is not None and not weather['location'] and (mentioned or kind == 'private')
+            if shared:
+                if not quoted_place:
+                    return 'I could not read an address from the quoted location. Please include the city in the weather request.'
+                weather['location'] = quoted_place
+            options = dict(weather, shared_place=True) if shared else weather
+            if not self.start_forecast(ws, kind, group, user, **options):
                 return 'That weather lookup is already running or the queue is full, meow.'
             return ''
         website = re.fullmatch(r'website screenshot(?:\s*:\s*(\S+))?(?:\s+(zh|en|ru|ja))?(?:\s+(dark|light))?', text, re.I)
@@ -915,15 +923,15 @@ class Extensions:
         record = getattr(self, 'recent_weather_locations', {}).get((kind, group, user))
         return record[1] if record and time.monotonic()-record[0] <= 600 else ''
 
-    async def weather_at(self, ws, kind, group, user, location='', target='today'):
+    async def weather_at(self, ws, kind, group, user, location='', target='today', *, shared_place=False):
         """One-off explicit place lookup never replaces the speaker's saved home area."""
         explicit = location.strip()
         from celestial_weather import resolve_body
         from celestial_research import CelestialResearch
         if not hasattr(self, 'celestial_research'):
             self.celestial_research = CelestialResearch(self.b, self.python_search)
-        celestial = resolve_body(explicit)
-        if explicit and not celestial and target != 'celestial':
+        celestial = None if shared_place else resolve_body(explicit)
+        if explicit and not shared_place and not celestial and target != 'celestial':
             try:
                 identity = await self.celestial_research.identify(explicit)
                 if identity.get('is_celestial') is True or identity.get('setting') in {'fictional', 'ambiguous'}:
@@ -935,7 +943,7 @@ class Extensions:
             report = await self.celestial_research.report(explicit, language, known=celestial)
             await self.send_weather(ws, kind, group, user, report)
             return
-        if explicit:
+        if explicit and not shared_place:
             if not hasattr(self, 'recent_weather_locations'):
                 self.recent_weather_locations = {}
             self.recent_weather_locations[(kind, group, user)] = (time.monotonic(), explicit)
