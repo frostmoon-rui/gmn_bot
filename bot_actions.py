@@ -23,6 +23,10 @@ SCHEMAS = {
     'website': {'page': (str, 20), 'language': (str, 4), 'theme': (str, 8)},
     'map': {'operation': (str, 20), 'query': (str, 500)},
     'video': {'url': (str, 1000)}, 'image': {'prompt': (str, 1000)},
+    'play_music': {'query': (str, 100)},
+    'get_track': {'number': (str, 1), 'format': (str, 8)},
+    'download_audio': {'url': (str, 2040)},
+    'separate_audio': {'url': (str, 2040), 'format': (str, 8)},
     'help': {}, 'status': {}, 'earthquake': {}, 'food_map': {}, 'sources': {}, 'sticker': {},
     'reminder': {'when': (str, 60), 'content': (str, 300)}, 'reminders': {},
     'cancel_reminder': {'id': (str, 8)}}
@@ -45,6 +49,11 @@ search {query, mode: web|wiki|latest, topic}; research {query} for a requested d
 website {page: home|about|friends|resources|food|projects, language: zh|en|ru|ja, theme: dark|light};
 map {operation: map|places|nearby|route|traffic, query: native place/route specification};
 video {url: explicit video URL or empty for quoted video}; image {prompt};
+play_music {query: exact song title, optionally SONG - ARTIST}; use this when the speaker asks you to play or send a song.
+get_track {number: '1'|'2'|'3', format: default|file}; select a numbered result only when the current speaker says which one.
+download_audio {url: exact media URL from the current message, or omit for the quoted attachment};
+separate_audio {url: exact media URL from the current message, or omit for an attached or quoted file, format: default|voice}.
+Use the audio actions only for explicit requests. Ask for a link or attachment when missing. Preserve title and version qualifiers.
 help {}; status {}; earthquake {}; food_map {}; sources {}; sticker {};
 reminder {when: explicit reminder time, content};
 For reminders with no explicit time, ask the speaker when to remind them. Do not guess a delay.
@@ -82,7 +91,7 @@ def parse_action(text):
         kind,limit=SCHEMAS[tool][key]
         if not isinstance(item,kind) or len(item)>limit or any(ord(c)<32 for c in item):
             return None
-    for name in ('research','search'):
+    for name in ('research','search','play_music'):
         if tool==name and not args.get('query','').strip():
             return None
     if tool=='community_map' and args.get('scope','china') not in {'china','world'}:
@@ -108,6 +117,13 @@ def parse_action(text):
         return None
     if tool=='cancel_reminder' and not re.fullmatch(r'[0-9a-fA-F]{8}',args.get('id','')):
         return None
+    if tool=='get_track' and args.get('number') not in {'1','2','3'}:
+        return None
+    if tool in {'get_track','separate_audio'} and args.get('format','default') not in TOOL_ENUMS[tool,'format']:
+        return None
+    if tool in {'download_audio','separate_audio'} and args.get('url'):
+        if not re.fullmatch(r'https?://[^\s<>]+', args['url'], re.I):
+            return None
     if tool=='video' and args.get('url'):
         from video_summary import clean_url
         if not clean_url(args['url']):
@@ -117,6 +133,7 @@ def parse_action(text):
 
 REQUIRED = {
     'celestial_weather': ('body',), 'search': ('query',), 'research': ('query',), 'image': ('prompt',),
+    'play_music': ('query',), 'get_track': ('number',),
     'weather_map': ('product',), 'weather_chart': ('product',),
     'map': ('operation', 'query'), 'reminder': ('when', 'content'),
     'cancel_reminder': ('id',)
@@ -133,6 +150,10 @@ TOOL_DESCRIPTIONS = {
     'map': 'Look up places, routes, traffic or a map.',
     'video': 'Summarize a shared video using its URL or the current reply.',
     'image': 'Generate a requested image.',
+    'play_music': 'Play a song explicitly requested by the current speaker. Supply the title and requested artist or version.',
+    'get_track': 'Select an explicit result number from this speaker’s recent music search.',
+    'download_audio': 'Extract audio from an explicit URL in the current message or the quoted media attachment.',
+    'separate_audio': 'Separate vocals and accompaniment for the current speaker’s media. Use voice only when requested.',
     'help': 'Show the available bot commands.',
     'status': 'Show bot status.',
     'earthquake': 'Get recent earthquake reports.',
@@ -145,6 +166,9 @@ TOOL_DESCRIPTIONS = {
 }
 TOOL_ENUMS = {
     ('community_map', 'scope'): ['china', 'world'],
+    ('get_track', 'number'): ['1', '2', '3'],
+    ('get_track', 'format'): ['default', 'file'],
+    ('separate_audio', 'format'): ['default', 'voice'],
     ('weather', 'target'): ['today', 'tomorrow'],
     ('search', 'mode'): ['web', 'wiki', 'latest'],
     ('website', 'page'): ['home', 'about', 'friends', 'resources', 'food', 'projects'],
@@ -233,6 +257,33 @@ async def dispatch(bot, action, event, ws, *, master=False, whitelist=False, gro
     if tool=='search':
         await reply(ext.start_model_search(ws,kind,group,user,{'query':args['query'],
                     'mode':args.get('mode','web'),'topic':args.get('topic','')}))
+        return
+    if tool in {'play_music','get_track','download_audio','separate_audio'}:
+        from bot_features import message_text, reply_belongs_to
+        raw = message_text(event)
+        quoted = re.search(r'\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]', raw)
+        url = args.get('url')
+        if url:
+            from html import unescape
+            current = unescape(re.sub(r'\[CQ:[^\]]*\]', '', raw))
+            links = re.findall(r'https?://[^\s<>"，。！；）】]+', current, re.I)
+            if url not in {link.rstrip('.,;!)]') for link in links} and url not in links:
+                await reply(commands.get('audio_source_required', 'Send the media link or reply to an audio or video file.'))
+                return
+        if tool=='play_music':
+            await reply(bot.open_music.start(ws,event,'search',args['query'].strip()))
+        elif tool=='get_track':
+            operation='download_file' if args.get('format')=='file' else 'download'
+            await reply(bot.open_music.start(ws,event,operation,int(args['number'])))
+        elif tool=='download_audio':
+            if url or quoted:
+                operation, value = ('link',url) if url else ('attachment',int(quoted[1]))
+                await reply(bot.open_music.start(ws,event,operation,value))
+            else:
+                await reply(commands.get('audio_source_required', 'Send the media link or reply to an audio or video file.'))
+        else:
+            await reply(bot.media_separation.start(ws,event,quoted[1] if quoted else None,url,args.get('format')=='voice',
+                                                  belongs=reply_belongs_to,text=message_text))
         return
     if tool=='video':
         await reply(await bot.videos.command(event,commands['video']+(':'+args['url'] if args.get('url') else ''),True,ws))

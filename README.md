@@ -17,6 +17,7 @@ Maintained by [frostmoon-rui](https://github.com/frostmoon-rui). The food map dr
 | Feature | Details |
 | --- | --- |
 | Multiple chat providers | Gemini, OpenAI and compatible APIs, Claude, and DeepSeek; successful replies inform model priority without trying every model at startup. |
+| Natural-language actions | Address the bot to use existing tools for weather, maps, reminders, research, music selection, audio processing, and other supported requests. Audio links must come from the current message; quoted attachments use the current reply. |
 | Research and search | Gemini planning, Python retrieval, MiMo 2.6 Pro synthesis, and explicit Argon answers with narrowly scoped paid-key fallback. |
 | Images and stickers | Image recognition, original animated GIF storage, near-duplicate detection, and separate vision model priorities. |
 | Weather and care | Complementary weather sources, yesterday/tomorrow comparisons, an important allowlist, preferred names, and personal profiles. |

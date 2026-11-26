@@ -5,7 +5,7 @@ import json
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from google.genai import types
 from bot_actions import SCHEMAS, dispatch, function_action, function_declarations, parse_action
@@ -48,6 +48,37 @@ class NativeFunctionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((record['user'],record['group'],record['content']), (10,20,'rest'))
         self.assertEqual(record['status'],'pending')
         extension.send.assert_awaited_once()
+
+    async def test_music_actions_reuse_the_worker_and_current_session(self):
+        event = {'message_type':'group','group_id':20,'user_id':10}
+        music = SimpleNamespace(start=Mock(return_value=None))
+        bot = SimpleNamespace(extensions=SimpleNamespace(send=AsyncMock()),open_music=music)
+        for name,args,operation,value in [
+            ('play_music',{'query':'Track (Live) - Performer'},'search','Track (Live) - Performer'),
+            ('get_track',{'number':'2','format':'file'},'download_file',2),
+        ]:
+            await dispatch(bot,{'tool':name,'args':args},event,'socket')
+            music.start.assert_called_with('socket',event,operation,value)
+
+    async def test_audio_actions_only_use_a_current_url_or_the_actual_reply(self):
+        event = {'message_type':'group','group_id':20,'user_id':10,'raw_message':'[CQ:reply,id=42] extract that audio'}
+        music = SimpleNamespace(start=Mock(return_value=None))
+        separation = SimpleNamespace(start=Mock(return_value=None))
+        bot = SimpleNamespace(extensions=SimpleNamespace(send=AsyncMock()),open_music=music,media_separation=separation)
+        await dispatch(bot,{'tool':'download_audio','args':{}},event,'socket')
+        music.start.assert_called_once_with('socket',event,'attachment',42)
+        music.start.reset_mock()
+        url = 'https://example.test/audio.mp3'
+        await dispatch(bot,{'tool':'download_audio','args':{'url':url}},event,'socket')
+        music.start.assert_not_called()
+        bot.extensions.send.assert_awaited_once()
+        await dispatch(bot,{'tool':'separate_audio','args':{'format':'voice'}},event,'socket')
+        self.assertEqual(separation.start.call_args.args,('socket',event,'42',None,True))
+        request = event | {'raw_message':f'extract audio at {url}.'}
+        await dispatch(bot,{'tool':'download_audio','args':{'url':url}},request,'socket')
+        music.start.assert_called_once_with('socket',request,'link',url)
+        self.assertIsNone(parse_action('[BOT_ACTION: {"tool":"download_audio","args":{"reply_id":"42"}}]'))
+        self.assertIsNone(parse_action('[BOT_ACTION: {"tool":"get_track","args":{"number":"4"}}]'))
 
     async def test_food_action_uses_the_high_resolution_atlas(self):
         ext = SimpleNamespace(food_atlas_job=AsyncMock())

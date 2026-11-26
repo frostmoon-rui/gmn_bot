@@ -2575,7 +2575,7 @@ async def handle_message_event(ws, data):
 
     from bot_actions import parse_action, dispatch
     action = parse_action(reply_raw)
-    if action and not is_random_chime and (addressed or hit_keyword or msg_type == 'private'):
+    if action and not is_random_chime and (addressed or (hit_keyword and not is_talking_to_other)):
         from types import SimpleNamespace
         await dispatch(SimpleNamespace(**globals()), action, data, ws,
                        master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
@@ -2585,7 +2585,7 @@ async def handle_message_event(ws, data):
             await extensions.send(ws, msg_type, group_id, user_id, 'Please clarify the requested function and its details, meow.')
         return
     search_plan = parse_search_request(reply_raw)
-    if search_plan and not is_random_chime and (addressed or hit_keyword or msg_type == 'private'):
+    if search_plan and not is_random_chime and (addressed or (hit_keyword and not is_talking_to_other)):
         tip = extensions.start_model_search(ws, msg_type, group_id, user_id, search_plan)
         if tip:
             await extensions.send(ws, msg_type, group_id, user_id, tip)
