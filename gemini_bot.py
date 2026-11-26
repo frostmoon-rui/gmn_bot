@@ -1814,7 +1814,9 @@ async def handle_message_event(ws, data):
     group_id = data.get("group_id", 0)
 
     # Track sent message IDs for later retraction.
-    if user_id == self_id:
+    if self_id is not None and str(user_id) == str(self_id):
+        if msg_type == 'group' and 'features' in globals():
+            features.note_own_group_message(group_id, data.get('message') or raw_msg)
         # Receipts already register our messages; never register them in the wrong private session.
         return
 
@@ -2000,13 +2002,16 @@ async def handle_message_event(ws, data):
     # 1. Repeat per group, independently of random interjection cooldown; record only successful sends.
     if msg_type == "group":
         if features.observe_repeat(group_id, user_id, cleaned_msg,
-                directed=early_greeting or hit_keyword or meow_only or is_talking_to_me or is_talking_to_other or bool(re.search(r'\[CQ:', raw_msg))):
+                directed=early_greeting or meow_only or is_talking_to_me or is_talking_to_other or bool(re.search(r'\[CQ:', raw_msg)),
+                trigger=hit_keyword):
             print(f"[Member repeat] Echo -> {cleaned_msg}")
             await ws.send(json.dumps({
                 "action": "send_group_msg",
                 "params": {"group_id": group_id, "message": [{'type': 'text', 'data': {'text': cleaned_msg}}]}
             }))
             features.mark_passive(group_id, 'repeat')
+            return
+        if features.repeat_active(group_id):
             return
 
     # 2. Intercept image-generation commands.
@@ -2573,6 +2578,9 @@ async def handle_message_event(ws, data):
         print('[Random interjection skipped]:', group_id, 'Model unavailable; no group error announcement')
         return
 
+    if is_random_chime and features.arriving_repeat_active(group_id):
+        return
+
     from bot_actions import parse_action, dispatch
     action = parse_action(reply_raw)
     if action and not is_random_chime and (addressed or (hit_keyword and not is_talking_to_other)):
@@ -2701,7 +2709,8 @@ async def main():
                     priority_watch = asyncio.create_task(yield_onebot_to_preferred(raw_ws, WS_URL, preferred_receiver))
                 ws = OneBotSocket(raw_ws, self_last_message_ids, message_cache=msg_cache,
                                   image_policy=globals().get('sticker_moderation'), group_account=group_account,
-                                  private_ignored=setting('PRIVATE_IGNORED_BY_ACCOUNT', {}))
+                                  private_ignored=setting('PRIVATE_IGNORED_BY_ACCOUNT', {}),
+                                  group_text_observer=features.note_own_group_message)
                 if preferred_receiver and endpoint != WS_URL and stop_on_logout_account.isdecimal():
                     logout_watch = asyncio.create_task(stop_onebot_after_logout(ws, stop_on_logout_account))
                 active_ws = ws
@@ -2733,6 +2742,11 @@ async def main():
                     if data.get('post_type') == 'message' and 'sticker_moderation' in globals() and sticker_moderation.matches(data):
                         extensions.spawn(sticker_moderation.handle(ws, data))
                         continue
+                    if (data.get('post_type') == 'message' and data.get('message_type') == 'group'
+                            and data.get('group_id') and data.get('user_id') is not None
+                            and data.get('user_id') != data.get('self_id') and data.get('user_id') not in BLACKLIST_QQ):
+                        raw, line, directed = event_text(data)
+                        features.note_group_arrival(data['group_id'],data['user_id'],raw,line,directed)
                     if data.get('post_type') == 'message' and quick_reply(ws, data):
                         continue
                     accepted = dispatcher.submit(session, lambda data=data: handle_message_event(ws, data))

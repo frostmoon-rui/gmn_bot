@@ -277,6 +277,8 @@ class Features:
         self.reminders = bot.load_json_data('reminders.json', [])
         self.last_passive = {}
         self.repeat_states = {}
+        self.own_group_lines = {}
+        self.repeat_arrivals = {}
 
     async def register_group(self, group):
         groups = self.prefs['groups']
@@ -318,10 +320,52 @@ class Features:
         if feature == 'repeat' and str(group) in self.repeat_states:
             self.repeat_states[str(group)]['sent'] = True
 
-    def observe_repeat(self, group, user, text, directed=False):
+    def note_own_group_message(self, group, message):
+        if isinstance(message, list) and any(not isinstance(part, dict) or part.get('type') not in {'text', 'at'} for part in message):
+            return
+        raw = message_text({'message': message})
+        text = html.unescape(re.sub(r'\[CQ:at,[^\]]+\]', '', raw)).strip()
+        text = re.sub(r'[\u200b-\u200f\ufeff]', '', text).strip()
+        key, now = str(group), time.monotonic()
+        if not text or len(text)>200 or re.search(r'https?://|\[CQ:|[\r\n]', text):
+            return
+        current = self.repeat_states.get(key)
+        if (current and current['text']==text and not current['own']
+                and len(current['users'])>=2 and now-current['updated']<=90):
+            return
+        lines = self.own_group_lines.setdefault(key, {})
+        lines.pop(text, None)
+        lines[text] = now
+        if len(lines)>12:
+            lines.pop(next(iter(lines)))
+
+    def is_own_group_line(self, group, text, now):
+        return now-self.own_group_lines.get(str(group),{}).get(text,float('-inf'))<=300
+
+    def repeat_active(self, group):
+        current = self.repeat_states.get(str(group))
+        return bool(current and (current['own'] or len(current['users'])>=2)
+                    and time.monotonic()-current['updated']<=90)
+
+    def note_group_arrival(self, group, user, raw, text, directed):
+        key, now = str(group), time.monotonic()
+        if directed or not text or len(text)>200 or re.search(r'https?://|\[CQ:|[\r\n]', raw):
+            self.repeat_arrivals.pop(key,None)
+            return
+        previous = self.repeat_arrivals.get(key)
+        same = previous and previous[0]==text and now-previous[3]<=90
+        active = self.is_own_group_line(group,text,now) or bool(same and (previous[1]!=user or previous[2]))
+        self.repeat_arrivals[key] = (text,user,active,now)
+
+    def arriving_repeat_active(self, group):
+        previous = self.repeat_arrivals.get(str(group))
+        return bool(previous and previous[2] and time.monotonic()-previous[3]<=90)
+
+    def observe_repeat(self, group, user, text, directed=False, trigger=False):
         """Repeat once after two different members send the same short text within 90 seconds."""
         key, now = str(group), time.monotonic()
-        if directed or not text or len(text) > 200 or re.search(r'https?://|\[CQ:|[\r\n]', text):
+        own = self.is_own_group_line(group,text,now)
+        if directed or (trigger and not own) or not text or len(text) > 200 or re.search(r'https?://|\[CQ:|[\r\n]', text):
             self.repeat_states.pop(key, None)
             return False
         if re.match(r'^(?:remind me|set location|notebook|search|ask assistant|summarize video|help|manual)', text):
@@ -332,11 +376,11 @@ class Features:
             return False
         previous = self.repeat_states.get(key)
         if not previous or previous['text'] != text or now-previous['updated'] > 90:
-            previous = {'text': text, 'users': set(), 'updated': now, 'sent': False}
+            previous = {'text': text, 'users': set(), 'updated': now, 'sent': False, 'own': own}
             self.repeat_states[key] = previous
         previous['users'].add(user)
         previous['updated'] = now
-        return len(previous['users']) >= 2 and not previous['sent'] and self.allow_passive(group, 'repeat', consume=False)
+        return not previous['own'] and len(previous['users']) >= 2 and not previous['sent'] and self.allow_passive(group, 'repeat', consume=False)
 
     def notifications_enabled(self, user):
         return not self.prefs['users'].get(str(user), {}).get('dnd', False)

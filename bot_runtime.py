@@ -123,7 +123,7 @@ class OneBotActionRejected(RuntimeError):
 
 
 class OneBotSocket:
-    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None, private_ignored=None):
+    def __init__(self, raw, message_ids, timeout=12, message_cache=None, image_policy=None, group_account=None, private_ignored=None, group_text_observer=None):
         self.raw = raw
         self.message_ids = message_ids
         self.timeout = timeout
@@ -132,6 +132,7 @@ class OneBotSocket:
         self.message_cache = message_cache
         self.self_id = None
         self.image_policy = image_policy
+        self.group_text_observer = group_text_observer
         self.group_account = None if group_account is None else str(group_account)
         self.private_ignored = {
             str(account): {str(peer) for peer in peers}
@@ -204,6 +205,8 @@ class OneBotSocket:
                     except Exception as error:
                         print('[Image receipt indexing failed]:', type(error).__name__)
                 params = request['params']
+                if self.group_text_observer is not None and 'group_id' in params:
+                    self.group_text_observer(params['group_id'], params.get('message', ''))
                 session = 'group_' + str(params['group_id']) if 'group_id' in params else 'private_' + str(params['user_id'])
                 records = self.message_ids.setdefault(session, [])
                 records.append(message_id)

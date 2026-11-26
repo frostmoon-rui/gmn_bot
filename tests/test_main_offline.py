@@ -446,6 +446,42 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(match('look at Moon Cat', words))
         self.assertFalse(match('Moon Catextra', words))
 
+    async def test_bot_origin_chain_stays_silent_and_human_chain_only_gets_one_echo(self):
+        features = self.scope['features']
+        self.scope['call_gemini_with_history'] = AsyncMock(return_value='Side comment')
+        line = 'The stars are all out tonight'
+        features.note_own_group_message(20,[{'type':'at','data':{'qq':'10'}},
+                                            {'type':'text','data':{'text':' '+line}}])
+        self.scope['group_trigger_targets'][20] = 1
+        for user in (10,11,12):
+            await self.scope['handle_message_event'](self.ws,self.event(line) | {'user_id':user})
+        self.assertEqual(self.sent,[])
+        self.scope['call_gemini_with_history'].assert_not_awaited()
+        self.scope['group_trigger_targets'][21] = 99
+        for user in (10,11):
+            await self.scope['handle_message_event'](self.ws,self.event(line) | {'user_id':user,'group_id':21})
+        features.note_own_group_message(21,line)  # Simulate the receipt of the human-origin echo.
+        self.scope['group_trigger_targets'][21] = 1
+        await self.scope['handle_message_event'](self.ws,self.event(line) | {'user_id':12,'group_id':21})
+        self.assertEqual(len(self.sent),1)
+        self.assertEqual(self.sent[0]['params']['group_id'],21)
+        self.scope['call_gemini_with_history'].assert_not_awaited()
+
+    async def test_new_chain_cancels_an_in_flight_random_chime(self):
+        line = 'The stars are all out tonight'
+        features = self.scope['features']
+        features.note_group_arrival(20,10,line,line,False)
+
+        async def respond(*args, **kwargs):
+            features.note_group_arrival(20,11,line,line,False)
+            return 'Side comment'
+
+        self.scope['group_trigger_targets'][20] = 1
+        self.scope['call_gemini_with_history'] = AsyncMock(side_effect=respond)
+        await self.scope['handle_message_event'](self.ws,self.event(line))
+        self.assertEqual(self.sent,[])
+        self.scope['call_gemini_with_history'].assert_awaited_once()
+
     async def test_repeater_main_flow_and_no_bot_self_loop(self):
         for user in (10, 11, 12, 999):
             data = self.event('hahaha')
