@@ -369,6 +369,19 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.scope['group_trigger_targets'][group], cap)
             self.assertEqual(features.chime_threshold(group, 20), cap)
 
+    async def test_model_can_decline_a_passive_chime(self):
+        from active_learning import ActiveLearning
+        from social_learning import SILENCE
+
+        self.scope['active_learning'] = ActiveLearning(self.scope['data_store'])
+        self.scope['group_trigger_targets'][20] = 1
+        model = AsyncMock(return_value=SILENCE)
+        self.scope['call_gemini_with_history'] = model
+        await self.scope['handle_message_event'](self.ws, self.event('The observatory is open'))
+        self.assertIn(SILENCE, model.await_args.args[1])
+        self.assertTrue(model.await_args.kwargs['transient'])
+        self.assertEqual(self.sent, [])
+
     async def test_random_chime_works_in_each_group_and_repeat_does_not_block_it(self):
         self.scope['features'].language = 'en'
         reaction = 'Sounds like the perfect day to stay under the covers.'

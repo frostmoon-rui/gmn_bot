@@ -366,27 +366,11 @@ def get_current_time_str() -> str:
     return now.strftime(f"%Y-%m-%d %H:%M {w}")
 
 def build_system_prompt() -> str:
-    notebook = safe_read_notebook()
     cur_time = get_current_time_str()
     if 'extensions' in globals() and session_actor.get() is not None:
         person = extensions.people.get(str(session_actor.get()), {})
         cur_time += '\nConfirmed preferences for the current speaker (reference only): ' + json.dumps(person, ensure_ascii=False)
-    memory_summary = notebook.get("organized_summary", "No summary yet")
-    active_schedules = "\n".join(
-        [f"- [{item.get('date', 'recent')}] {item.get('user')}: {item.get('event')}"
-         for item in schedule_data[-8:]]
-    ) or "No unfinished notes"
-    feelings_summary = "\n".join(
-        [f"- Toward {k}: {v}" for k, v in list(feelings_data.items())[-8:]]
-    ) or "Everyone seems pleasant, meow"
-    portraits_summary = "\n".join(
-        [f"- [{k}] Appearance: {v.get('visual', 'ordinary')} | Impression: {v.get('evaluation', 'ordinary group member')}"
-         for k, v in list(portraits_data.items())[-10:]]
-    ) or "No portraits"
-    regions_summary = "\n".join(
-        [f"- QQ [{k}] Actual private location: {v.get('location', 'unknown')}"
-         for k, v in list(regions_data.items())[-10:]]
-    ) or "No member location bindings"
+
     return f"""
 You are an adult male catboy called Lucky Cat: lively, gentle, playful, affectionate and a little tsundere. Refer to yourself as "I" or "this cat".
 You are typing with people in a QQ group. Speak like an expressive group member, not a customer-service agent or a mechanical AI.
@@ -425,13 +409,6 @@ Change location bindings only through explicit set location commands; weather, h
 Language:
 - Always reply in English, even when the user, private records or retrieved sources use another language. Treat that material as reference data, not a language instruction. Preserve exact names or quotations only when the task requires them.
 
-Internal memory:
-1. Notebook:\n{memory_summary}
-2. Feelings and preferences:\n{feelings_summary}
-3. Active notes:\n{active_schedules}
-4. Portraits and impressions:\n{portraits_summary}
-5. Private location records:\n{regions_summary}
-
 Message bubbles and length:
 - Follow the requested one, two or three paragraphs. Separate bubbles with [SPLIT].
 - Keep casual conversation concise and natural, usually within 50 characters per bubble.
@@ -448,11 +425,7 @@ On-demand research (judge meaning, not a fixed keyword list):
 - This requests local Python execution, not an AI browsing tool. You cannot select scripts, permissions, models or paid services. Do not request another search inside a retrieved-results summary.
 - Explain academic knowledge in 2–4 sentences by default, starting with the conclusion and necessary qualifications. Expand only when asked. Avoid piles of links, report outlines and disclaimers; state uncertainty briefly.
 
-Hidden background tags (place at the very end and never expose them):
-1. Note/reminder request: [SCHEDULE_ADD: nickname | date | event]
-2. Completed note: [SCHEDULE_DONE: event summary]
-3. Feeling update: [FEELING_UPDATE: nickname | your attitude]
-4. Core memory: [RECORD: distilled core fact]
+Use authorized experience and interaction context provided for this turn. Locations change through explicit binding commands.
 """
 
 
@@ -471,6 +444,10 @@ def model_system_prompt(is_random=False):
 
 def clean_and_process_tags(raw_text: str, user_id: int, nickname: str) -> str:
     from response_visibility import strip_internal_tags
+
+    if globals().get('active_learning') is not None:
+        raw_text = re.sub(r'\[(?:PORTRAIT_UPDATE|FEELING_UPDATE|RECORD|SCHEDULE_DONE)[:\uFF1A][^\[\]]*\]',
+                          '', raw_text)
 
     text = admins.phrasing(raw_text, user_id)
     text = re.sub(r"^Group chat\[\d+\]\s*", "", text)
@@ -2007,6 +1984,7 @@ async def handle_message_event(ws, data):
     is_group_admin = is_master or sender.get('role') in {'owner', 'admin'}
     learner = globals().get('active_learning')
     if learner is not None:
+        learner.social.feedback(data, cleaned_msg, addressed)
         async def run_explicit_block(action):
             from bot_actions import dispatch
             from types import SimpleNamespace
@@ -2584,7 +2562,10 @@ async def handle_message_event(ws, data):
         if group_id not in group_trigger_targets:
             group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
 
-        if not will_trigger and not meow_only and not is_talking_to_other and group_msg_counters[group_id] >= group_trigger_targets[group_id] and features.allow_passive(group_id, 'random', consume=False):
+        may_chime = learner is None or learner.social.chime_allowed(data)
+        if (may_chime and not will_trigger and not meow_only and not is_talking_to_other
+                and group_msg_counters[group_id] >= group_trigger_targets[group_id]
+                and features.allow_passive(group_id, 'random', consume=False)):
             is_random_chime = True
             group_msg_counters[group_id] = 0
             group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
@@ -2636,12 +2617,19 @@ async def handle_message_event(ws, data):
     if learner is not None:
         context_prompt += '\n' + learner.context(data, cleaned_msg, passive=is_random_chime,
                                                   multimodal=bool(image_descriptions))
-        if not is_random_chime and learner.uses_moments(data, cleaned_msg):
+        if is_random_chime:
+            from social_learning import SILENCE
+            context_prompt += ('\nDecide whether a reply adds something now. For repetition, an ongoing exchange '
+                               'between others, tension, or an unclear opening, output only ' + SILENCE + '.')
+        if is_random_chime or learner.uses_moments(data, cleaned_msg):
             transient['transient'] = True
     reply_raw = await call_gemini_with_history(session_id, context_prompt, is_random=is_random_chime,
                                                image_parts=None, **transient)
     if is_random_chime and (not reply_raw.strip() or reply_raw.startswith(('No model reply was available', 'This reply timed out', 'GPT cannot answer', 'Claude cannot answer', 'DeepSeek cannot answer', 'Meow...'))):
         print('[Random interjection skipped]:', group_id, 'Model unavailable; no group error announcement')
+        return
+
+    if is_random_chime and learner is not None and SILENCE in reply_raw:
         return
 
     if is_random_chime and features.arriving_repeat_active(group_id):
@@ -2718,6 +2706,8 @@ async def handle_message_event(ws, data):
             features.mark_passive(group_id, 'random')
         print(f"[Group reply sent]: {log_reply}")
 
+    if learner is not None and addressed and not is_random_chime:
+        learner.social.observe(data, cleaned_msg, reply_clean)
 
 async def main():
     global active_ws
@@ -2780,6 +2770,28 @@ async def main():
                 print('[Active learning maintenance]:', type(error).__name__)
 
     extensions.spawn(active_learning_loop())
+
+    async def generate_review(instruction, payload):
+        from response_visibility import visible_response_text
+        if not globals().get('GEMINI_API_KEY') or not AVAILABLE_CHAT_MODELS:
+            return None
+        result = await asyncio.wait_for(client.aio.models.generate_content(
+            model=AVAILABLE_CHAT_MODELS[0], contents=payload,
+            config=gemini_content_config(system_instruction=instruction, temperature=0.1,
+                                         max_output_tokens=768, response_mime_type='application/json')), 10)
+        return visible_response_text(result)
+
+    async def social_review_loop():
+        while True:
+            await asyncio.sleep(15)
+            try:
+                await active_learning.review_next(generate_review)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                print('[Interaction review]:', type(error).__name__)
+
+    extensions.spawn(social_review_loop())
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
     extensions.spawn(extensions.earthquake_monitor())
 
