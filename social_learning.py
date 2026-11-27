@@ -60,6 +60,7 @@ MESSAGES = {
     'invalid': 'No current draft with that ID can be approved for execution.',
     'existing': 'Proposed workflow {steps}',
     'care': 'You asked me to check in later. How did it go?',
+    'care_space': 'Understood. I will give you some space.',
     'care_milestone': 'I wanted to check in. How did the event you mentioned go?',
     'ask_length': 'I have conflicting signals about reply length. Which works better for you? learning answer {id} brief / balanced / detailed',
     'ask_workflow': 'Would this workflow help with your request? {name}. Reply learning answer {id} useful / skip.',
@@ -181,7 +182,7 @@ class SocialLearning:
             social['moments'] = rows
             return self.messages['group_saved']
         if op in {'care_on', 'care_off'}:
-            record['social'] = {k: v for k, v in social.items() if k not in {'care_due', 'care_milestone'}}
+            record['social'] = {k: v for k, v in social.items() if k not in {'care_due', 'care_milestone', 'care_attention'}}
             record['social']['care_enabled'] = op == 'care_on'
             self.pending.pop(key, None)
             return self.messages[op]
@@ -302,7 +303,8 @@ class SocialLearning:
             social['moments'] = rows
         if self.ask.search(text) and (gap or steps):
             self._draft(social, gap, steps, now, ask=kind == 'private')
-        if kind == 'private' and care and social.get('care_enabled') and not social.get('care_due'):
+        if (kind == 'private' and care and social.get('care_enabled') and not social.get('care_due')
+                and self.owner.attention.care_allowed(social, now)):
             if self.invite.search(text):
                 social.update(care_due=now + DAY, care_milestone=False)
             elif self.milestone.search(text) and (self.today.search(text) or self.tomorrow.search(text)):

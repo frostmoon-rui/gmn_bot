@@ -62,3 +62,19 @@ or once each week across groups for the same speaker. It offers each question on
 `learning questions` lists the current queue. `learning answer ID CHOICE` applies a
 choice. You can also quote the question and send just the choice. Pending questions expire in seven days. This updates the bot's local
 decision rules and uses the existing Gemini conversation model.
+
+## Learning when to speak or check in
+
+Automatic interjections start with the existing message thresholds and quiet-mode
+controls. The policy records an acknowledged interjection by bot account and group.
+A substantial reply that directly quotes it is evidence of engagement. If chat
+continues with no direct response, the next interjection waits longer. Idle groups
+do not produce a silence penalty. Complaints pause passive interjections for at
+least 30 minutes. Learned spacing ranges from 5 to 60 minutes and decays over time.
+
+An opted-in private check-in is a single message. An explicit reply or acknowledgment
+keeps a minimum seven-day rest between learned check-ins. No reply within two days
+extends the rest to fourteen days. A direct request for space also takes a fourteen-day break. An explicit request to stop turns off learned
+check-ins and cancels the pending one until they are enabled again. A send with an
+uncertain result also reserves a rest period. Explicit reminders and cooling alerts
+use their own existing settings. The policy stores receipts, counters and timestamps.

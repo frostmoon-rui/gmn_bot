@@ -134,7 +134,7 @@ class Extensions:
         # Text segments prevent CQ strings in retrieved material from becoming executable message segments.
         segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
         segments.append({'type': 'text', 'data': {'text': self.admins.phrasing(text, user)}})
-        await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
+        return await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
             'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
                        'message': segments}}))
 

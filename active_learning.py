@@ -6,6 +6,7 @@ import math
 import re
 import time
 
+from attention_learning import AttentionLearning
 from bot_actions import SCHEMAS, parse_action
 from social_learning import COMMANDS as SOCIAL_COMMANDS, SocialLearning
 
@@ -38,7 +39,7 @@ STYLES = {'brief': 'brief', 'formal': 'formal', 'less slang': 'less slang', 'cas
 
 
 class ActiveLearning:
-    def __init__(self, store, *, aliases=None, words=None, styles=None, sensitive=None, duration_unit='h', recall=None, social=None, clock=time.time):
+    def __init__(self, store, *, aliases=None, words=None, styles=None, sensitive=None, duration_unit='h', recall=None, social=None, attention=None, clock=time.time):
         self.store, self.clock = store, clock
         self.aliases = ENGLISH | SOCIAL_COMMANDS | (aliases or {})
         self.labels = sorted(self.aliases, key=len, reverse=True)
@@ -60,6 +61,7 @@ class ActiveLearning:
                         for name, schema in SCHEMAS.items()}
         self.recent = {}
         self.last_poll = 0
+        self.attention = AttentionLearning(self, **(attention or {}))
         self.social = SocialLearning(self, **(social or {}))
         if self.social.migrate_group_profiles():
             try:
@@ -310,6 +312,9 @@ class ActiveLearning:
         changed, delivered = False, 0
         for key, record in list(self.state.items()):
             changed |= self.social.prune(record, now)
+            changed |= self.attention.maintain_group(record, now)
+            social = record.get('social', {})
+            changed |= self.attention.maintain_care(social, now)
             for field in ('moments', 'gaps'):
                 saved = record.get(field, [])
                 kept = [row for row in saved if row['until'] > now]
@@ -347,6 +352,7 @@ class ActiveLearning:
                 continue
             due = next((task for task in waiting if task['due'] <= now), None)
             steps = ()
+            is_care = False
             if due:
                 if 'routine' in due:
                     if dispatch is None:
@@ -355,9 +361,12 @@ class ActiveLearning:
                 else:
                     text = words[10] + ' ' + due['text']
                 record['follow'] = [task for task in waiting if task is not due]
-            elif (social := record.get('social', {})).get('care_enabled') and 0 < social.get('care_due', 0) <= now:
+            elif (social.get('care_enabled') and 0 < social.get('care_due', 0) <= now
+                  and self.attention.care_allowed(social, now)):
                 text = self.social.messages['care_milestone' if social.pop('care_milestone', False) else 'care']
                 social.pop('care_due')
+                is_care = True
+                self.attention.reserve_care(social, now)
             elif (record.get('weather') and now - record.get('last_weather', 0) >= DAY
                   and self._cooling(extensions, who)):
                 text = words[11]
@@ -375,7 +384,9 @@ class ActiveLearning:
 
                     await self._execute(steps, invoke)
                 else:
-                    await extensions.send(ws, 'private', 0, who, text)
+                    receipt = await extensions.send(ws, 'private', 0, who, text)
+                    if is_care and record.get('social') is social and social.get('care_enabled'):
+                        self.attention.care_sent(social, receipt)
             except (RuntimeError, OSError, TimeoutError):
                 print('[Active learning]: Delivery could not be confirmed')
             delivered += 1

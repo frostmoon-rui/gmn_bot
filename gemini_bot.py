@@ -1565,6 +1565,8 @@ async def send_multiline_messages(ws, action: str, target_params: dict, full_tex
     if len(parts) > 3:
         parts = parts[:2] + ['\n'.join(parts[2:])]
     at = re.match(r'^\[CQ:at,qq=(\d+)\]', target_params.get('message', ''))
+    from attention_learning import message_id
+    receipts = []
     first = True
     for part in parts:
         for segment in safe_segments(part):
@@ -1575,9 +1577,12 @@ async def send_multiline_messages(ws, action: str, target_params: dict, full_tex
             for chunk in chunks:
                 params = {key: value for key, value in target_params.items() if key != 'message'}
                 params['message'] = ([{'type': 'at', 'data': {'qq': at[1]}}] if first and at else []) + [chunk]
-                await ws.send(json.dumps({'action': action, 'params': params}))
+                receipt = message_id(await ws.send(json.dumps({'action': action, 'params': params})))
+                if receipt:
+                    receipts.append(receipt)
                 first = False
                 await asyncio.sleep(0.3)
+    return receipts
 
 # ==================== 11. Silent background checks every half hour ====================
 async def background_periodic_monitor(ws_getter):
@@ -1947,6 +1952,20 @@ async def handle_message_event(ws, data):
     if addressed:
         cleaned_msg = re.sub(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', '', cleaned_msg).strip()
         is_talking_to_me = True
+    learner = globals().get('active_learning')
+    group_declined = False
+    if learner is not None:
+        quoted_id = None
+        if is_reply_to_me and not directed_elsewhere:
+            quoted_id = (data.get('reply') or {}).get('message_id') or (card_reply[1] if card_reply else None)
+        if msg_type == 'group':
+            group_declined = learner.attention.group_feedback(
+                data, cleaned_msg, quoted=quoted_id, addressed=addressed and not is_talking_to_other)
+        else:
+            care_feedback = learner.attention.care_feedback(data, cleaned_msg, quoted_id)
+            if care_feedback:
+                await extensions.send(ws, msg_type, group_id, user_id, learner.social.messages[care_feedback])
+                return
     from location_prompt_reply import city_from_binding_reply
     if not directed_elsewhere and not regions_data.get(str(user_id), {}).get('location'):
         city = city_from_binding_reply(cleaned_msg, reply_info, user_id, self_id, msg_type, ('Weather is unavailable, meow. Use set location:city to bind your area.', 'Reply to this message with your city to save it and check the weather.'))
@@ -1964,6 +1983,8 @@ async def handle_message_event(ws, data):
         group_prefs = await features.register_group(group_id)
         if (addressed or re.search(r'\b(?:bot|robot|lucky cat)\b', cleaned_msg, re.I)) and not is_talking_to_other:
             if re.fullmatch(r'(?:(?:the |this )?(?:bot|robot|lucky cat|you) (?:is |are )?(?:too |so |very |a bit )?(?:annoying|noisy|talkative)|(?:please )?(?:stop|quit) (?:chiming in|interrupting))[.! ]*', cleaned_msg, re.I):
+                if learner is not None and not group_declined:
+                    learner.attention.group_feedback(data, cleaned_msg, complaint=True)
                 cap = features.chime_cap(group_id, main_group)
                 # Keep the feedback offset bounded once every roll reaches the cap.
                 minimum = 5 if str(group_id) == str(main_group) else 10
@@ -1972,6 +1993,8 @@ async def handle_message_event(ws, data):
                     group_trigger_targets[group_id] = min(cap, group_trigger_targets[group_id] + 5)
                 await save_json_data_async('bot_preferences.json', features.prefs)
                 return
+        if group_declined:
+            return
     if 'videos' in globals():
         videos.observe(data)
         video_reply = await videos.command(data, cleaned_msg, addressed, ws)
@@ -1982,7 +2005,6 @@ async def handle_message_event(ws, data):
     is_master = is_superadmin(user_id)
     is_whitelist = user_id in WHITELIST_QQ or is_master
     is_group_admin = is_master or sender.get('role') in {'owner', 'admin'}
-    learner = globals().get('active_learning')
     if learner is not None:
         learner.social.feedback(data, cleaned_msg, addressed)
         if addressed and (not reply_info or is_reply_to_me):
@@ -2568,7 +2590,8 @@ async def handle_message_event(ws, data):
         if group_id not in group_trigger_targets:
             group_trigger_targets[group_id] = features.chime_threshold(group_id, main_group)
 
-        may_chime = learner is None or learner.social.chime_allowed(data)
+        may_chime = learner is None or (
+            learner.social.chime_allowed(data) and learner.attention.group_allowed(data))
         if (may_chime and not will_trigger and not meow_only and not is_talking_to_other
                 and group_msg_counters[group_id] >= group_trigger_targets[group_id]
                 and features.allow_passive(group_id, 'random', consume=False)):
@@ -2714,9 +2737,12 @@ async def handle_message_event(ws, data):
     elif msg_type == "group":
         print(f"\n[Group {group_id}] {formatted_current} (random={is_random_chime}, target bubbles={target_splits})")
         at_header = f"[CQ:at,qq={user_id}] " if (is_talking_to_me or has_explicit_notebook) else ""
-        await send_multiline_messages(ws, "send_group_msg", {"group_id": group_id, "message": at_header}, reply_clean)
+        receipts = await send_multiline_messages(ws, "send_group_msg",
+                                                 {"group_id": group_id, "message": at_header}, reply_clean)
         if is_random_chime:
             features.mark_passive(group_id, 'random')
+            if learner is not None and receipts:
+                learner.attention.chime_sent(data, receipts[0])
         print(f"[Group reply sent]: {log_reply}")
 
     if learner is not None and addressed and not is_random_chime and reply_clean:
