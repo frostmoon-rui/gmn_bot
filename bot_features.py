@@ -53,6 +53,7 @@ HELP = {'celestial-weather': 'Celestial weather: Sun weather | Moon weather | Ma
             'A background job sends one progress notice after 30 seconds if still running.\n'
             'Chat: ask a question | generate image:description\n'
             'Video: reply to a card and mention me with summarize video, or summarize video:URL\n'
+            'Cards: reply and mention me with view card, play music, summarize video, or weather forecast.\n'
             'Audio: /play music SONG - ARTIST | /download audio URL | separate audio (help video)\n'
             'Sticker correction: reply to my image and mention me with delete; retract and image-blocklist it.\n'
             'Weather: set location:city | weather today | weather tomorrow (complete weather image + Gemini briefing)\n'

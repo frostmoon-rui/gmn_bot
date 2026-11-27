@@ -94,6 +94,9 @@ def media_source(message, text):
                 raise MediaError('size')
             return kind, str(ident or "")
         raise MediaError('source')
+    from quoted_cards import media_card_url
+    if card_url := media_card_url(message):
+        return 'url', card_url
     plain = re.sub(r'\[CQ:[^\]]+\]', '', text)
     plain = plain.replace('&amp;', '&')
     urls = re.findall(r'https?://[^\s<>，。！？、）]+', plain, re.IGNORECASE)

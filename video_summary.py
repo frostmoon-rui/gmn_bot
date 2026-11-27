@@ -73,7 +73,7 @@ def segments_from(event):
     if not isinstance(raw, str):
         return []
     segments = []
-    for match in re.finditer(r'\[CQ:(json|xml|video|share),([^\]]*)\]', raw):
+    for match in re.finditer(r'\[CQ:(json|xml|video|share|reply),([^\]]*)\]', raw):
         info = {}
         for part in match[2].split(','):
             key, separator, value = part.partition('=')
@@ -138,6 +138,10 @@ def extract_videos(event):
             text = info.get('text', '') if kind == 'text' else info.get('url', '')
             for url in re.findall(r'https?://[^\s<>\[\]"\']+', str(text)):
                 add(url, info.get('title'), info.get('content'))
+    from quoted_cards import quoted_cards
+    for card in quoted_cards(event):
+        if card.kind != 'music':
+            add(card.url, card.title, kind='card')
     return found[:5]
 
 

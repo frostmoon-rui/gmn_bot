@@ -768,7 +768,11 @@ class OpenMusic:
             track = pending.choices[value - 1]
             value = f'{track.title} - {track.creator}'
             operation = 'search_file' if operation == 'download_file' else 'search'
-        if operation in {'search', 'search_file'}:
+        if operation == 'card':
+            self.results.pop(key, None)
+            self.pending.pop(key, None)
+            job = self._from_card(key, ws, event, *value)
+        elif operation in {'search', 'search_file'}:
             self.results.pop(key, None)
             self.pending.pop(key, None)
             job = self._search(key, ws, kind, group, user, value, file_only=operation == 'search_file')
@@ -797,6 +801,37 @@ class OpenMusic:
 
         self.spawn(run())
         return None
+
+    async def _from_card(self, key, ws, event, message_id, fallback):
+        from quoted_cards import qq_track_url, quoted_cards, quoted_message
+        _, kind, group, user = key
+        original = await quoted_message(ws, event, message_id)
+        cards = [card for card in quoted_cards(original or {}) if card.kind == 'music']
+        if len(cards) > 1:
+            await self.send(ws, kind, group, user, self.messages['ambiguous'])
+            return
+        if cards:
+            card = cards[0]
+            source = qq_track_url(card.url)
+            if source:
+                release = Release(card.title or self.messages['qqmusic'], card.creator, '', source)
+                if self.qqmusic_browser and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
+                    if await self._deliver(ws, kind, group, user, None, None, qqmusic=release,
+                                           report_failure=False, show_get_hint=True):
+                        self._remember_results(key, [[release]])
+                        return
+                await self.send(ws, kind, group, user, '\n'.join(filter(None, (
+                    self.messages['platform_only'], ' · '.join(filter(None, (release.title, release.creator))), source))))
+                return
+            if card.title:
+                fallback = ' - '.join(filter(None, (card.title, card.creator)))
+            elif card.url:
+                await self.send(ws, kind, group, user, card.url)
+                return
+        if fallback:
+            await self._search(key, ws, kind, group, user, fallback)
+        else:
+            await self.send(ws, kind, group, user, self.messages['none'])
 
     async def _platform_previews(self, query):
         configured = configured_platform_track(self.preview_catalog, query)
@@ -961,7 +996,10 @@ class OpenMusic:
         except MediaError as error:
             raise MediaError('attachment' if str(error) == 'usage' else str(error)) from error
         if kind == 'url':
-            raise MediaError('attachment')
+            from quoted_cards import media_card_url
+            if media_card_url(original) != ident:
+                raise MediaError('attachment')
+            return await asyncio.to_thread(prepare_link, ident, self.ffmpeg, workspace)
         incoming = workspace / 'source.media'
         await fetch_napcat_media(call, original, (kind, ident), incoming)
 

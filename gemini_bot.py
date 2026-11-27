@@ -1828,6 +1828,20 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
+    from quoted_cards import quoted_cards, quoted_message
+    card_reply = re.search(r"\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]", raw_msg)
+    has_card_reply = bool(card_reply or isinstance(data.get('reply'), dict))
+    if re.fullmatch(r'/?(?:view card|read card)', cleaned_msg, re.I) and (is_at_me or msg_type == 'private'):
+        from quoted_weather_location import quoted_map_place
+        original = await quoted_message(ws, data, card_reply[1] if card_reply else None)
+        original = original or {}
+        cards = quoted_cards(original)
+        place = quoted_map_place(original)
+        labels = {'contact': 'Contact card', 'forward': 'Forwarded messages'}
+        lines = [item for item in (place, *(' · '.join(filter(None, (card.title or labels.get(card.kind), card.creator, card.url))) for card in cards)) if item]
+        await extensions.send(ws, msg_type, group_id, user_id, '\n'.join(lines) or 'Reply to a music, video, web, or location card and ask to view it.')
+        return
+
     music_request = re.fullmatch(r'(/?)(play music|kugou music|netease music|get track|download audio)(?:(?:[ \t]*:[ \t]*|[ \t]+)([^\r\n]*))?', cleaned_msg, re.I)
     if music_request:
         from bot_features import mention_targets
@@ -1851,6 +1865,8 @@ async def handle_message_event(ws, data):
                 reply = open_music.start(ws, data, operation, int(selection[1]))
             else:
                 reply = 'Use /get track 1, or /get track 1 file for the MP3.'
+        elif command == 'play music' and has_card_reply:
+            reply = open_music.start(ws, data, 'card', (card_reply[1] if card_reply else None, value[:100]))
         elif not 0 < len(value) <= 100:
             reply = 'Usage: /play music SONG ARTIST'
         else:
