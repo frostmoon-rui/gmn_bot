@@ -40,8 +40,17 @@ def scope_for(event):
     return ('group_' + str(event.get('group_id'))) if event.get('message_type') == 'group' else ('private_' + str(event.get('user_id')))
 
 
+def reply_id(event, raw):
+    match = re.search(r'\[CQ:reply,id=(-?\d+)(?:,|\])', raw)
+    if match:
+        return int(match[1])
+    reply = event.get('reply')
+    value = str(reply.get('message_id', '')) if isinstance(reply, dict) else ''
+    return int(value) if re.fullmatch(r'-?\d+', value) else None
+
+
 class StickerModeration:
-    def __init__(self, store, downloader, commands=('delete',), messages=None):
+    def __init__(self, store, downloader, commands=('delete', 'delete sticker', 'delete image'), messages=None):
         self.store, self.downloader = store, downloader
         self.commands = {word.casefold() for word in commands}
         self.messages = {
@@ -49,7 +58,7 @@ class StickerModeration:
             'partial': 'The image is blocklisted, but retraction failed or expired.',
             'unresolved': 'The message was retracted, but image bytes were unavailable. The image blocklist could not be completed.',
             'failed': 'Retraction failed and image data was unavailable. No image blocklist was confirmed.',
-            'invalid': 'Reply to an image sent by this bot in this chat and mention it with delete.',
+            'invalid': 'Reply to an image from this bot with delete. In a group, also mention the bot.',
             **(messages or {}),
         }
         self.pending = set()
@@ -61,7 +70,8 @@ class StickerModeration:
         if str(event.get('user_id')) == str(event.get('self_id')) or not event.get('self_id'):
             return False
         raw, text, mentioned = event_text(event)
-        return mentioned and text.casefold() in self.commands and bool(re.search(r'\[CQ:reply,id=-?\d+(?:,|\])', raw))
+        addressed = mentioned or event.get('message_type') == 'private'
+        return addressed and text.casefold() in self.commands and reply_id(event, raw) is not None
 
     async def before_send(self, request):
         if request.get('action') not in {'send_group_msg', 'send_private_msg'}:
@@ -104,7 +114,7 @@ class StickerModeration:
         if not self.matches(event):
             return False
         raw, _, _ = event_text(event)
-        identifier = int(re.search(r'\[CQ:reply,id=(-?\d+)', raw)[1])
+        identifier = reply_id(event, raw)
         scope = scope_for(event)
         key = (scope, identifier, str(event.get('self_id')))
         if key in self.pending or len(self.pending) >= 32:

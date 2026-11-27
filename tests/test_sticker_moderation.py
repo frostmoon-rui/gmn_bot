@@ -117,6 +117,30 @@ class ModerationTests(unittest.IsolatedAsyncioTestCase):
         stream = io.BytesIO(); image.save(stream, format='PNG')
         self.assertFalse(self.store.is_blocked(stream.getvalue()))
 
+    async def test_private_reply_without_mention_uses_same_peer_receipt(self):
+        blob = picture()
+        private = {**self.event, 'message_type': 'private', 'user_id': 10,
+                   'raw_message': '[CQ:reply,id=42]delete sticker'}
+        private.pop('group_id', None)
+        private.pop('message', None)
+        self.policy.record_receipt({'action': 'send_private_msg', 'params': {
+            'user_id': 10, 'message': [segment(blob)]}}, {'message_id': 42}, 999)
+        original = {'message_type': 'private', 'user_id': 999, 'message_id': 42, 'message': [segment(blob)]}
+        self.assertTrue(await self.policy.handle(self.socket(original), private))
+        self.assertIn('delete_msg', [r['action'] for r in self.sent])
+        self.assertTrue(self.store.is_blocked(blob))
+
+    async def test_private_reply_does_not_authorize_another_peers_receipt(self):
+        private = {**self.event, 'message_type': 'private', 'user_id': 10,
+                   'raw_message': 'delete', 'reply': {'message_id': '42'}}
+        private.pop('group_id', None)
+        private.pop('message', None)
+        self.policy.record_receipt({'action': 'send_private_msg', 'params': {
+            'user_id': 11, 'message': [segment(picture())]}}, {'message_id': 42}, 999)
+        original = {'message_type': 'private', 'user_id': 999, 'message_id': 42, 'message': [segment(picture())]}
+        self.assertTrue(await self.policy.handle(self.socket(original), private))
+        self.assertNotIn('delete_msg', [r['action'] for r in self.sent])
+
     async def test_failed_recall_still_blocks_collection_and_reports_partial_success(self):
         blob = picture()
         await self.policy.handle(self.socket(self.original(blob), recall_error=True), self.event)

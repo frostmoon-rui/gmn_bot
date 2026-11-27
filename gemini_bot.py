@@ -2767,7 +2767,8 @@ async def handle_message_event(ws, data):
     # Add an optional sticker reply.
     emoji_bonus = ""
     emoji_probability = sticker_reply_probability(cleaned_msg, reply_clean, bool(sticker_img_segments), is_random_chime)
-    if not is_random_chime and not image_requested and emoji_probability > 0 and stolen_emojis and random.random() < emoji_probability:
+    brief_reply = autonomy_plan is not None and autonomy_plan.bubble_limit == 1
+    if not is_random_chime and not brief_reply and not image_requested and emoji_probability > 0 and stolen_emojis and random.random() < emoji_probability:
         emoji_bonus = await build_stolen_emoji_cq()
 
     if emoji_bonus:
