@@ -603,7 +603,8 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         import tempfile
         from gmn_host_adapter import enabled
 
-        switch = os.environ.get('ENABLE_AUTONOMY', 'false')
+        configured = os.environ.get('ENABLE_AUTONOMY')
+        switch = True if configured is None else configured
         if enabled(switch):
             try:
                 import gmn_autonomy
@@ -612,7 +613,9 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         scope['__file__'] = str(Path(temporary.name) / 'gemini_bot.py')
-        settings = {'GROUP_CHAT_ACCOUNT': '999', 'ENABLE_AUTONOMY': switch}
+        settings = {'GROUP_CHAT_ACCOUNT': '999'}
+        if configured is not None:
+            settings['ENABLE_AUTONOMY'] = configured
         scope['setting'] = lambda name, default='': settings.get(name, default)
         main = asyncio.create_task(scope['main']())
         try:

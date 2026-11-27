@@ -53,6 +53,13 @@ class OptionalAutonomyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await bridge.decide(EVENT, "autonomy remember: test", True))[0], "reply")
             self.assertEqual(await bridge.decide(EVENT, "autonomy chat: test", True), ("reply", "Test result"))
             self.assertIn('"memories": ["test"]', model.await_args.args[1])
+            for group_id in (41, 42):
+                group = {**EVENT, "message_type": "group", "group_id": group_id}
+                self.assertIsNone(await bridge.decide(group, "autonomy chat: test", False))
+                self.assertEqual(await bridge.decide(group, "autonomy chat: test", True), ("reply", "Test result"))
+                self.assertIn('"memories": []', model.await_args.args[1])
+                self.assertIn("autonomy chat", (await bridge.decide(group, "autonomy", True))[1])
+
             self.assertEqual(await bridge.adapter.heartbeat(), 0)
 
     async def test_heartbeat_recovers_from_a_failing_tick(self):

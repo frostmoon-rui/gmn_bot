@@ -1,7 +1,8 @@
 # Optional standalone autonomy integration
 
-Keep the existing requirements and startup as the default. Install the pinned
-dependency and opt in only on the integration branch:
+Install the pinned autonomy dependency alongside the base requirements.
+Autonomy is available in every group by default when the dependency is installed.
+No group registration or separate opt-in is required.
 
 ~~~powershell
 python -m pip install -r requirements.txt
@@ -13,17 +14,18 @@ $env:ENABLE_AUTONOMY = 'true'
 python -m unittest discover -s tests -p test_main_offline.py -q
 ~~~
 
-For a deployment, set ENABLE_AUTONOMY to true in the process environment or the
-host's ignored local settings. Restart with its configured supervisor. Start
-with a private-chat test of autonomy remember: TEXT, autonomy chat: TEXT, and
-autonomy forget. An addressed autonomy run status uses the native tool
-dispatcher, for both group and private messages. The host starts the expiry
-heartbeat when the runtime initialized successfully.
+Leave ENABLE_AUTONOMY unset for default operation or set it to false to disable
+the engine. Restart with the configured supervisor after changing the setting.
+Address the bot in a group with autonomy to see the guide, autonomy chat: QUESTION
+to get a group-safe model reply, or autonomy run status to invoke the native
+dispatcher. Group dialogue uses only the current question and never reads private
+memories. In private, autonomy remember: TEXT, autonomy recall and autonomy forget
+expose the memory store directly. The host starts the expiry heartbeat when
+the runtime initializes successfully.
 
 The requirement pins the independent release tag and can be installed or rolled
 back separately. This avoids a second checkout, submodule state and local import
-path changes. Leave the flag false for a deployment that uses the original
-host behavior. The local SQLite file is ignored. The original social learning and
+path changes. Set the flag false to use only the original host behavior. The local SQLite file is ignored. The original social learning and
 attention policies continue operating through their existing host entry points.
 Unmatched events and engine failures fall through. Delivery and dispatch happen
 after the decision and are sent only once through the existing host APIs.

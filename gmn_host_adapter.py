@@ -41,7 +41,7 @@ class AutonomyBridge:
             return None
         try:
             text = self.normalize(text.strip())
-            if not re.match(r"^/?autonomy\s", text, re.I):
+            if not re.match(r"^/?autonomy(?:\s|$)", text, re.I):
                 return None
             decision = await self.adapter.on_incoming_event(event, text, addressed)
             if decision is None:

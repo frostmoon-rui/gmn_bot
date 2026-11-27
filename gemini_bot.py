@@ -2864,7 +2864,7 @@ async def main():
 
     global autonomy_bridge
     autonomy_bridge = await AutonomyBridge.open(
-        setting('ENABLE_AUTONOMY', False),
+        setting('ENABLE_AUTONOMY', True),
         Path(__file__).resolve().parent / 'autonomy.local.sqlite3', generate_autonomy)
     if autonomy_bridge is not None:
         extensions.spawn(autonomy_bridge.heartbeat())
