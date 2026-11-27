@@ -1842,39 +1842,41 @@ async def handle_message_event(ws, data):
         await extensions.send(ws, msg_type, group_id, user_id, '\n'.join(lines) or 'Reply to a music, video, web, or location card and ask to view it.')
         return
 
-    music_request = re.fullmatch(r'(/?)(play music|kugou music|netease music|get track|download audio)(?:(?:[ \t]*:[ \t]*|[ \t]+)([^\r\n]*))?', cleaned_msg, re.I)
+    from music_commands import music_selection, parse_music_command
+    music_request = parse_music_command(cleaned_msg)
+    music_addressed = is_at_me
     if music_request:
         from bot_features import mention_targets
         mentions = mention_targets(raw_msg)
-        command, value = music_request[2].lower(), (music_request[3] or '').strip()
-        quoted = re.search(r"\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]", raw_msg)
-        quoted_download = command == 'download audio' and not value and quoted and music_request[1]
-        if not quoted_download and ((mentions and not is_at_me) or not (msg_type == 'private' or music_request[1] or is_at_me)):
+        slash, command, value = music_request
+        quoted = card_reply
+        quoted_download = command == 'download' and not value and quoted and slash
+        if not quoted_download and ((mentions and not is_at_me) or not (msg_type == 'private' or slash or music_addressed)):
             return
-        if command == 'download audio':
+        if command == 'download':
             if re.fullmatch(r'https?://\S{1,2040}', value, re.I):
                 reply = open_music.start(ws, data, 'link', value)
             elif not value and quoted:
                 reply = open_music.start(ws, data, 'attachment', int(quoted[1]))
             else:
                 reply = 'Use /download audio URL or reply to a media file with /download audio.'
-        elif command == 'get track':
-            selection = re.fullmatch(r'([1-3])(?:\s+(file))?', value, re.I)
+        elif command == 'select':
+            selection = music_selection(value)
             if selection:
-                operation = 'download_file' if selection[2] else 'download'
-                reply = open_music.start(ws, data, operation, int(selection[1]))
+                operation = 'download_file' if selection[1] else 'download'
+                reply = open_music.start(ws, data, operation, selection[0])
             else:
                 reply = 'Use /get track 1, or /get track 1 file for the MP3.'
-        elif command == 'play music' and has_card_reply:
+        elif command == 'search' and has_card_reply:
             reply = open_music.start(ws, data, 'card', (card_reply[1] if card_reply else None, value[:100]))
         elif not 0 < len(value) <= 100:
             reply = 'Usage: /play music SONG ARTIST'
         else:
             link = 'Kugou Music' + ' · ' + value + '\n' + kugou_search_url(value)
-            if command == 'netease music':
+            if command == 'netease':
                 reply = 'NetEase Cloud Music · ' + value + '\n' + netease_search_url(value)
             else:
-                reply = link if command == 'kugou music' else open_music.start(ws, data, 'search', value)
+                reply = link if command == 'kugou' else open_music.start(ws, data, 'search', value)
         if reply:
             await extensions.send(ws, msg_type, group_id, user_id, reply)
         return

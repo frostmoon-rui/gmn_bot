@@ -249,8 +249,20 @@ def _clean_title(title):
 
 
 def _query_parts(query):
-    fields = re.split(r'\s+[–—/|-]\s+|\s*[·・]\s*', normalize('NFKC', query), maxsplit=1)
-    return _clean_title(fields[0]) or query, fields[1] if len(fields) > 1 else ''
+    value = normalize('NFKC', query).strip()
+    value = re.sub(r'^(?:歌名|song|title)\s*:\s*', '', value, flags=re.I)
+    wrapped = re.fullmatch(r'《([^》]+)》\s*(.*)', value)
+    if wrapped:
+        title, artist = wrapped.groups()
+        artist = artist.lstrip(' -–—·・/|')
+    else:
+        fields = re.split(r'\s+[-/|]\s+|\s*[–—·・]\s*|\s+(?=(?:歌手|artist)\s*:)', value, maxsplit=1, flags=re.I)
+        title, artist = fields[0], fields[1] if len(fields) > 1 else ''
+    artist = re.sub(r'^(?:歌手|artist)\s*(?::|是)\s*', '', artist, flags=re.I).strip()
+    title = _clean_title(title)
+    # Incomplete closing punctuation is common when copying a version label from chat.
+    title = re.sub(r'\{\s*(explicit|clean)(?:\s*\})?$', r'(\1)', title, flags=re.I)
+    return title or query, artist
 
 
 def _key(text):
@@ -318,6 +330,8 @@ VERSION_NAMES = {
     'karaoke': r'karaoke|卡拉ok',
     'dj': r'dj',
     'edit': r'edit',
+    'explicit': r'explicit',
+    'clean': r'clean(?: version)?',
     'extended': r'extended|加长|加長',
     'rerecorded': r're[- ]?record(?:ed|ing)?|重录|重錄',
     'sped': r'sped(?:\s+up)?|加速',
@@ -736,6 +750,7 @@ class OpenMusic:
         self.pending[key] = PendingMusic(time.monotonic() + 600, title, tuple(choices))
 
     def followup(self, event, text):
+        text = normalize('NFKC', text).strip()
         pending = self._pending(self._session_key(event))
         if not pending or not 0 < len(text) <= 100:
             return None
