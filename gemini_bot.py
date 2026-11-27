@@ -2018,6 +2018,13 @@ async def handle_message_event(ws, data):
     is_master = is_superadmin(user_id)
     is_whitelist = user_id in WHITELIST_QQ or is_master
     is_group_admin = is_master or sender.get('role') in {'owner', 'admin'}
+    emergency = {'autonomy emergency stop': True, 'autonomy emergency resume': False}
+    if autonomy is not None and is_master and addressed and cleaned_msg.lower() in emergency:
+        autonomy.suspended = emergency[cleaned_msg.lower()]
+        await extensions.send(ws, msg_type, group_id, user_id,
+                              'Autonomy paused.' if autonomy.suspended else 'Autonomy resumed.')
+        return
+
     if learner is not None:
         learner.social.feedback(data, cleaned_msg, addressed)
         if addressed and (not reply_info or is_reply_to_me):
@@ -2033,8 +2040,14 @@ async def handle_message_event(ws, data):
                            master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
         learned = await learner.command(data, cleaned_msg, addressed, run_explicit_block)
         if learned is not None:
-            if autonomy is not None and cleaned_msg.strip().removeprefix('/').strip().lower() in {'interaction learning off', 'forget moments'}:
-                await autonomy.forget(data)
+            if autonomy is not None:
+                command_text = cleaned_msg.strip().removeprefix('/').strip().lower()
+                if command_text in {'interaction learning off'}:
+                    await autonomy.set_learning(data, False)
+                elif command_text in {'interaction learning on'}:
+                    await autonomy.set_learning(data, True)
+                elif command_text in {'forget moments'}:
+                    await autonomy.forget(data)
             if learned:
                 await extensions.send(ws, msg_type, group_id, user_id, learned)
             return
@@ -2049,6 +2062,10 @@ async def handle_message_event(ws, data):
                 await dispatch(SimpleNamespace(**globals()), value, data, ws,
                                master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
             else:
+                if learner is not None and not autonomy.is_dialogue(cleaned_msg):
+                    preference = autonomy.natural_preference(cleaned_msg)
+                    if preference:
+                        await learner.command(data, preference, addressed, run_explicit_block)
                 dialogue = autonomy.is_dialogue(cleaned_msg)
                 pacing = autonomy.bubbles(value, group=msg_type == 'group', request=cleaned_msg) if dialogue else None
                 if pacing is None:
@@ -2807,9 +2824,8 @@ async def handle_message_event(ws, data):
         print(f"[Group reply sent]: {log_reply}")
 
     if autonomy is not None and autonomy_plan is not None and addressed and not is_random_chime and reply_clean:
-        if not autonomy_plan.transient:
-            delivered_text = " ".join(pacing.parts) if pacing else reply_clean
-            autonomy.observe(data, cleaned_msg, delivered_text, addressed, learner)
+        delivered_text = " ".join(pacing.parts) if pacing else reply_clean
+        autonomy.observe(data, cleaned_msg, delivered_text, addressed, learner)
 
     if learner is not None and addressed and not is_random_chime and reply_clean:
         learner.social.observe(data, cleaned_msg, reply_clean)
@@ -2931,10 +2947,48 @@ async def main():
     autonomy_bridge = await AutonomyBridge.open(
         setting('ENABLE_AUTONOMY', True),
         Path(__file__).resolve().parent / 'autonomy.local.sqlite3', generate_autonomy,
-        review_caller=review_autonomy)
+        review_caller=review_autonomy,
+        language=lambda: getattr(features, "language", "en"))
+    def outreach_allowed(ws, candidate):
+        if candidate.kind == 'private':
+            who = candidate.target
+            if who == int(ws.self_id) or who in BLACKLIST_QQ or not features.notifications_enabled(who):
+                return False
+            event = {'post_type': 'message', 'message_type': 'private', 'user_id': who, 'self_id': ws.self_id}
+            if not ws.allows_event(event):
+                return False
+            record = active_learning.state.get(active_learning.scope(event), {})
+            social = record.get('social', {})
+            return (not social.get('care_due') and
+                    time.time() - record.get('last_sent', 0) >= 24*3600 and
+                    active_learning.attention.care_allowed(social, time.time()))
+        group = candidate.target
+        event = {'self_id': ws.self_id, 'group_id': group, 'message_type': 'group'}
+        return (ws.group_enabled and features.allow_passive(group, 'random', consume=False)
+                and not features.arriving_repeat_active(group)
+                and active_learning.social.chime_allowed(event)
+                and active_learning.attention.group_allowed(event))
+
+    async def deliver_outreach(ws, candidate, text):
+        if candidate.kind == 'group':
+            receipt = await extensions.send(ws, 'group', candidate.target, None, text)
+            features.mark_passive(candidate.target, 'random')
+            from attention_learning import message_id
+            active_learning.attention.chime_sent(
+                {'self_id': ws.self_id, 'group_id': candidate.target}, message_id(receipt))
+        else:
+            who = candidate.target
+            receipt = await extensions.send(ws, 'private', 0, who, text)
+            event = {'message_type': 'private', 'user_id': who, 'self_id': ws.self_id}
+            social = active_learning.social.profile(event)
+            if social.get('care_enabled'):
+                active_learning.attention.reserve_care(social, time.time())
+                active_learning.attention.care_sent(social, receipt)
+
     if autonomy_bridge is not None:
         extensions.spawn(autonomy_bridge.heartbeat())
         extensions.spawn(autonomy_bridge.review_loop())
+        extensions.spawn(autonomy_bridge.outreach_loop(lambda: active_ws, outreach_allowed, deliver_outreach))
 
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
     extensions.spawn(extensions.earthquake_monitor())

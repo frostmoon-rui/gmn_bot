@@ -132,8 +132,8 @@ class Extensions:
         if isinstance(text, HelpReply):
             return await deliver_help(ws, kind, group, user, text)
         # Text segments prevent CQ strings in retrieved material from becoming executable message segments.
-        segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' else [])
-        segments.append({'type': 'text', 'data': {'text': self.admins.phrasing(text, user)}})
+        segments = ([{'type': 'at', 'data': {'qq': str(user)}}] if kind == 'group' and user is not None else [])
+        segments.append({'type': 'text', 'data': {'text': (self.admins.phrasing(text, user) if user is not None else text)}})
         return await ws.send(json.dumps({'action': 'send_group_msg' if kind == 'group' else 'send_private_msg',
             'params': {'group_id' if kind == 'group' else 'user_id': group if kind == 'group' else user,
                        'message': segments}}))

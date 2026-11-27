@@ -47,6 +47,13 @@ class OptionalAutonomyTests(unittest.IsolatedAsyncioTestCase):
             bridge = await AutonomyBridge.open(True, Path(temporary) / "private.sqlite3", model)
             self.assertIsNotNone(bridge)
             self.assertIsNone(await bridge.decide(EVENT, "unchanged host command", True))
+            self.assertEqual(await bridge.decide(EVENT, "Are you running normally?", True),
+                             ("tool", {"tool": "status", "args": {}}))
+            self.assertEqual(await bridge.decide(EVENT, "Was that an earthquake?", True),
+                             ("tool", {"tool": "earthquake", "args": {}}))
+            bridge.suspended = True
+            self.assertIsNone(await bridge.decide(EVENT, "Was that an earthquake?", True))
+            bridge.suspended = False
             self.assertIsNone(await bridge.decide(EVENT, "autonomy run status", False))
             self.assertEqual(await bridge.decide(EVENT, "autonomy run status", True),
                              ("tool", {"tool": "status", "args": {}}))

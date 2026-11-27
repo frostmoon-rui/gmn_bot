@@ -16,12 +16,12 @@ python -m unittest discover -s tests -p test_main_offline.py -q
 
 Leave ENABLE_AUTONOMY unset for default operation or set it to false to disable
 the engine. Restart with the configured supervisor after changing the setting.
-Address the bot in a group with autonomy to see the guide, autonomy chat: QUESTION
-to get a group-safe model reply, or autonomy run status to invoke the native
-dispatcher. Group dialogue uses only the current question and never reads private
-memories. In private, autonomy remember: TEXT, autonomy recall and autonomy forget
-expose the memory store directly. The host starts the expiry heartbeat when
-the runtime initializes successfully.
+Ordinary private chat, addressed group chat and eligible group interjections use
+the engine automatically. Natural questions about recent earthquakes or bot
+status can dispatch the corresponding native tools. The direct memory commands
+remain compatible. The host starts expiry, review and outreach workers after the
+runtime initializes. The owner can use `autonomy emergency stop` and
+`autonomy emergency resume` to pause or resume it for the running process.
 
 The requirement pins the independent release tag and can be installed or rolled
 back separately. This avoids a second checkout, submodule state and local import
@@ -35,7 +35,7 @@ tests cover the switch and missing dependency, the enabled bridge, an actual
 message-handler dispatch, circuit breaking and heartbeat failure recovery.
 None of the test commands starts the live bot.
 
-## Conversational engine v0.2
+## Conversational engine v0.3
 
 Ordinary model-backed replies and the autonomy chat command gain a conversational
 style policy. The adapter precomputes up to four natural bubbles and typing
@@ -51,22 +51,30 @@ Explicit commands and direct requests keep their original priority.
 
 The worker reviews at least two delivered turns after a two-minute pause using an
 available Gemini Flash model. It keeps no review transcripts on disk. User feedback
-updates room and speaker preferences, and explicitly volunteered private events
-can survive for 7 to 28 days depending on importance. Private interaction learning
-requires the existing opt-in. Group profiles are scoped by bot and group.
-Disabling interaction learning clears pending reviews and private learned state.
+updates room and speaker preferences. Core facts have no expiry and eligible
+episodes last 7 to 28 days. Scoped learning is on by default. Saying `don't
+remember my messages` stops learning and clears learned state for that scope.
+Public context contains anonymous topic identifiers. Private speech, group-only
+notes and review evidence stay in their respective scopes.
 Explicit autonomy memories remain a separate store and can be removed with
 autonomy forget. The schema upgrade preserves older explicit records and
 the optional flag can still be set to false for the original host path.
+
+Private outreach requires a natural invitation such as `you can message me
+first`. The worker reviews candidates, honors the host's notification and room
+settings, and sends at most twice per account per day in UTC+8 daytime hours.
+It waits for a private recipient to reply before trying again. `Don't message me
+first` stops private outreach.
 
 ### QQ acceptance checks
 
 - Send a short casual question in a group followed by a structured request
   for numbered instructions. Casual output uses natural bubbles and the
   requested structured answer keeps its formatting.
-- In private, enable interaction learning, exchange several messages on a harmless
-  topic, state a clear preference, pause for two minutes and ask a related question.
-  On later replies, look for an appropriate tone and relevant recall. Try the same
-  question in a group to check that private notes stay private.
+- In private, state a strong preference in ordinary language. Pause for two
+  minutes and ask a related question. Try the same question in a group to check
+  that private notes stay private.
+- After mentioning an upcoming exam, invite the bot to check in the next day.
+  Check that it respects its daytime and cooldown rules and waits for an answer.
 - Compare a normal group chat with a dispute or urgent request and confirm the
   bot leaves room for the people speaking. Explicitly addressed requests still work.

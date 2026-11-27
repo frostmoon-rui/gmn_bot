@@ -21,6 +21,7 @@ class AutonomyBridge:
         self.clock = clock
         self.failures = 0
         self.retry_at = 0.0
+        self.suspended = False
         self.speech_failures = 0
         self.speech_retry_at = 0.0
 
@@ -39,11 +40,11 @@ class AutonomyBridge:
             return None
 
     async def decide(self, event, text, addressed, *, legacy=None):
-        if not addressed or self.clock() < self.retry_at:
+        if self.suspended or not addressed or self.clock() < self.retry_at:
             return None
         try:
             text = self.normalize(text.strip())
-            if not re.match(r"^/?autonomy(?:\s|$)", text, re.I):
+            if not text:
                 return None
             decision = await self.adapter.on_incoming_event(
                 event, text, addressed, learn=self.learning_allowed(event, legacy))
@@ -71,11 +72,8 @@ class AutonomyBridge:
     @staticmethod
     def learning_allowed(event, legacy):
         if legacy is None:
-            return False
-        profile = legacy.social.profile(event)
-        if event.get("message_type") == "group":
-            return not profile.get("disabled")
-        return bool(profile.get("enabled"))
+            return True
+        return not legacy.social.profile(event).get("disabled")
 
     def _speech_error(self, error):
         self.speech_failures += 1
@@ -84,7 +82,7 @@ class AutonomyBridge:
         LOG.warning("Autonomy conversation fell back (%s)", type(error).__name__)
 
     async def prepare(self, event, text, recent, *, passive, addressed, legacy):
-        if self.clock() < self.speech_retry_at:
+        if self.suspended or self.clock() < self.speech_retry_at:
             return None
         try:
             async with asyncio.timeout(1.6):
@@ -97,7 +95,7 @@ class AutonomyBridge:
             return None
 
     def bubbles(self, text, plan=None, *, group=False, passive=False, request=""):
-        if self.clock() < self.speech_retry_at or (plan is not None and not plan.format_text):
+        if self.suspended or self.clock() < self.speech_retry_at or (plan is not None and not plan.format_text):
             return None
         try:
             from gmn_autonomy.core.conversation import HELP, SERIOUS, phase, render
@@ -116,7 +114,7 @@ class AutonomyBridge:
         return bool(re.match(r"^/?autonomy\s+chat(?:[\s:\uFF1A]|$)", self.normalize(text.strip()), re.I))
 
     def note_room(self, event, text):
-        if self.clock() < self.speech_retry_at:
+        if self.suspended or self.clock() < self.speech_retry_at:
             return
         try:
             self.adapter.note_room(event, text)
@@ -124,6 +122,8 @@ class AutonomyBridge:
             self._speech_error(error)
 
     def observe(self, event, text, answer, addressed, legacy):
+        if self.suspended:
+            return
         try:
             self.adapter.observe(event, text, answer, addressed, self.learning_allowed(event, legacy))
         except Exception as error:
@@ -141,10 +141,48 @@ class AutonomyBridge:
     async def review_loop(self):
         while True:
             await asyncio.sleep(15)
+            if self.suspended:
+                continue
             try:
                 await self.adapter.refresh_review()
             except Exception as error:
                 LOG.warning("Autonomy conversation review failed (%s)", type(error).__name__)
+
+    async def set_learning(self, event, enabled):
+        try:
+            await self.adapter.set_learning(event, enabled)
+        except Exception as error:
+            LOG.warning("Autonomy learning control failed (%s)", type(error).__name__)
+
+    @staticmethod
+    def natural_preference(text):
+        from gmn_autonomy.v3 import STOP, learn_control
+
+        choice = learn_control(text)
+        if choice is not None:
+            return "interaction learning on" if choice else "interaction learning off"
+        if STOP.fullmatch(text.strip().rstrip("?!\u3002\uFF1F\uFF01.! ")):
+            return "care follow-ups off"
+        return None
+
+    async def outreach_loop(self, socket, allowed, deliver):
+        while True:
+            await asyncio.sleep(60)
+            ws = socket()
+            if self.suspended or not ws or not getattr(ws, "self_id", None):
+                continue
+
+            def permitted(candidate):
+                return not self.suspended and socket() is ws and not getattr(ws, "closed", False) and allowed(ws, candidate)
+
+            async def send(candidate, text):
+                if permitted(candidate):
+                    await deliver(ws, candidate, text)
+
+            try:
+                await self.adapter.outreach(int(ws.self_id), permitted, send)
+            except Exception as error:
+                LOG.warning("Autonomy outreach tick failed (%s)", type(error).__name__)
 
     async def heartbeat(self):
         while True:
