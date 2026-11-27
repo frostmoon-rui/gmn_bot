@@ -88,7 +88,7 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ext.send.await_args.args[1:4], ('private', 0, self.user['user_id']))
         self.assertNotIn('telescope', self.ext.send.await_args.args[4])
         await self.command('interaction learning off')
-        self.assertNotIn('social', self.learner.state[self.learner.scope(self.user)])
+        self.assertEqual(self.learner.state[self.learner.scope(self.user)]['social'], {'disabled': True})
 
     async def test_inflight_gemini_review_cannot_restore_deleted_records(self):
         await self.command('interaction learning on')

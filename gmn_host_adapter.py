@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import re
+import sqlite3
 import time
 
 from bot_actions import parse_action
@@ -62,6 +63,9 @@ class AutonomyBridge:
                 raise ValueError("Invalid autonomy decision")
             self.failures = 0
             return result
+        except sqlite3.OperationalError as error:
+            LOG.warning("Autonomy database unavailable for this turn (%s)", type(error).__name__)
+            return None
         except Exception as error:
             self.failures += 1
             if self.failures >= 2:
@@ -76,6 +80,9 @@ class AutonomyBridge:
         return not legacy.social.profile(event).get("disabled")
 
     def _speech_error(self, error):
+        if isinstance(error, sqlite3.OperationalError):
+            LOG.warning("Autonomy database unavailable for this turn (%s)", type(error).__name__)
+            return
         self.speech_failures += 1
         if self.speech_failures >= 2:
             self.speech_retry_at = self.clock() + 60
@@ -90,6 +97,8 @@ class AutonomyBridge:
                     event, text, recent, passive=passive, addressed=addressed,
                     learn=self.learning_allowed(event, legacy))
             return plan
+        except TimeoutError:
+            return None
         except Exception as error:
             self._speech_error(error)
             return None
@@ -102,7 +111,7 @@ class AutonomyBridge:
 
             if request and (SERIOUS.search(request) or HELP.search(request)):
                 return None
-            bubbles = render(text, group=group, passive=passive, phase_name=plan.phase if plan else phase(time.time()),
+            bubbles = render(text, group=group, passive=passive, phase_name=plan.phase if plan else phase(self.adapter.runtime.clock()),
                              bubble_limit=plan.bubble_limit if plan else None)
             self.speech_failures = 0
             return bubbles
@@ -122,10 +131,20 @@ class AutonomyBridge:
             self._speech_error(error)
 
     def observe(self, event, text, answer, addressed, legacy):
-        if self.suspended:
-            return
+        if self.suspended or self.clock() < self.speech_retry_at:
+            return False
+        # Let the legacy reviewer handle explicit requests for new capabilities.
+        if legacy is not None and legacy.social.ask.search(text):
+            return False
         try:
-            self.adapter.observe(event, text, answer, addressed, self.learning_allowed(event, legacy))
+            return self.adapter.observe(event, text, answer, addressed, self.learning_allowed(event, legacy))
+        except Exception as error:
+            self._speech_error(error)
+            return False
+
+    async def consume(self, event, plan):
+        try:
+            await self.adapter.consume(event, plan)
         except Exception as error:
             self._speech_error(error)
 
@@ -154,15 +173,40 @@ class AutonomyBridge:
         except Exception as error:
             LOG.warning("Autonomy learning control failed (%s)", type(error).__name__)
 
+    async def set_outreach(self, event, enabled):
+        try:
+            await self.adapter.set_outreach(event, enabled)
+        except Exception as error:
+            LOG.warning("Autonomy outreach preference failed (%s)", type(error).__name__)
+
+    async def import_legacy_care(self, state):
+        records = []
+        for key, record in state.items():
+            account, _, peer = key.partition(':private:0:')
+            social = record.get('social', {})
+            if not account.isdecimal() or not peer.isdecimal() or 'care_enabled' not in social:
+                continue
+            care = social.get('care_attention', {})
+            records.append((int(account), int(peer), bool(social['care_enabled']), social.get('care_due'),
+                            care.get('sent', 0), bool(care.get('pending'))))
+        if records:
+            try:
+                await self.adapter.import_legacy_care(records)
+            except Exception as error:
+                LOG.warning("Existing care preferences could not be imported (%s)", type(error).__name__)
+
     @staticmethod
     def natural_preference(text):
-        from gmn_autonomy.v3 import STOP, learn_control
+        from gmn_autonomy.v3 import INVITE, STOP, learn_control
 
         choice = learn_control(text)
         if choice is not None:
             return "interaction learning on" if choice else "interaction learning off"
-        if STOP.fullmatch(text.strip().rstrip("?!\u3002\uFF1F\uFF01.! ")):
+        line = text.strip().rstrip("?!\u3002\uFF1F\uFF01.! ")
+        if STOP.fullmatch(line):
             return "care follow-ups off"
+        if INVITE.search(line):
+            return "care follow-ups on"
         return None
 
     async def outreach_loop(self, socket, allowed, deliver):
@@ -177,7 +221,7 @@ class AutonomyBridge:
 
             async def send(candidate, text):
                 if permitted(candidate):
-                    await deliver(ws, candidate, text)
+                    return await deliver(ws, candidate, text)
 
             try:
                 await self.adapter.outreach(int(ws.self_id), permitted, send)

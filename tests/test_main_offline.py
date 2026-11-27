@@ -81,6 +81,16 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline
 
+    def test_echoed_system_tags_never_write_state(self):
+        save = Mock()
+        self.scope.update(admins=SimpleNamespace(phrasing=lambda text, user: text),
+                          save_json_data=save, sync_save_notebook=save)
+        clean = self.scope['clean_and_process_tags']
+        for tag in ('RECORD', 'FEELING_UPDATE', 'PORTRAIT_UPDATE', 'SCHEDULE_DONE'):
+            tagged = f'[{tag}: Example | copied text]'
+            self.assertEqual(clean('Hi ' + tagged, 10, 'Test', tagged), 'Hi')
+        save.assert_not_called()
+
     async def test_group_notices_default_on_with_local_quiet_and_cooldown(self):
         handle = self.scope['handle_group_notice_async']
         event = {'notice_type': 'group_increase', 'group_id': 20, 'user_id': 10, 'self_id': 999}
@@ -365,7 +375,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(answer, '')
         self.assertEqual(self.scope['regions_data'], {})
 
-    def test_only_complete_feeling_updates_are_applied_and_hidden(self):
+    def test_model_feeling_tags_are_hidden_without_persisting(self):
         save = Mock()
         self.scope.update(
             admins=SimpleNamespace(phrasing=lambda text, user: text),
@@ -376,8 +386,8 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.scope['feelings_data'], {})
         save.assert_not_called()
         self.assertEqual(clean('Hi [FEELING_UPDATE: Test | friendly]', 10, 'Test'), 'Hi')
-        self.assertEqual(self.scope['feelings_data'], {'Test': 'friendly'})
-        save.assert_called_once()
+        self.assertEqual(self.scope['feelings_data'], {})
+        save.assert_not_called()
 
     async def test_search_is_triggered_by_model_plan_not_question_keywords(self):
         plan = {'query': 'Current safety standards for a material', 'mode': 'latest', 'topic': ''}

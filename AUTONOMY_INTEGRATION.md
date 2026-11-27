@@ -56,8 +56,9 @@ episodes last 7 to 28 days. Scoped learning is on by default. Saying `don't
 remember my messages` stops learning and clears learned state for that scope.
 Public context contains anonymous topic identifiers. Private speech, group-only
 notes and review evidence stay in their respective scopes.
-Explicit autonomy memories remain a separate store and can be removed with
-autonomy forget. The schema upgrade preserves older explicit records and
+An explicit autonomy forget removes memories and review evidence for the
+private peer. Turning off learning also disables private check-ins when issued
+in that chat. The schema upgrade preserves older explicit records and
 the optional flag can still be set to false for the original host path.
 
 Private outreach requires a natural invitation such as `you can message me
@@ -65,6 +66,9 @@ first`. The worker reviews candidates, honors the host's notification and room
 settings, and sends at most twice per account per day in UTC+8 daytime hours.
 It waits for a private recipient to reply before trying again. `Don't message me
 first` stops private outreach.
+Ordinary conversations use one Flash review path. Legacy review remains
+available for explicit feature requests and when the optional engine is
+unavailable. Outreach and interjection budgets are charged after delivery.
 
 ### QQ acceptance checks
 

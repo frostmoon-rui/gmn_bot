@@ -105,17 +105,17 @@ class ActiveLearning:
     def uses_moments(self, event, text):
         return bool(self._moments(event, text))
 
-    def context(self, event, text, *, passive=False, multimodal=False):
+    def context(self, event, text, *, passive=False, multimodal=False, legacy_style=True):
         if passive:
             return 'Keep this interjection brief and skip it if the context is unclear; avoid teasing during conflict or grief.'
         record = self.state.get(self.scope(event), {})
         style = self.social.profile(event).get('style') if event['message_type'] == 'group' else record.get('style')
         parts = [INSTRUCTIONS]
-        if style in STYLES and (style != 'brief' or not self.social.confirmed_length(event)):
+        if legacy_style and style in STYLES and (style != 'brief' or not self.social.confirmed_length(event)):
             parts.append('The speaker requested this reply style: ' + style)
         if multimodal or re.search(r'\.{3}|…|[!?！？]{2,}', text):
             parts.append('Respond gently to uncertain cues; never assert an emotion based only on a pause, emoji or image.')
-        guidance = self.social.guidance(event)
+        guidance = self.social.guidance(event) if legacy_style else None
         if guidance:
             parts.append(guidance)
         moments = self._moments(event, text)
@@ -299,7 +299,7 @@ class ActiveLearning:
     def _when(due):
         return datetime.fromtimestamp(due, TZ).strftime('%m-%d %H:%M (UTC+8)')
 
-    async def poll(self, ws, extensions, features, dispatch=None):
+    async def poll(self, ws, extensions, features, dispatch=None, *, legacy_care=True):
         now = self.clock()
         if now - self.last_poll < 60:
             return
@@ -361,7 +361,7 @@ class ActiveLearning:
                 else:
                     text = words[10] + ' ' + due['text']
                 record['follow'] = [task for task in waiting if task is not due]
-            elif (social.get('care_enabled') and 0 < social.get('care_due', 0) <= now
+            elif (legacy_care and social.get('care_enabled') and 0 < social.get('care_due', 0) <= now
                   and self.attention.care_allowed(social, now)):
                 text = self.social.messages['care_milestone' if social.pop('care_milestone', False) else 'care']
                 social.pop('care_due')

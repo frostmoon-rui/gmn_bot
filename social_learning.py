@@ -153,12 +153,12 @@ class SocialLearning:
                 profile.pop('disabled', None)
                 return self.messages['group_on' if group else op]
             self._clear_buffers(key)
-            if group:
-                target['social'] = {'disabled': True}
-            else:
-                target.pop('social', None)
+            target['social'] = {'disabled': True}
+            if not group:
+                target.pop('moments', None)
+                target.pop('style', None)
             return self.messages['group_off' if group else op]
-        social = self.ensure_profile(event) if op == 'group_remember' else self.profile(event)
+        social = self.ensure_profile(event) if op == 'group_remember' or (op in {'care_on', 'care_off'} and not group) else self.profile(event)
         if social is None or social.get('disabled') or (not group and not social):
             return self.messages['need_opt_in']
         now = self.owner.clock()

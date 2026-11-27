@@ -1,5 +1,6 @@
 import asyncio
 import builtins
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,18 @@ class OptionalAutonomyTests(unittest.IsolatedAsyncioTestCase):
                 await bridge.heartbeat()
         self.assertEqual(adapter.heartbeat.await_count, 2)
 
+
+    async def test_database_contention_does_not_trip_either_breaker(self):
+        adapter = AsyncMock()
+        adapter.on_incoming_event.side_effect = sqlite3.OperationalError("database is locked")
+        adapter.prepare.side_effect = sqlite3.OperationalError("database is locked")
+        bridge = AutonomyBridge(adapter, clock=lambda: 100)
+        for _ in range(3):
+            self.assertIsNone(await bridge.decide(EVENT, "hello", True))
+            self.assertIsNone(await bridge.prepare(EVENT, "hello", (), passive=False, addressed=True, legacy=None))
+        self.assertEqual(adapter.on_incoming_event.await_count, 3)
+        self.assertEqual(adapter.prepare.await_count, 3)
+        self.assertEqual((bridge.retry_at, bridge.speech_retry_at), (0, 0))
 
     async def test_conversation_failure_does_not_open_the_command_breaker(self):
         adapter = AsyncMock()
