@@ -36,6 +36,7 @@ COMMANDS = {
     'interaction learning on': 'learn_on', 'interaction learning off': 'learn_off',
     'interaction profile': 'profile', 'learned moments': 'learned_moments',
     'care follow-ups on': 'care_on', 'care follow-ups off': 'care_off',
+    'remember group moment': 'group_remember', 'forget group moments': 'group_forget',
     'review workflows': 'review', 'accept reviewed workflow': 'review_approve',
 }
 MESSAGES = {
@@ -43,6 +44,12 @@ MESSAGES = {
     'learn_off': 'Cleared learned memories, interaction feedback, workflow drafts, and pending learned check-ins.',
     'care_on': 'Private check-ins enabled for invitations and upcoming milestones you share.',
     'care_off': 'Private check-ins disabled and pending learned check-in cleared.',
+    'group': 'Address the bot in a group to set group memories.',
+    'group_on': 'Interaction learning is enabled for you across this bot account’s groups.',
+    'group_off': 'Interaction learning is off for you across this bot account’s groups. Shared learned records were cleared.',
+    'group_saved': 'Saved as a shared group memory for 30 days. You can recall it in other groups with this bot.',
+    'group_forgot': 'Cleared your shared group memories.',
+    'group_invalid': 'Give a short group memory without sensitive details or links.',
     'need_opt_in': 'Enable interaction learning in this chat first.',
     'private': 'Use this command in private chat.',
     'summary': 'Reviewed exchanges {total} · helpful {helpful} · too long {too_long} · mistimed {interruption} · misunderstood {misunderstood}',
@@ -72,25 +79,93 @@ class SocialLearning:
         self.paused = OrderedDict()
         self.next_review = 0
 
-    def _forget(self, key, record):
-        record.pop('social', None)
+    def _key(self, event):
+        if event['message_type'] == 'group':
+            return self.owner.scope({**event, 'message_type': 'groups'})
+        return self.owner.scope(event)
+
+    def profile(self, event):
+        return self.owner.state.get(self._key(event), {}).get('social', {})
+
+    def migrate_group_profiles(self):
+        changed = False
+        now = self.owner.clock()
+        for key, local in list(self.owner.state.items()):
+            parts = key.split(':')
+            if len(parts) != 4 or parts[1] != 'group' or not ('social' in local or 'style' in local):
+                continue
+            self_id, _, _, user = parts
+            shared_key = f'{self_id}:groups:0:{user}'
+            shared = self.owner.state.setdefault(shared_key, {}).setdefault('social', {})
+            old = local.pop('social', {})
+            style = local.pop('style', None)
+            if not shared.get('disabled'):
+                if style:
+                    shared.setdefault('style', style)
+                reviews = shared.get('reviews', []) + old.get('reviews', [])
+                shared['reviews'] = [list(row) for row in sorted({tuple(row) for row in reviews if row[0] > now - 30*DAY})[-30:]]
+                drafts = (old.get('drafts', {}) | shared.get('drafts', {}))
+                shared['drafts'] = dict(list(drafts.items())[-8:])
+            changed = True
+        return changed
+
+    def _clear_buffers(self, key):
         self.pending.pop(key, None)
-        self.previous.pop(key, None)
+        for previous_key in list(self.previous):
+            if previous_key[0] == key:
+                self.previous.pop(previous_key)
+
+    def ensure_profile(self, event):
+        group = event['message_type'] == 'group'
+        key = self._key(event)
+        if key not in self.owner.state:
+            if not group or len(self.owner.state) >= 512:
+                return None
+            self.owner.state[key] = {}
+        record = self.owner.state[key]
+        if group:
+            return record.setdefault('social', {'created': self.owner.clock()})
+        return record.get('social')
 
     def command(self, op, event, record, value):
-        key = self.owner.scope(event)
-        if op == 'learn_on':
-            record.setdefault('social', {'enabled': True})
-            return self.messages[op]
-        if op == 'learn_off':
-            self._forget(key, record)
-            return self.messages[op]
-        social = record.get('social')
-        if not social:
+        key = self._key(event)
+        group = event['message_type'] == 'group'
+        if op in {'group_remember', 'group_forget'} and not group:
+            return self.messages['group']
+        if op in {'learn_on', 'learn_off'}:
+            target = self.owner.state.get(key)
+            if target is None:
+                if len(self.owner.state) >= 512:
+                    return self.messages['empty']
+                target = self.owner.state.setdefault(key, {})
+            if op == 'learn_on':
+                profile = target.setdefault('social', {'created': self.owner.clock()} if group else {'enabled': True})
+                profile.pop('disabled', None)
+                return self.messages['group_on' if group else op]
+            self._clear_buffers(key)
+            if group:
+                target['social'] = {'disabled': True}
+            else:
+                target.pop('social', None)
+            return self.messages['group_off' if group else op]
+        social = self.ensure_profile(event) if op == 'group_remember' else self.profile(event)
+        if social is None or social.get('disabled') or (not group and not social):
             return self.messages['need_opt_in']
         now = self.owner.clock()
         if op in {'care_on', 'care_off', 'learned_moments'} and event['message_type'] != 'private':
             return self.messages['private']
+        if op == 'group_forget':
+            social.pop('moments', None)
+            return self.messages['group_forgot']
+        if op == 'group_remember':
+            text = self._plain(value)
+            if not text:
+                return self.messages['group_invalid']
+            rows = [row for row in social.get('moments', []) if row['until'] > now and row['text'] != text][-11:]
+            rows.append({'text': text, 'date': datetime.fromtimestamp(now).date().isoformat(),
+                         'until': now + 30*DAY})
+            social['moments'] = rows
+            return self.messages['group_saved']
         if op in {'care_on', 'care_off'}:
             record['social'] = {k: v for k, v in social.items() if k not in {'care_due', 'care_milestone'}}
             record['social']['care_enabled'] = op == 'care_on'
@@ -122,8 +197,7 @@ class SocialLearning:
         old = record.get('social')
         if old:
             record['social'] = {k: v for k, v in old.items() if k not in {'moments', 'care_due', 'care_milestone'}}
-            self.pending.pop(key, None)
-            self.previous.pop(key, None)
+            self._clear_buffers(key)
 
     def feedback(self, event, text, addressed):
         if event['message_type'] == 'group' and addressed and self.pause.fullmatch(text.strip().rstrip('.!。！')):
@@ -147,16 +221,20 @@ class SocialLearning:
         return self.owner._plain(text)
 
     def observe(self, event, text, reply):
-        key = self.owner.scope(event)
-        social = self.owner.state.get(key, {}).get('social')
-        if not social:
+        key = self._key(event)
+        social = self.profile(event)
+        if social.get('disabled') or (event['message_type'] != 'group' and not social):
             return
         text, reply = self._plain(text), self._plain(reply.replace('[SPLIT]', ' '))
         if not text or not reply:
             return
+        social = self.ensure_profile(event)
+        if social is None:
+            return
         now = self.owner.clock()
-        prior = self.previous.get(key)
-        self._bounded(self.previous, key, (now, reply), 64)
+        previous_key = (key, self.owner.scope(event))
+        prior = self.previous.get(previous_key)
+        self._bounded(self.previous, previous_key, (now, reply), 64)
         if prior and now - prior[0] > 900:
             prior = None
         explicit_feedback = bool(prior and self.reaction.search(text))
@@ -204,8 +282,6 @@ class SocialLearning:
             elif self.milestone.search(text) and (self.today.search(text) or self.tomorrow.search(text)):
                 days = 2 if self.tomorrow.search(text) else 1
                 social.update(care_due=now + days*DAY, care_milestone=True)
-        if kind == 'group' and previous and outcome == 'interruption' and self.pause.search(text):
-            self._bounded(self.paused, key.rsplit(':', 1)[0], now + 900, 128)
         self.owner._save()
 
     def _parse(self, result, composable):
@@ -244,7 +320,7 @@ class SocialLearning:
         return {'total': len(outcomes), **{label: outcomes.count(label) for label in OUTCOMES}}
 
     def guidance(self, event):
-        social = self.owner.state.get(self.owner.scope(event), {}).get('social', {})
+        social = self.profile(event)
         counts = self._counts(social, self.owner.clock())
         if event['message_type'] == 'group' and counts['interruption'] >= 2:
             return 'Keep the response focused on what was asked and give this speaker space.'
@@ -280,4 +356,7 @@ class SocialLearning:
                     if field == 'care_due':
                         social.pop('care_milestone', None)
                 changed = True
+        if social.keys() == {'created'} and now - social['created'] >= 30*DAY:
+            record.pop('social', None)
+            changed = True
         return changed

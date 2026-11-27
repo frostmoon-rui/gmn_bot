@@ -2615,13 +2615,14 @@ async def handle_message_event(ws, data):
     session_id = f"private_{user_id}" if msg_type == "private" else f"group_{group_id}"
     transient = {}
     if learner is not None:
-        context_prompt += '\n' + learner.context(data, cleaned_msg, passive=is_random_chime,
+        learning_text = cleaned_msg if addressed or msg_type == 'private' else ''
+        context_prompt += '\n' + learner.context(data, learning_text, passive=is_random_chime,
                                                   multimodal=bool(image_descriptions))
         if is_random_chime:
             from social_learning import SILENCE
             context_prompt += ('\nDecide whether a reply adds something now. For repetition, an ongoing exchange '
                                'between others, tension, or an unclear opening, output only ' + SILENCE + '.')
-        if is_random_chime or learner.uses_moments(data, cleaned_msg):
+        if is_random_chime or learner.uses_moments(data, learning_text):
             transient['transient'] = True
     reply_raw = await call_gemini_with_history(session_id, context_prompt, is_random=is_random_chime,
                                                image_parts=None, **transient)

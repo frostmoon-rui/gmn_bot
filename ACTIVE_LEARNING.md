@@ -24,18 +24,20 @@ The bot excludes turns containing saved memories from rolling model history to p
 
 ## Interaction review
 
-Enable per speaker and chat with `interaction learning on`. The worker samples addressed
+Group interaction learning is enabled by default. Private learning requires `interaction learning on`. The worker samples addressed
 conversations with a delivered bot reply and submits only a short suitable message, relevant
 prior bot reply for explicit feedback, and tool IDs to Gemini. The worker has at most one
 request in flight, a 24-entry queue, a five-minute queue lifetime, and a global 30-second
 minimum interval. Recent feedback guides the next reply. The relationship graph consists
-of bot-to-speaker edges, scoped by account and chat, with observed feedback counts.
+of bot-to-speaker edges, scoped by the bot account and the speaker. Group feedback and explicitly chosen group reply styles are shared across groups. Private records have their own scope.
 It does not infer relationships between chat members.
 
 - `interaction profile` shows feedback counts. `learned moments` lists private, summarized
   experiences that can be recalled in the ordinary private chat flow. Group messages
-  can supply interaction feedback but do not become stored episodes. Learned reviews,
-  moments and drafts expire after 30 days.
+  supply interaction feedback. Use `remember group moment: TEXT` while addressing the
+  bot to save a memory that you can recall explicitly in any group with that bot.
+  `forget group moments` removes those memories across groups. Private experiences
+  are never included in group recall. Reviews, moments and drafts expire after 30 days.
 - At existing passive reply opportunities, the conversation model may choose silence.
   An explicit request to give the chat space pauses passive interjections for 15 minutes.
 - `care follow-ups on` enables private check-ins roughly one day after an explicit invitation or after a volunteered, near-term milestone such as an exam or presentation. `care follow-ups off` cancels the pending learned check-in. Quiet hours,
@@ -44,5 +46,5 @@ It does not infer relationships between chat members.
   validated pair of existing read-only blocks. Missing connectors remain review-only
   drafts. An approved workflow uses the existing manual or private scheduled runner.
 - `interaction learning off` clears the learned records, in-flight results, and pending
-  learned check-ins in the current scope. Explicitly configured reminders and workflows
+  learned check-ins in private, or across all groups when used in a group. Explicitly configured reminders and workflows
   that the user already approved continue to use their existing controls.

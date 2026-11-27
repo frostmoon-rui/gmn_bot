@@ -19,7 +19,7 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         return generate
 
     def record(self):
-        return self.learner.state[self.learner.scope(self.user)]['social']
+        return self.learner.social.profile(self.user)
 
     async def test_opt_in_private_memory_and_retention(self):
         generate = await self.review('We took the telescope out', moment='Set up a telescope together')
@@ -37,13 +37,13 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_scope_and_explicit_response_feedback(self):
         self.user.update(message_type='group', group_id=55)
-        await self.command('interaction learning on')
         await self.review('That was a fun astronomy project', moment='A telescope project')
         await self.review('Your answer was too long', outcome='too_long')
         await self.review('That was too long again', outcome='too_long')
         self.assertIn('too long 2', await self.command('interaction profile'))
         self.assertIn('shorter replies', self.learner.context(self.user, 'A question'))
-        self.assertNotIn('shorter replies', self.learner.context({**self.user, 'group_id': 56}, 'A question'))
+        self.assertIn('shorter replies', self.learner.context({**self.user, 'group_id': 56}, 'A question'))
+        self.assertNotIn('shorter replies', self.learner.context({**self.user, 'user_id': 57}, 'A question'))
         self.assertNotIn('moments', self.record())
         self.learner.social.feedback(self.user, 'Please be quiet!', False)
         self.assertTrue(self.learner.social.chime_allowed(self.user))
@@ -121,3 +121,37 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         await self.learner.poll(self.ws, self.ext, self.features)
         self.ext.send.assert_awaited_once()
         self.assertIn('event you mentioned', self.ext.send.await_args.args[4])
+
+
+    async def test_shared_group_memories_and_global_group_opt_out(self):
+        group = {**self.user, 'message_type': 'group', 'group_id': 71}
+        second = {**group, 'group_id': 72}
+        self.assertIsNone(await self.command('remember group moment: Telescope night', group, addressed=False))
+        await self.command('remember moment: Private rehearsal')
+        await self.command('remember group moment: Telescope night', group)
+        query = 'Do you remember?'
+        self.assertIn('Telescope night', self.learner.context(second, query))
+        for other in (self.user, {**second, 'user_id': 80}, {**second, 'self_id': 81}):
+            self.assertNotIn('Telescope night', self.learner.context(other, query))
+        self.assertNotIn('Private rehearsal', self.learner.context(second, query))
+        await self.command('interaction learning off', second)
+        self.assertNotIn('Telescope night', self.learner.context(group, query))
+        self.learner.social.observe(group, 'We looked through a telescope', 'Sounds wonderful.')
+        generate = AsyncMock()
+        await self.learner.review_next(generate)
+        generate.assert_not_awaited()
+        self.assertIn('Private rehearsal', self.learner.context(self.user, query))
+
+    async def test_migrates_group_feedback_without_moving_approved_routines(self):
+        from active_learning import ActiveLearning, STATE
+        old = '21:group:71:31'
+        self.store.save(STATE, {old: {
+            'social': {'reviews': [[self.now, 'too_long']]}, 'style': 'brief',
+            'routines': {'approved': {'approved': True, 'steps': ['status', 'help']}},
+        }})
+        learner = ActiveLearning(self.store, clock=lambda: self.now)
+        other = {**self.user, 'message_type': 'group', 'group_id': 72}
+        self.assertEqual(learner.social.profile(other)['reviews'], [[self.now, 'too_long']])
+        self.assertIn('brief', learner.context(other, 'A question'))
+        self.assertIn('approved', learner.state[old]['routines'])
+        self.assertNotIn('social', learner.state[old])
