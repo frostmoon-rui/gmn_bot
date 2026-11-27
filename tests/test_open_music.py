@@ -32,11 +32,13 @@ class QQMusicPlayerTests(unittest.TestCase):
             self.skipTest('The optional Playwright dependency is unavailable')
 
         context, page = MagicMock(), MagicMock()
-        play = page.get_by_role.return_value.or_.return_value.first
+        play = page.get_by_role.return_value.or_.return_value.filter.return_value.first
+        unavailable = page.get_by_text.return_value.filter.return_value.first
+        unavailable.is_visible.return_value = False
         opening = context.expect_page.return_value
         opened = opening.__enter__.return_value
         self.assertIs(_qqmusic_player(context, page), opened.value)
-        play.wait_for.assert_called_once_with(state='visible', timeout=15000)
+        play.or_.return_value.first.wait_for.assert_called_once_with(state='visible', timeout=15000)
         play.click.assert_called_once()
 
         opening.__exit__.side_effect = BrowserTimeout('No popup opened')
@@ -45,6 +47,10 @@ class QQMusicPlayerTests(unittest.TestCase):
         page.url = 'https://y.qq.com/n/ryqq_v2/songDetail/example'
         with self.assertRaisesRegex(RuntimeError, '^player-opening$'):
             _qqmusic_player(context, page)
+        unavailable.is_visible.return_value = True
+        with self.assertRaisesRegex(Exception, '^qqmusic_unavailable$'):
+            _qqmusic_player(context, page)
+        self.assertEqual(context.expect_page.call_count, 3)
 
 
 class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
@@ -84,7 +90,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             ) as fallback:
                 await bot._search('key', 'ws', 'private', 0, 1, 'Sample - Performer')
                 deliver.assert_awaited_once_with('ws', 'private', 0, 1, None, None, qqmusic=release,
-                                                 report_failure=False, file_only=False, show_get_hint=True)
+                                                 report_failure=False, file_only=False, show_get_hint=True, removed=set())
                 self.assertEqual(bot.results['key'][1], [[release]])
                 with patch.object(bot, '_deliver_group', AsyncMock()) as repeat:
                     tasks = []
@@ -189,6 +195,27 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.get_method(), 'POST')
             self.assertEqual(request.get_header('Authorization'), 'Bearer test-key')
             self.assertEqual(json.loads(request.data)['params'], {'keyword': 'Sample Performer', 'type': '0'})
+
+    async def test_removed_song_skips_dead_link_and_does_not_download_a_different_recording(self):
+        from media_separation import MediaError
+
+        release = Release('Sample', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
+        backing = Release('Sample (Instrumental)', 'Performer', '', 'https://music.163.com/song?id=1')
+        official = SimpleNamespace(qq_key='test-key', search=lambda *_: [release])
+        with tempfile.TemporaryDirectory() as directory:
+            ffmpeg = Path(directory, 'ffmpeg')
+            ffmpeg.touch()
+            send = AsyncMock()
+            bot = OpenMusic(ffmpeg, None, send, official=official, qqmusic_browser=True)
+            with patch('open_music.prepare_qqmusic', side_effect=MediaError('qqmusic_unavailable')) as capture, \
+                    patch('open_music.search_tracks', return_value=[]), \
+                    patch.object(bot, '_platform_previews', AsyncMock(return_value=[('qqmusic', release), ('netease', backing)])):
+                await bot._search('key', 'ws', 'private', 0, 1, 'Sample')
+            capture.assert_called_once()
+            message = send.await_args.args[-1]
+            self.assertIn(MESSAGES['qqmusic_unavailable'], message)
+            self.assertIn(backing.source, message)
+            self.assertNotIn(release.source, message)
 
     def test_official_netease_uses_public_ids_and_skips_hidden_results(self):
         payload = {'data': {'songs': [

@@ -50,6 +50,7 @@ MESSAGES = {
     'preview_search': 'Search on Kugou',
     'netease': 'NetEase Cloud Music',
     'qqmusic': 'QQ Music',
+    'qqmusic_unavailable': 'QQ Music has removed this recording. No downloadable copy of the same recording was found.',
     'qqmusic_trial': 'QQ Music · VIP track, {seconds}s preview',
     'qqmusic_full': 'QQ Music · full track',
     'kugou': 'Kugou',
@@ -830,11 +831,18 @@ class OpenMusic:
             source = qq_track_url(card.url)
             if source:
                 release = Release(card.title or self.messages['qqmusic'], card.creator, '', source)
+                removed = set()
                 if self.qqmusic_browser and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
                     if await self._deliver(ws, kind, group, user, None, None, qqmusic=release,
-                                           report_failure=False, show_get_hint=True):
+                                           report_failure=False, show_get_hint=True, removed=removed):
                         self._remember_results(key, [[release]])
                         return
+                if removed:
+                    if card.title and card.creator:
+                        await self._search(key, ws, kind, group, user, f'{card.title} - {card.creator}', removed=removed)
+                    else:
+                        await self.send(ws, kind, group, user, self.messages['qqmusic_unavailable'])
+                    return
                 await self.send(ws, kind, group, user, '\n'.join(filter(None, (
                     self.messages['platform_only'], ' · '.join(filter(None, (release.title, release.creator))), source))))
                 return
@@ -900,7 +908,8 @@ class OpenMusic:
                                    show_get_hint=show_get_hint):
                 return
 
-    async def _search(self, key, ws, kind, group, user, query, *, file_only=False):
+    async def _search(self, key, ws, kind, group, user, query, *, file_only=False, removed=None):
+        removed = set() if removed is None else removed
         configured = configured_platform_track(self.preview_catalog, query)
         if configured:
             track = configured[1]
@@ -916,21 +925,25 @@ class OpenMusic:
             qq_candidates = [entry for entry in candidates if _title_matches(entry, title)
                              and (not artist or _same_artist(entry, artist))]
             exact = [entry for entry in qq_candidates if _exact_track(entry, query)]
-            options = {entry.source: entry for entry in exact or qq_candidates}
+            options = {entry.source: entry for entry in exact or qq_candidates if entry.source not in removed}
             if len({recording_key(entry) for entry in options.values()}) == 1:
                 sources = list(options.values())[:2]
                 for entry in sources:
                     if await self._deliver(ws, kind, group, user, None, None, qqmusic=entry,
-                                           report_failure=False, file_only=file_only, show_get_hint=True):
+                                           report_failure=False, file_only=file_only, show_get_hint=True, removed=removed):
                         self._remember_results(key, [[entry, *(source for source in sources if source != entry)]])
                         return
+                if not artist:
+                    original = next((entry for entry in sources if entry.source in removed), None)
+                    if original:
+                        query = f'{original.title} - {original.creator}'
         try:
             results = await asyncio.to_thread(search_tracks, query)
         except (MediaError, OSError, ValueError, KeyError, http.client.HTTPException):
             text = self.messages['search_error']
         else:
             tracks = [track for track in results if _exact_track(track, query)]
-            nearest = _closest_track(results, query) if not tracks and not configured else None
+            nearest = _closest_track(results, query) if not tracks and not configured and not removed else None
             if nearest:
                 tracks = [nearest]
             recordings = group_recordings(tracks)
@@ -968,12 +981,17 @@ class OpenMusic:
                 if recording_key(entry) not in known:
                     known.add(recording_key(entry))
                     links.append(('qqmusic', entry))
-            await self._send_platform_options(key, ws, kind, group, user, query, links)
+            links = [(platform, entry) for platform, entry in links if entry.source not in removed]
+            if links:
+                await self._send_platform_options(key, ws, kind, group, user, query, links, removed=bool(removed))
+                return
+        if removed:
+            await self.send(ws, kind, group, user, self.messages['qqmusic_unavailable'])
         else:
             await self.send(ws, kind, group, user, text + '\n' +
                             f"{self.messages['preview_search']} {kugou_search_url(query)}")
 
-    async def _send_platform_options(self, key, ws, kind, group, user, query, links):
+    async def _send_platform_options(self, key, ws, kind, group, user, query, links, *, removed=False):
         title, artist = _query_parts(query)
         matches = [(platform, track) for platform, track in links
                    if _title_matches(track, title) and (not artist or _same_artist(track, artist))]
@@ -992,7 +1010,7 @@ class OpenMusic:
             if related:
                 lines.extend((self.messages['related'], self._format_links(related[:1])))
         else:
-            lines = [self.messages['none'], self.messages['related'], self._format_links(options)]
+            lines = [self.messages['qqmusic_unavailable' if removed else 'none'], self.messages['related'], self._format_links(options)]
         refinements = [track for _, track in options]
         if len(options) == 1 and matches and related:
             refinements.append(related[0][1])
@@ -1025,7 +1043,7 @@ class OpenMusic:
         return await asyncio.to_thread(convert)
 
     async def _deliver(self, ws, kind, group, user, track, url, *, attachment=None, file_only=False, requested=None,
-                       report_failure=True, qqmusic=None, show_get_hint=False):
+                       report_failure=True, qqmusic=None, show_get_hint=False, removed=None):
         async def notify(text):
             await self.send(ws, kind, group, user, text)
 
@@ -1048,12 +1066,14 @@ class OpenMusic:
                     mp3, parts = await asyncio.to_thread(prepare_link, url, self.ffmpeg, workspace)
             except MediaError as error:
                 reason = str(error)
+                if reason == 'qqmusic_unavailable' and qqmusic and removed is not None:
+                    removed.add(qqmusic.source)
                 failure = (self.messages[reason] if reason in {
-                    'page', 'search_page', 'release_page', 'playlist', 'live_stream', 'protected_stream', 'attachment', 'qq_video', 'audio', 'size'
+                    'page', 'search_page', 'release_page', 'playlist', 'live_stream', 'protected_stream', 'qqmusic_unavailable', 'attachment', 'qq_video', 'audio', 'size'
                 }
                            else self.messages['download'])
                 if report_failure:
-                    await notify(failure + '\n' + await self._preview(requested) if requested else failure)
+                    await notify(failure + '\n' + await self._preview(requested) if requested and reason != 'qqmusic_unavailable' else failure)
                 return False
             except (OSError, RuntimeError, ValueError, EOFError, wave.Error, subprocess.SubprocessError):
                 failure = self.messages['download']

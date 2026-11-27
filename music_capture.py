@@ -139,9 +139,12 @@ def _qqmusic_stage(name):
 def _qqmusic_player(context, page):
     from playwright.sync_api import TimeoutError as BrowserTimeout
 
-    play = page.get_by_role('button', name=QQ_PLAY_LABEL).or_(page.get_by_text(QQ_PLAY_LABEL)).first
+    play = page.get_by_role('button', name=QQ_PLAY_LABEL).or_(page.get_by_text(QQ_PLAY_LABEL)).filter(visible=True).first
+    unavailable = page.get_by_text('\u6b4c\u66f2\u5df2\u4e0b\u67b6').filter(visible=True).first
     with _qqmusic_stage('play-button'):
-        play.wait_for(state='visible', timeout=15000)
+        play.or_(unavailable).first.wait_for(state='visible', timeout=15000)
+    if unavailable.is_visible():
+        raise MediaError('qqmusic_unavailable')
     try:
         with context.expect_page(timeout=14000) as opened:
             with _qqmusic_stage('play-click'):
@@ -220,6 +223,8 @@ def capture_qqmusic(source, target):
                 return duration, trial
             finally:
                 context.close()
+    except MediaError:
+        raise
     except Exception as error:
         if error.__cause__ is not None and str(error) in {
             'track-page', 'play-button', 'play-click', 'player-opening', 'player-track', 'media-discovery', 'media-download',
