@@ -108,6 +108,8 @@ class OptionalAutonomyTests(unittest.IsolatedAsyncioTestCase):
         except ImportError:
             self.skipTest("The optional autonomy package is not installed")
         bridge = AutonomyBridge(AsyncMock())
-        with patch("gmn_autonomy.core.conversation.render", side_effect=ValueError("format")):
+        bridge.adapter.runtime.clock = lambda: 100
+        with patch("gmn_autonomy.core.conversation.render", side_effect=ValueError("format")) as render:
             self.assertIsNone(bridge.bubbles("hello"))
+        render.assert_called_once()
         self.assertEqual(bridge.speech_failures, 1)
