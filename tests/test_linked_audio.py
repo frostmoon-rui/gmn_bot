@@ -84,6 +84,17 @@ class LinkedAudioTests(unittest.TestCase):
                 'https://example.test/bad', 'https://example.test/good',
             ])
 
+    def test_catalog_duration_rejects_a_preview_and_tries_the_next_link(self):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch('linked_audio.fetch_linked_audio', return_value=['https://example.test/preview', 'https://example.test/full']),
+            patch('linked_audio.fetch_candidate') as fetch,
+            patch('linked_audio.normalize_audio', side_effect=[('preview.wav', 60), ('full.wav', 180)]),
+        ):
+            self.assertEqual(normalize_link_audio('ffmpeg', 'https://example.test/page', Path(folder),
+                                                   expected_duration=180), ('full.wav', 180))
+            self.assertEqual(fetch.call_count, 2)
+
     def test_kugou_search_page_is_rejected_before_network(self):
         with patch('linked_audio.open_public_response') as connect:
             with self.assertRaisesRegex(MediaError, 'search_page'):

@@ -90,7 +90,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             ) as fallback:
                 await bot._search('key', 'ws', 'private', 0, 1, 'Sample - Performer')
                 deliver.assert_awaited_once_with('ws', 'private', 0, 1, None, None, qqmusic=release,
-                                                 report_failure=False, file_only=False, show_get_hint=True, removed=set())
+                                                 requested=None, platform_release=None, report_failure=False, file_only=False, show_get_hint=True, removed=set())
                 self.assertEqual(bot.results['key'][1], [[release]])
                 with patch.object(bot, '_deliver_group', AsyncMock()) as repeat:
                     tasks = []
@@ -99,7 +99,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                     bot.results[bot._session_key(event)] = bot.results['key']
                     self.assertIsNone(bot.start('ws', event, 'download_file', 1))
                     await tasks[0]
-                    repeat.assert_awaited_once_with('ws', 'private', 0, 1, [release], file_only=True)
+                    repeat.assert_awaited_once_with('ws', 'private', 0, 1, [release], file_only=True, tried=set(), removed=set())
                 fallback.assert_not_called()
 
     def test_qqmusic_capture_accepts_audio_formats_only_on_the_player_cdn(self):
@@ -217,6 +217,34 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(backing.source, message)
             self.assertNotIn(release.source, message)
 
+    async def test_qq_audio_failure_tries_matching_public_platform_and_sends_once(self):
+        from media_separation import MediaError
+
+        release = Release('Sample', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
+        mirror = Release('Sample', 'Performer', '', 'https://music.163.com/song?id=1', 180)
+        cover = Release('Sample', 'Other artist', '', 'https://music.163.com/song?id=2', 180)
+        official = SimpleNamespace(qq_key='test-key', search=lambda *_: [release])
+        with tempfile.TemporaryDirectory() as directory:
+            ffmpeg = Path(directory, 'ffmpeg')
+            ffmpeg.touch()
+            file = Path(directory, 'track.mp3')
+            file.touch()
+            socket = SimpleNamespace(send=AsyncMock())
+            notify = AsyncMock()
+            bot = OpenMusic(ffmpeg, None, notify, official=official, qqmusic_browser=True)
+            with patch('open_music.prepare_qqmusic', side_effect=MediaError('source')) as qq, \
+                    patch('open_music.search_tracks', return_value=[]), \
+                    patch('open_music.prepare_platform', return_value=(file, [file])) as platform, \
+                    patch.object(bot, '_platform_previews', AsyncMock(return_value=[
+                        ('qqmusic', release), ('netease', cover), ('netease', mirror),
+                    ])):
+                await bot._search('key', socket, 'group', 20, 30, 'Sample')
+            qq.assert_called_once()
+            self.assertEqual(platform.call_args.args[0], mirror)
+            self.assertEqual([json.loads(call.args[0])['action'] for call in socket.send.await_args_list],
+                             ['upload_group_file', 'send_group_msg'])
+            notify.assert_awaited_once()
+
     def test_official_netease_uses_public_ids_and_skips_hidden_results(self):
         payload = {'data': {'songs': [
             {'id': 'encrypted', 'originalId': 42, 'name': 'Sample', 'artists': [{'name': 'Performer'}]},
@@ -231,7 +259,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 official = OfficialMusic(netease_cli=script)
             with patch('open_music.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=stdout)) as run:
                 [(provider, track)] = search_platform_tracks('Sample - Performer', official)
-                self.assertEqual((provider, track.source), ('netease', 'https://music.163.com/#/song?id=42'))
+                self.assertEqual((provider, track.source), ('netease', 'https://music.163.com/song?id=42'))
                 self.assertEqual(run.call_args.args[0][2:], [
                     'search', 'song', '--keyword=Sample Performer', '--userInput=Find the recording Sample Performer',
                 ])
@@ -510,7 +538,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(music.start(ws, event, 'search', 'Piano piece - Example'))
                 await tasks[0]
             deliver.assert_awaited_once_with(ws, 'group', 20, 30, track, None, requested='Piano piece - Example',
-                                             qqmusic=None, file_only=False, report_failure=True, show_get_hint=True)
+                                             qqmusic=None, platform_release=None, file_only=False, report_failure=False, show_get_hint=True, removed=set())
             send.assert_not_awaited()
 
     async def test_same_recording_retries_source_without_sending_an_intermediate_error(self):
@@ -529,7 +557,7 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
                 worker.start(object(), event, 'search', 'Piano piece - Example')
                 await tasks[0]
             self.assertEqual([call.args[4] for call in deliver.await_args_list], [first, second])
-            self.assertEqual([call.kwargs['report_failure'] for call in deliver.await_args_list], [False, True])
+            self.assertEqual([call.kwargs['report_failure'] for call in deliver.await_args_list], [False, False])
             send.assert_not_awaited()
 
     async def test_platform_choices_are_distinct_and_successful_metadata_is_reused(self):

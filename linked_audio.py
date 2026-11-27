@@ -211,11 +211,17 @@ def fetch_candidate(url, target):
         save_media_response(response, target)
 
 
-def normalize_link_audio(ffmpeg, url, workspace, silk_module=None):
+def normalize_link_audio(ffmpeg, url, workspace, silk_module=None, *, expected_duration=0):
+    def normalize_candidate(incoming, folder):
+        result = normalize_audio(ffmpeg, incoming, folder, silk_module)
+        if expected_duration and abs(result[1] - expected_duration) > 3:
+            raise MediaError('format')
+        return result
+
     incoming = workspace / 'music.media'
     candidates = fetch_linked_audio(url, incoming)
     if not candidates:
-        return normalize_audio(ffmpeg, incoming, workspace, silk_module)
+        return normalize_candidate(incoming, workspace)
     first_error = None
     for index, candidate in enumerate(candidates):
         folder = workspace / f'candidate-{index}'
@@ -223,8 +229,8 @@ def normalize_link_audio(ffmpeg, url, workspace, silk_module=None):
         incoming = folder / 'music.media'
         try:
             fetch_candidate(candidate, incoming)
-            return normalize_audio(ffmpeg, incoming, folder, silk_module)
-        except MediaError as error:
+            return normalize_candidate(incoming, folder)
+        except (MediaError, OSError) as error:
             if first_error is None:
                 first_error = error
     raise first_error or MediaError('page')
