@@ -104,7 +104,8 @@ class AutonomyBridge:
 
             if request and (SERIOUS.search(request) or HELP.search(request)):
                 return None
-            bubbles = render(text, group=group, passive=passive, phase_name=plan.phase if plan else phase(time.time()))
+            bubbles = render(text, group=group, passive=passive, phase_name=plan.phase if plan else phase(time.time()),
+                             bubble_limit=plan.bubble_limit if plan else None)
             self.speech_failures = 0
             return bubbles
         except Exception as error:
@@ -127,6 +128,9 @@ class AutonomyBridge:
             self.adapter.observe(event, text, answer, addressed, self.learning_allowed(event, legacy))
         except Exception as error:
             self._speech_error(error)
+
+    def privacy_notice(self):
+        return self.adapter.runtime.messages["group_privacy"]
 
     async def forget(self, event):
         try:

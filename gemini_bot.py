@@ -2058,7 +2058,8 @@ async def handle_message_event(ws, data):
                     target = {'group_id': group_id, 'message': '[CQ:at,qq=' + str(user_id) + ']'} if msg_type == 'group' else {'user_id': user_id}
                     await send_multiline_messages(ws, action, target, value, pacing=pacing)
                 if dialogue:
-                    autonomy.observe(data, cleaned_msg, value, addressed, learner)
+                    delivered_text = " ".join(pacing.parts) if pacing else value
+                    autonomy.observe(data, cleaned_msg, delivered_text, addressed, learner)
             return
 
     feature_reply = await features.command(cleaned_msg, msg_type, group_id, user_id, addressed, is_group_admin)
@@ -2649,6 +2650,9 @@ async def handle_message_event(ws, data):
                                                passive=is_random_chime, addressed=addressed, legacy=learner)
         if autonomy_plan is not None and autonomy_plan.action == 'silence':
             return
+        if autonomy_plan is not None and autonomy_plan.action == 'privacy':
+            await extensions.send(ws, msg_type, group_id, user_id, autonomy.privacy_notice())
+            return
 
     target_splits = 1 if is_random_chime else random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     confirmed_length = learner.social.confirmed_length(data) if learner is not None and addressed else None
@@ -2803,7 +2807,8 @@ async def handle_message_event(ws, data):
 
     if autonomy is not None and autonomy_plan is not None and addressed and not is_random_chime and reply_clean:
         if not autonomy_plan.transient:
-            autonomy.observe(data, cleaned_msg, reply_clean, addressed, learner)
+            delivered_text = " ".join(pacing.parts) if pacing else reply_clean
+            autonomy.observe(data, cleaned_msg, delivered_text, addressed, learner)
 
     if learner is not None and addressed and not is_random_chime and reply_clean:
         learner.social.observe(data, cleaned_msg, reply_clean)
