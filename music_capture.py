@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from urllib.parse import parse_qs, urlsplit
@@ -12,8 +13,9 @@ from media_separation import MediaError, download_media
 
 
 EXTENSION_ID = 'looepbdllpjgdmkpdcdffhdbmpbcfekj'
-QQ_PLAYER = 'https://y.qq.com/n/ryqq_v2/player'
 QQ_TRACK = 'https://y.qq.com/n/ryqq_v2/songDetail/'
+QQ_PLAYER_URL = re.compile(r'^https://y\.qq\.com/n/ryqq_v2/player/?(?:[?#].*)?$')
+QQ_PLAY_LABEL = re.compile(r'^(?:播放(?:歌曲)?|立即播放|play(?: song)?)$', re.I)
 BROWSER_PROFILES = ('Microsoft/Edge/User Data', 'Google/Chrome/User Data')
 BROWSER_SLOT = Lock()
 BRIDGE = r"""
@@ -126,32 +128,60 @@ def _qqmusic_media(url):
         return False
 
 
+@contextmanager
+def _qqmusic_stage(name):
+    try:
+        yield
+    except Exception as error:
+        raise RuntimeError(name) from error
+
+
+def _qqmusic_player(context, page):
+    from playwright.sync_api import TimeoutError as BrowserTimeout
+
+    play = page.get_by_role('button', name=QQ_PLAY_LABEL).or_(page.get_by_text(QQ_PLAY_LABEL)).first
+    with _qqmusic_stage('play-button'):
+        play.wait_for(state='visible', timeout=15000)
+    try:
+        with context.expect_page(timeout=14000) as opened:
+            with _qqmusic_stage('play-click'):
+                play.click(timeout=5000)
+        return opened.value
+    except BrowserTimeout as error:
+        if QQ_PLAYER_URL.fullmatch(page.url):
+            return page
+        raise RuntimeError('player-opening') from error
+
+
 def _qqmusic_stream(context, worker, track_id):
     page = context.pages[0]
-    page.goto(QQ_TRACK + track_id, wait_until='domcontentloaded', timeout=14000)
+    with _qqmusic_stage('track-page'):
+        page.goto(QQ_TRACK + track_id, wait_until='domcontentloaded', timeout=18000)
     observed = set()
 
     def remember(response):
         if (response.status in (200, 206) and _qqmusic_media(response.url)
-                and not response.from_service_worker and response.frame.url == QQ_PLAYER):
+                and not response.from_service_worker and QQ_PLAYER_URL.fullmatch(response.frame.url)):
             observed.add(response.url)
 
     context.on('response', remember)
-    with context.expect_page(timeout=8000) as opened:
-        page.get_by_text('\u64ad\u653e', exact=True).first.click(timeout=8000)
-    player = opened.value
-    player.wait_for_url(QQ_PLAYER, timeout=8000)
-    row = player.locator(f'a[href*="/songDetail/{track_id}"]').first.locator('xpath=ancestor::li[1]')
-    row.wait_for(timeout=5000)
-    match = re.search(r'(?<!\d)(\d{1,2}):([0-5]\d)(?!\d)', row.inner_text(timeout=3000))
+    player = _qqmusic_player(context, page)
+    with _qqmusic_stage('player-track'):
+        player.wait_for_url(QQ_PLAYER_URL, timeout=12000)
+        row = player.locator(f'a[href*="/songDetail/{track_id}"]').first.locator('xpath=ancestor::li[1]')
+        row.wait_for(timeout=8000)
+        match = re.search(r'(?<!\d)(\d{1,2}):([0-5]\d)(?!\d)', row.inner_text(timeout=3000))
     if match is None:
+        print('[QQ Music browser unavailable]: player-duration missing')
         return None
     duration = int(match[1]) * 60 + int(match[2])
-    helper = context.new_page()
-    helper.goto(worker.url.rsplit('/', 1)[0] + '/probe.html', timeout=5000)
-    candidates = helper.evaluate(BRIDGE, {'extensionId': EXTENSION_ID, 'url': player.url})
+    with _qqmusic_stage('media-discovery'):
+        helper = context.new_page()
+        helper.goto(worker.url.rsplit('/', 1)[0] + '/probe.html', timeout=5000)
+        candidates = helper.evaluate(BRIDGE, {'extensionId': EXTENSION_ID, 'url': player.url})
     matched = {url for url in candidates if url in observed}
     if len(matched) != 1:
+        print('[QQ Music browser unavailable]: media-discovery returned', len(matched), 'matching sources')
         return None
     trial = '\u5b8c\u6574\u64ad\u653e\u9700\u8981\u5f00\u901a\u4f1a\u5458' in player.locator('body').inner_text(timeout=3000)
     return matched.pop(), duration, trial
@@ -185,12 +215,18 @@ def capture_qqmusic(source, target):
                 if stream is None:
                     return None
                 url, duration, trial = stream
-                download_media(url, target, allowed_url=_qqmusic_media)
+                with _qqmusic_stage('media-download'):
+                    download_media(url, target, allowed_url=_qqmusic_media)
                 return duration, trial
             finally:
                 context.close()
     except Exception as error:
-        print('[QQ Music browser unavailable]:', type(error).__name__)
+        if error.__cause__ is not None and str(error) in {
+            'track-page', 'play-button', 'play-click', 'player-opening', 'player-track', 'media-discovery', 'media-download',
+        }:
+            print('[QQ Music browser unavailable]:', str(error), type(error.__cause__).__name__)
+        else:
+            print('[QQ Music browser unavailable]:', type(error).__name__)
         return None
     finally:
         BROWSER_SLOT.release()

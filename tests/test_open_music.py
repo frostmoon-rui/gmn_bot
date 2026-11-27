@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from music_capture import _qqmusic_media, jamendo_track_id, match_jamendo_media
+from music_capture import _qqmusic_media, jamendo_track_id, match_jamendo_media, _qqmusic_player
 from open_music import (
     OfficialMusic, prepare_qqmusic,
     MESSAGES, OpenMusic, Release, configured_platform_track, _closest_track, prepare_track, _archive, _encode_track, _exact_track, _query_parts, _track,
@@ -22,6 +22,29 @@ SAMPLE = {
     'url': 'https://audio.example.test/track.mp3',
     'foreign_landing_url': 'https://audio.example.test/track',
 }
+
+
+class QQMusicPlayerTests(unittest.TestCase):
+    def test_open_player_recognizes_popup_and_same_tab_navigation(self):
+        try:
+            from playwright.sync_api import TimeoutError as BrowserTimeout
+        except ImportError:
+            self.skipTest('The optional Playwright dependency is unavailable')
+
+        context, page = MagicMock(), MagicMock()
+        play = page.get_by_role.return_value.or_.return_value.first
+        opening = context.expect_page.return_value
+        opened = opening.__enter__.return_value
+        self.assertIs(_qqmusic_player(context, page), opened.value)
+        play.wait_for.assert_called_once_with(state='visible', timeout=15000)
+        play.click.assert_called_once()
+
+        opening.__exit__.side_effect = BrowserTimeout('No popup opened')
+        page.url = 'https://y.qq.com/n/ryqq_v2/player?tab=recent'
+        self.assertIs(_qqmusic_player(context, page), page)
+        page.url = 'https://y.qq.com/n/ryqq_v2/songDetail/example'
+        with self.assertRaisesRegex(RuntimeError, '^player-opening$'):
+            _qqmusic_player(context, page)
 
 
 class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
