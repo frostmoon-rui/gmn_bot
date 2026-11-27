@@ -919,6 +919,45 @@ class Extensions:
             print('[Tomorrow weather failed]:', str(error))
             await self.send(ws, kind, group, user, 'Tomorrow’s weather query failed. Please try later.')
 
+    def start_prompt_binding(self, ws, kind, group, user, city):
+        return self.start_user_job(user, ('location-prompt', kind, group),
+            self._bind_prompt_city(ws, kind, group, user, city), timeout=150,
+            chat=(ws, kind, group, user))
+
+    async def _bind_prompt_city(self, ws, kind, group, user, city):
+        records = self.b.regions_data
+        key = str(user)
+        if records.get(key, {}).get('location'):
+            return
+        try:
+            point = await self.resolve_weather_point(city)
+        except Exception as error:
+            print('[Location reply validation failed]:', type(error).__name__)
+            point = None
+        if not point or point.get('status') != 'resolved' or point.get('capital_reference'):
+            await self.send(ws, kind, group, user, 'I could not verify that city. Please reply with the city and its province or country.')
+            return
+        # An explicit binding may have arrived while geocoding was in progress.
+        if records.get(key, {}).get('location'):
+            return
+        current = dict(records.get(key, {}), location=city)
+        current.pop('google_location', None)
+        current.pop('latest_weather', None)
+        current.setdefault('last_greet_date', '')
+        previous = records.get(key)
+        records[key] = current
+        try:
+            await self.b.save_json_data_async(self.b.REGIONS_FILE, records)
+        except Exception:
+            if records.get(key) is current:
+                if previous is None:
+                    records.pop(key, None)
+                else:
+                    records[key] = previous
+            raise
+        await self.send(ws, kind, group, user, 'Your area has been saved. I will check the weather now.')
+        await self.weather_at(ws, kind, group, user, city, shared_place=True)
+
     def binding_location(self, kind, group, user):
         record = getattr(self, 'recent_weather_locations', {}).get((kind, group, user))
         return record[1] if record and time.monotonic()-record[0] <= 600 else ''

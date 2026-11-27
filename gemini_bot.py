@@ -1959,6 +1959,12 @@ async def handle_message_event(ws, data):
     if addressed:
         cleaned_msg = re.sub(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', '', cleaned_msg).strip()
         is_talking_to_me = True
+    from location_prompt_reply import city_from_binding_reply
+    if not directed_elsewhere and not regions_data.get(str(user_id), {}).get('location'):
+        city = city_from_binding_reply(cleaned_msg, reply_info, user_id, self_id, msg_type, ('Weather is unavailable, meow. Use set location:city to bind your area.', 'Reply to this message with your city to save it and check the weather.'))
+        if city:
+            extensions.start_prompt_binding(ws, msg_type, group_id, user_id, city)
+            return
     morning_greeting, daily_weather = morning_command(cleaned_msg)
     if not cleaned_msg and not (morning_greeting or daily_weather):
         morning_greeting, daily_weather = await sticker_morning_command(raw_msg)
@@ -2452,7 +2458,7 @@ async def handle_message_event(ws, data):
                 return
 
     if greeting or daily_weather:
-        reply = greeting_reply if greeting else 'Weather is unavailable, meow. Use set location:city to bind your area.'
+        reply = greeting_reply if greeting else ('Weather is temporarily unavailable for your saved area.' if user_reg and user_reg.get("location") else 'Reply to this message with your city to save it and check the weather.')
         await extensions.send(ws, msg_type, group_id, user_id, reply)
         return
 
