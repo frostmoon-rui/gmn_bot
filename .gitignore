@@ -36,3 +36,4 @@ venv/
 /startup_runtime/
 /group_heatmap.json
 /active_learning.local.json
+/autonomy.local.sqlite3*

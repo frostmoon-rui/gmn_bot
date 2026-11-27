@@ -2024,6 +2024,20 @@ async def handle_message_event(ws, data):
                 await extensions.send(ws, msg_type, group_id, user_id, learned)
             return
 
+    autonomy = globals().get('autonomy_bridge')
+    if autonomy is not None and addressed and not is_talking_to_other:
+        decision = await autonomy.decide(data, cleaned_msg, addressed)
+        if decision is not None:
+            kind, value = decision
+            if kind == 'tool':
+                from bot_actions import dispatch
+                from types import SimpleNamespace
+                await dispatch(SimpleNamespace(**globals()), value, data, ws,
+                               master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
+            else:
+                await extensions.send(ws, msg_type, group_id, user_id, value)
+            return
+
     feature_reply = await features.command(cleaned_msg, msg_type, group_id, user_id, addressed, is_group_admin)
     if feature_reply is not None:
         await extensions.send(ws, msg_type, group_id, user_id, feature_reply)
@@ -2835,6 +2849,26 @@ async def main():
                 print('[Interaction review]:', type(error).__name__)
 
     extensions.spawn(social_review_loop())
+
+    from gmn_host_adapter import AutonomyBridge
+
+    async def generate_autonomy(instruction, payload):
+        from response_visibility import visible_response_text
+        if not globals().get('GEMINI_API_KEY') or not AVAILABLE_CHAT_MODELS:
+            return None
+        result = await client.aio.models.generate_content(
+            model=AVAILABLE_CHAT_MODELS[0], contents=payload,
+            config=gemini_content_config(system_instruction=instruction, temperature=0.6,
+                                         max_output_tokens=768))
+        return visible_response_text(result)
+
+    global autonomy_bridge
+    autonomy_bridge = await AutonomyBridge.open(
+        setting('ENABLE_AUTONOMY', False),
+        Path(__file__).resolve().parent / 'autonomy.local.sqlite3', generate_autonomy)
+    if autonomy_bridge is not None:
+        extensions.spawn(autonomy_bridge.heartbeat())
+
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
     extensions.spawn(extensions.earthquake_monitor())
 

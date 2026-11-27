@@ -164,6 +164,17 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         await self.scope['handle_message_event'](self.ws, self.event("I'm awake", True))
         self.assertEqual(self.scope['features'].sleep_records, {})
 
+    async def test_autonomy_decision_uses_the_host_native_dispatcher(self):
+        from unittest.mock import patch
+
+        action = {'tool': 'status', 'args': {}}
+        self.scope['autonomy_bridge'] = SimpleNamespace(decide=AsyncMock(return_value=('tool', action)))
+        with patch('bot_actions.dispatch', new_callable=AsyncMock) as dispatch:
+            await self.scope['handle_message_event'](self.ws, self.event('autonomy run status', True))
+        dispatch.assert_awaited_once()
+        self.assertEqual(dispatch.await_args.args[1], action)
+        self.assertEqual(self.sent, [])
+
     async def test_model_action_calls_weather_instead_of_sending_json(self):
         self.scope['extensions'].weather_at = AsyncMock()
         self.scope['call_gemini_with_history'] = AsyncMock(return_value='[BOT_ACTION: {"tool":"weather","args":{"location":"Madagascar"}}]')
@@ -588,7 +599,21 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             scope[name] = lambda: None
         scope['prepare_stolen_emoji_store'] = AsyncMock()
         scope['background_periodic_monitor'] = idle
-        scope['setting'] = lambda name, default='': '999' if name == 'GROUP_CHAT_ACCOUNT' else default
+        import os
+        import tempfile
+        from gmn_host_adapter import enabled
+
+        switch = os.environ.get('ENABLE_AUTONOMY', 'false')
+        if enabled(switch):
+            try:
+                import gmn_autonomy
+            except ImportError:
+                self.skipTest('Install the optional package to test enabled main startup')
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        scope['__file__'] = str(Path(temporary.name) / 'gemini_bot.py')
+        settings = {'GROUP_CHAT_ACCOUNT': '999', 'ENABLE_AUTONOMY': switch}
+        scope['setting'] = lambda name, default='': settings.get(name, default)
         main = asyncio.create_task(scope['main']())
         try:
             async with asyncio.timeout(2):
@@ -597,6 +622,8 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('test-model', transmitted[0]['params']['message'][0]['data']['text'])
             self.assertEqual(scope['msg_cache'][333]['user_id'], 999)
             self.assertEqual({request['params']['group_id'] for request in transmitted}, {20, 21})
+            self.assertEqual(scope.get('autonomy_bridge') is not None, enabled(switch))
+            self.assertEqual((Path(temporary.name) / 'autonomy.local.sqlite3').exists(), enabled(switch))
         finally:
             main.cancel()
             await asyncio.gather(main, return_exceptions=True)
