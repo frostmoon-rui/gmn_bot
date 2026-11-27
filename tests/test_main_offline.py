@@ -34,6 +34,7 @@ def handler_environment():
               'is_sticker_image', 'image_mime', 'send_multiline_messages', 'claude_model_score', 'main',
               'build_system_prompt', 'get_current_time_str', 'model_system_prompt', 'portrait_reference',
               'clean_and_process_tags', 'extract_province_keyword'}
+    wanted.add('handle_group_notice_async')
     tree = ast.parse(source.read_text(encoding='utf-8'))
     constants = {'PROVINCE_KEYWORDS', 'ENGLISH_PROVINCE_NAMES'}
     selected = [node for node in tree.body if
@@ -79,6 +80,23 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         async def multiline(ws, action, params, text):
             await ws.send(json.dumps({'text': text}))
         self.scope['send_multiline_messages'] = multiline
+
+    async def test_group_notices_default_on_with_local_quiet_and_cooldown(self):
+        handle = self.scope['handle_group_notice_async']
+        event = {'notice_type': 'group_increase', 'group_id': 20, 'user_id': 10, 'self_id': 999}
+        await handle(self.ws, dict(event, notice_type='group_upload'))
+        await handle(self.ws, event)
+        await handle(self.ws, dict(event, notice_type='group_decrease'))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('[CQ:at,qq=10]', self.sent[0]['text'])
+
+        features = self.scope['features']
+        await features.command('quiet mode', 'group', 21, 10, True, True)
+        await handle(self.ws, dict(event, group_id=21))
+        self.assertEqual(len(self.sent), 1)
+        await handle(self.ws, dict(event, group_id=22, notice_type='group_decrease'))
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.sent[1]['params']['group_id'], 22)
 
     async def test_media_reply_runs_before_chat_addressing(self):
         worker = Mock()

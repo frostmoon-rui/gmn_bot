@@ -1666,13 +1666,13 @@ async def handle_group_notice_async(ws, data: dict):
     group_id = data.get("group_id")
     user_id = data.get("user_id")
 
-    if not group_id or not user_id:
+    if not group_id or not user_id or notice_type not in {'group_increase', 'group_decrease'}:
         return
     if str(user_id) == str(data.get("self_id")):
         if notice_type == "group_increase":
             await features.register_group(group_id)
         return
-    if features.mode(group_id) != 'active' or not features.allow_passive(group_id, 'notice'):
+    if not features.allow_passive(group_id, 'notice'):
         return
 
     # Welcome new group members.
