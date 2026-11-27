@@ -70,3 +70,24 @@ class OptionalAutonomyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await bridge.heartbeat()
         self.assertEqual(adapter.heartbeat.await_count, 2)
+
+
+    async def test_conversation_failure_does_not_open_the_command_breaker(self):
+        adapter = AsyncMock()
+        adapter.prepare.side_effect = RuntimeError("locked")
+        bridge = AutonomyBridge(adapter, clock=lambda: 100)
+        for _ in range(3):
+            self.assertIsNone(await bridge.prepare(EVENT, "hello", (), passive=False, addressed=True, legacy=None))
+        self.assertEqual(adapter.prepare.await_count, 2)
+        self.assertEqual(bridge.speech_retry_at, 160)
+        self.assertEqual(bridge.retry_at, 0)
+
+    async def test_formatter_error_returns_control_to_legacy_sender(self):
+        try:
+            import gmn_autonomy.core.conversation
+        except ImportError:
+            self.skipTest("The optional autonomy package is not installed")
+        bridge = AutonomyBridge(AsyncMock())
+        with patch("gmn_autonomy.core.conversation.render", side_effect=ValueError("format")):
+            self.assertIsNone(bridge.bubbles("hello"))
+        self.assertEqual(bridge.speech_failures, 1)

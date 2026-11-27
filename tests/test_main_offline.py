@@ -164,11 +164,37 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         await self.scope['handle_message_event'](self.ws, self.event("I'm awake", True))
         self.assertEqual(self.scope['features'].sleep_records, {})
 
+    async def test_autonomy_pacing_delivers_four_bubbles_in_order(self):
+        from unittest.mock import patch
+
+        send = handler_environment()['send_multiline_messages']
+        socket = SimpleNamespace(send=AsyncMock(side_effect=[{"message_id": i} for i in range(1, 5)]))
+        plan = SimpleNamespace(parts=("One", "Two", "Three", "Four"), delays=(0.8, 1.4, 2.5), initial=0.5)
+        with patch("asyncio.sleep", new_callable=AsyncMock) as delay:
+            ids = await send(socket, 'send_group_msg', {'group_id': 20, 'message': '[CQ:at,qq=10]'},
+                             'unused', pacing=plan)
+        self.assertEqual(ids, ['1', '2', '3', '4'])
+        self.assertEqual([call.args[0] for call in delay.await_args_list], [0.5, 0.8, 1.4, 2.5])
+        sent = [json.loads(call.args[0])['params']['message'] for call in socket.send.await_args_list]
+        self.assertEqual([body[-1]['data']['text'] for body in sent], list(plan.parts))
+        self.assertEqual([len(body) for body in sent], [2, 1, 1, 1])
+
+    async def test_paced_delivery_failure_does_not_replay_an_already_sent_bubble(self):
+        from unittest.mock import patch
+
+        send = handler_environment()['send_multiline_messages']
+        socket = SimpleNamespace(send=AsyncMock(side_effect=[{"message_id": 1}, ConnectionError("offline")]))
+        plan = SimpleNamespace(parts=("One", "Two", "Three"), delays=(0.8, 1.4), initial=0)
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with self.assertRaises(ConnectionError):
+                await send(socket, 'send_private_msg', {'user_id': 10}, 'unused', pacing=plan)
+        self.assertEqual(socket.send.await_count, 2)
+
     async def test_autonomy_decision_uses_the_host_native_dispatcher(self):
         from unittest.mock import patch
 
         action = {'tool': 'status', 'args': {}}
-        self.scope['autonomy_bridge'] = SimpleNamespace(decide=AsyncMock(return_value=('tool', action)))
+        self.scope['autonomy_bridge'] = SimpleNamespace(decide=AsyncMock(return_value=('tool', action)), note_room=lambda *args: None)
         with patch('bot_actions.dispatch', new_callable=AsyncMock) as dispatch:
             await self.scope['handle_message_event'](self.ws, self.event('autonomy run status', True))
         dispatch.assert_awaited_once()

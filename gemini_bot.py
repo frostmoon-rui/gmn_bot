@@ -1558,17 +1558,26 @@ async def _call_model_with_history(session_id: str, prompt_text: str, is_random:
 
 
 # ==================== 10. Send multiple message bubbles ====================
-async def send_multiline_messages(ws, action: str, target_params: dict, full_text: str):
-    if 'admins' in globals() and session_actor.get() is not None:
-        full_text = admins.phrasing(full_text, session_actor.get())
-    parts = [part.strip() for part in full_text.split('[SPLIT]') if part.strip()]
-    if len(parts) > 3:
+async def send_multiline_messages(ws, action: str, target_params: dict, full_text: str, *, pacing=None):
+    if pacing is None:
+        if 'admins' in globals() and session_actor.get() is not None:
+            full_text = admins.phrasing(full_text, session_actor.get())
+        parts = [part.strip() for part in full_text.split('[SPLIT]') if part.strip()]
+    else:
+        parts = list(pacing.parts)
+        if 'admins' in globals() and session_actor.get() is not None:
+            parts = [admins.phrasing(part, session_actor.get()) for part in parts]
+    if pacing is None and len(parts) > 3:
         parts = parts[:2] + ['\n'.join(parts[2:])]
     at = re.match(r'^\[CQ:at,qq=(\d+)\]', target_params.get('message', ''))
     from attention_learning import message_id
     receipts = []
     first = True
-    for part in parts:
+    if pacing is not None and pacing.initial:
+        await asyncio.sleep(pacing.initial)
+    for index, part in enumerate(parts):
+        if pacing is not None and index:
+            await asyncio.sleep(pacing.delays[index - 1])
         for segment in safe_segments(part):
             chunks = [segment]
             if segment['type'] == 'text':
@@ -1581,7 +1590,8 @@ async def send_multiline_messages(ws, action: str, target_params: dict, full_tex
                 if receipt:
                     receipts.append(receipt)
                 first = False
-                await asyncio.sleep(0.3)
+                if pacing is None:
+                    await asyncio.sleep(0.3)
     return receipts
 
 # ==================== 11. Silent background checks every half hour ====================
@@ -1953,6 +1963,7 @@ async def handle_message_event(ws, data):
         cleaned_msg = re.sub(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', '', cleaned_msg).strip()
         is_talking_to_me = True
     learner = globals().get('active_learning')
+    autonomy = globals().get('autonomy_bridge')
     group_declined = False
     if learner is not None:
         quoted_id = None
@@ -1966,6 +1977,8 @@ async def handle_message_event(ws, data):
             if care_feedback:
                 await extensions.send(ws, msg_type, group_id, user_id, learner.social.messages[care_feedback])
                 return
+    if autonomy is not None and msg_type == 'group':
+        autonomy.note_room(data, cleaned_msg)
     from location_prompt_reply import city_from_binding_reply
     if not directed_elsewhere and not regions_data.get(str(user_id), {}).get('location'):
         city = city_from_binding_reply(cleaned_msg, reply_info, user_id, self_id, msg_type, ('Weather is unavailable, meow. Use set location:city to bind your area.', 'Reply to this message with your city to save it and check the weather.'))
@@ -2020,13 +2033,14 @@ async def handle_message_event(ws, data):
                            master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
         learned = await learner.command(data, cleaned_msg, addressed, run_explicit_block)
         if learned is not None:
+            if autonomy is not None and cleaned_msg.strip().removeprefix('/').strip().lower() in {'interaction learning off', 'forget moments'}:
+                await autonomy.forget(data)
             if learned:
                 await extensions.send(ws, msg_type, group_id, user_id, learned)
             return
 
-    autonomy = globals().get('autonomy_bridge')
     if autonomy is not None and addressed and not is_talking_to_other:
-        decision = await autonomy.decide(data, cleaned_msg, addressed)
+        decision = await autonomy.decide(data, cleaned_msg, addressed, legacy=learner)
         if decision is not None:
             kind, value = decision
             if kind == 'tool':
@@ -2035,7 +2049,16 @@ async def handle_message_event(ws, data):
                 await dispatch(SimpleNamespace(**globals()), value, data, ws,
                                master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
             else:
-                await extensions.send(ws, msg_type, group_id, user_id, value)
+                dialogue = autonomy.is_dialogue(cleaned_msg)
+                pacing = autonomy.bubbles(value, group=msg_type == 'group', request=cleaned_msg) if dialogue else None
+                if pacing is None:
+                    await extensions.send(ws, msg_type, group_id, user_id, value)
+                else:
+                    action = 'send_group_msg' if msg_type == 'group' else 'send_private_msg'
+                    target = {'group_id': group_id, 'message': '[CQ:at,qq=' + str(user_id) + ']'} if msg_type == 'group' else {'user_id': user_id}
+                    await send_multiline_messages(ws, action, target, value, pacing=pacing)
+                if dialogue:
+                    autonomy.observe(data, cleaned_msg, value, addressed, learner)
             return
 
     feature_reply = await features.command(cleaned_msg, msg_type, group_id, user_id, addressed, is_group_admin)
@@ -2620,6 +2643,13 @@ async def handle_message_event(ws, data):
             return
 
     # 6. Bubble counts: 60% one, 30% two, 10% three
+    autonomy_plan = None
+    if autonomy is not None and not has_explicit_notebook:
+        autonomy_plan = await autonomy.prepare(data, cleaned_msg, (),
+                                               passive=is_random_chime, addressed=addressed, legacy=learner)
+        if autonomy_plan is not None and autonomy_plan.action == 'silence':
+            return
+
     target_splits = 1 if is_random_chime else random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     confirmed_length = learner.social.confirmed_length(data) if learner is not None and addressed else None
     if confirmed_length in {'brief', 'balanced', 'detailed'} and not is_random_chime:
@@ -2633,6 +2663,9 @@ async def handle_message_event(ws, data):
         split_instruct = "Use one [SPLIT] marker to send two consecutive sentence bubbles."
     else:
         split_instruct = "Use two [SPLIT] markers to send three consecutive sentence bubbles."
+
+    if autonomy_plan is not None and autonomy_plan.format_text:
+        split_instruct = 'Write naturally. Use a line break only for a separate thought; the host handles message bubbles.'
 
     identity_tag = f"[Original admin (nickname: {nickname})]" if user_id == MASTER_QQ else (f"[Superadmin {admins.name(user_id)}]" if is_master else f"[Group member (nickname: {nickname})]")
 
@@ -2672,6 +2705,10 @@ async def handle_message_event(ws, data):
             context_prompt += ('\nDecide whether a reply adds something now. For repetition, an ongoing exchange '
                                'between others, tension, or an unclear opening, output only ' + SILENCE + '.')
         if is_random_chime or learner.uses_moments(data, learning_text):
+            transient['transient'] = True
+    if autonomy_plan is not None:
+        context_prompt += '\n' + autonomy_plan.prompt
+        if autonomy_plan.transient:
             transient['transient'] = True
     reply_raw = await call_gemini_with_history(session_id, context_prompt, is_random=is_random_chime,
                                                image_parts=None, **transient)
@@ -2713,6 +2750,8 @@ async def handle_message_event(ws, data):
     # 7. Process and remove hidden background tags
     if is_random_chime:
         from chat_style import compact_interjection
+        if autonomy_plan is not None and autonomy_plan.action == 'ack':
+            passive_limit = min(passive_limit, 20 if re.search(r'[\u3400-\u9fff]', reply_raw) else 48)
         reply_clean = compact_interjection(reply_raw, passive_limit, '')
         if len(reply_clean)<len(reply_raw):
             print('[Passive reply formatting]:', len(reply_raw), '->', len(reply_clean), 'characters; prefer complete sentences')
@@ -2739,25 +2778,32 @@ async def handle_message_event(ws, data):
         if not reply_clean.endswith(" (added to notebook)"):
             reply_clean += " (added to notebook)"
 
-    if target_splits == 1 and ("```" not in reply_clean):
+    pacing = autonomy.bubbles(reply_clean, autonomy_plan, group=msg_type == 'group',
+                              passive=is_random_chime) if autonomy is not None and autonomy_plan is not None else None
+    timing = {'pacing': pacing} if pacing is not None else {}
+    if pacing is None and target_splits == 1 and ("```" not in reply_clean):
         reply_clean = reply_clean.replace("[SPLIT]", " ")
 
     # 8. Send natural consecutive message bubbles
     log_reply = re.sub(r"\[CQ:image,[^\]]+\]", "[CQ:image]", reply_clean)
     if msg_type == "private":
         print(f"\n[Private chat] {identity_tag}: {cleaned_msg} (target bubbles={target_splits})")
-        await send_multiline_messages(ws, "send_private_msg", {"user_id": user_id}, reply_clean)
+        await send_multiline_messages(ws, "send_private_msg", {"user_id": user_id}, reply_clean, **timing)
         print(f"[Replied]: {log_reply}")
     elif msg_type == "group":
         print(f"\n[Group {group_id}] {formatted_current} (random={is_random_chime}, target bubbles={target_splits})")
         at_header = f"[CQ:at,qq={user_id}] " if (is_talking_to_me or has_explicit_notebook) else ""
         receipts = await send_multiline_messages(ws, "send_group_msg",
-                                                 {"group_id": group_id, "message": at_header}, reply_clean)
+                                                 {"group_id": group_id, "message": at_header}, reply_clean, **timing)
         if is_random_chime:
             features.mark_passive(group_id, 'random')
             if learner is not None and receipts:
                 learner.attention.chime_sent(data, receipts[0])
         print(f"[Group reply sent]: {log_reply}")
+
+    if autonomy is not None and autonomy_plan is not None and addressed and not is_random_chime and reply_clean:
+        if not autonomy_plan.transient:
+            autonomy.observe(data, cleaned_msg, reply_clean, addressed, learner)
 
     if learner is not None and addressed and not is_random_chime and reply_clean:
         learner.social.observe(data, cleaned_msg, reply_clean)
@@ -2862,12 +2908,27 @@ async def main():
                                          max_output_tokens=768))
         return visible_response_text(result)
 
+    async def review_autonomy(instruction, payload):
+        from response_visibility import visible_response_text
+        if not globals().get('GEMINI_API_KEY'):
+            return None
+        model = next((name for name in AVAILABLE_CHAT_MODELS if 'flash' in name or 'lite' in name), None)
+        if model is None:
+            return None
+        result = await client.aio.models.generate_content(
+            model=model, contents=payload,
+            config=gemini_content_config(system_instruction=instruction, temperature=0.1,
+                                         max_output_tokens=512, response_mime_type='application/json'))
+        return visible_response_text(result)
+
     global autonomy_bridge
     autonomy_bridge = await AutonomyBridge.open(
         setting('ENABLE_AUTONOMY', True),
-        Path(__file__).resolve().parent / 'autonomy.local.sqlite3', generate_autonomy)
+        Path(__file__).resolve().parent / 'autonomy.local.sqlite3', generate_autonomy,
+        review_caller=review_autonomy)
     if autonomy_bridge is not None:
         extensions.spawn(autonomy_bridge.heartbeat())
+        extensions.spawn(autonomy_bridge.review_loop())
 
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
     extensions.spawn(extensions.earthquake_monitor())
