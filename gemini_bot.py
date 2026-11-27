@@ -1486,20 +1486,24 @@ async def call_gpt_with_history(session_id: str, prompt_text: str,
         print('[GPT temporarily unavailable]:', str(e))
         return 'GPT cannot answer right now; details are recorded locally.'
 
-async def call_gemini_with_history(session_id: str, prompt_text: str, is_random: bool = False, image_parts: list = None) -> str:
+async def call_gemini_with_history(session_id: str, prompt_text: str, is_random: bool = False, image_parts: list = None, *, transient=False) -> str:
     """Serialize each context so background weather and ordinary chat cannot corrupt shared history."""
     async with model_locks[session_id]:
         histories = (chat_histories, gpt_chat_histories, claude_chat_histories, deepseek_chat_histories)
         snapshots = [copy.deepcopy(history.get(session_id, [])) for history in histories]
+        rollback = False
         try:
             return await asyncio.wait_for(_call_model_with_history(session_id, prompt_text, is_random, image_parts), 110)
         except (asyncio.CancelledError, asyncio.TimeoutError) as error:
-            for history, snapshot in zip(histories, snapshots):
-                history[session_id] = snapshot
+            rollback = True
             if isinstance(error, asyncio.CancelledError):
                 raise
             print('[Conversation timeout]:', session_id)
             return 'This reply timed out. Please try again later.'
+        finally:
+            if transient or rollback:
+                for history, snapshot in zip(histories, snapshots):
+                    history[session_id] = snapshot
 
 
 async def _call_model_with_history(session_id: str, prompt_text: str, is_random: bool = False, image_parts: list = None) -> str:
@@ -1723,9 +1727,11 @@ def quick_reply(ws, data):
         text = re.sub(r'^(?:Lucky Cat|Lucky)[，,:：\s]+', '', text).strip()
     addressed = data.get('message_type') == 'private' or mentioned or replied_to_me or named
     response = care_reply(text, addressed=addressed)
+    observed_tool = None
     if response is None and (addressed or text == 'cat help'):
         match = re.fullmatch(r'(?:help|manual|cat help|kitty help|butler help)(?:\s+(.+))?', text, re.I)
         if match:
+            observed_tool = 'help' if not match[1] else None
             response = HELP.get((match[1] or 'general').strip().lower(), 'Options: help search / maps / identity / admin')
     control = (addressed or text == 'cat status') and text in {'bot status', 'cat status', 'quiet mode', 'active mode', 'normal mode'}
     if response is None and not control:
@@ -1744,6 +1750,11 @@ def quick_reply(ws, data):
                 admin = is_superadmin(user) or (data.get('sender') or {}).get('role') in {'owner', 'admin'}
                 answer = await features.command(text, data['message_type'], data.get('group_id', 0), user, True, admin)
             await extensions.send(ws, data['message_type'], data.get('group_id', 0), user, answer)
+            learner = globals().get('active_learning')
+            if learner is not None and answer and addressed:
+                tool = 'status' if text in {'bot status', 'cat status'} else observed_tool
+                if tool:
+                    learner.observe_command(data, tool)
             print('[Quick reply]:', 'care/help/status', 'delivered')
         except Exception as error:
             print('[Quick reply failed]:', type(error).__name__)
@@ -1994,6 +2005,19 @@ async def handle_message_event(ws, data):
     is_master = is_superadmin(user_id)
     is_whitelist = user_id in WHITELIST_QQ or is_master
     is_group_admin = is_master or sender.get('role') in {'owner', 'admin'}
+    learner = globals().get('active_learning')
+    if learner is not None:
+        async def run_explicit_block(action):
+            from bot_actions import dispatch
+            from types import SimpleNamespace
+            await dispatch(SimpleNamespace(**globals()), action, data, ws,
+                           master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
+        learned = await learner.command(data, cleaned_msg, addressed, run_explicit_block)
+        if learned is not None:
+            if learned:
+                await extensions.send(ws, msg_type, group_id, user_id, learned)
+            return
+
     feature_reply = await features.command(cleaned_msg, msg_type, group_id, user_id, addressed, is_group_admin)
     if feature_reply is not None:
         await extensions.send(ws, msg_type, group_id, user_id, feature_reply)
@@ -2084,8 +2108,12 @@ async def handle_message_event(ws, data):
         user_id, is_master, is_whitelist, mentioned=addressed,
         quoted_place=reply_info.get("weather_place") if reply_info else None)
     if extension_reply is not None:
+        if learner is not None and addressed and extension_reply == '' and cleaned_msg in {'earthquake report', 'latest earthquake', 'earthquake bulletin', 'check earthquakes'}:
+            learner.observe_command(data, 'earthquake')
         if extension_reply:
             await extensions.send(ws, msg_type, group_id, user_id, extension_reply)
+            if learner is not None and addressed and cleaned_msg == 'view sources':
+                learner.observe_command(data, 'sources')
         return
     cmd_reply = None
 
@@ -2366,6 +2394,8 @@ async def handle_message_event(ws, data):
     elif cleaned_msg in ["earthquake report", "latest earthquake", "earthquake bulletin", "check earthquakes"]:
         eq_data = await fetch_latest_earthquake()
         if eq_data:
+            if learner is not None and addressed:
+                learner.observe_command(data, 'earthquake')
             eq_time_str = eq_data.get("time")
             eq_loc = eq_data.get("location")
             mag = eq_data.get("magnitude")
@@ -2602,7 +2632,14 @@ async def handle_message_event(ws, data):
         context_prompt = f"{identity_tag}: {cleaned_msg} {image_notice}(For casual chat: {split_instruct} Keep academic answers short by default; if evidence is needed, return only a SEARCH_REQUEST plan. Provide complete code as requested. Reply in English even when the messages use another language.)"
 
     session_id = f"private_{user_id}" if msg_type == "private" else f"group_{group_id}"
-    reply_raw = await call_gemini_with_history(session_id, context_prompt, is_random=is_random_chime, image_parts=None)
+    transient = {}
+    if learner is not None:
+        context_prompt += '\n' + learner.context(data, cleaned_msg, passive=is_random_chime,
+                                                  multimodal=bool(image_descriptions))
+        if not is_random_chime and learner.uses_moments(data, cleaned_msg):
+            transient['transient'] = True
+    reply_raw = await call_gemini_with_history(session_id, context_prompt, is_random=is_random_chime,
+                                               image_parts=None, **transient)
     if is_random_chime and (not reply_raw.strip() or reply_raw.startswith(('No model reply was available', 'This reply timed out', 'GPT cannot answer', 'Claude cannot answer', 'DeepSeek cannot answer', 'Meow...'))):
         print('[Random interjection skipped]:', group_id, 'Model unavailable; no group error announcement')
         return
@@ -2616,6 +2653,8 @@ async def handle_message_event(ws, data):
         from types import SimpleNamespace
         await dispatch(SimpleNamespace(**globals()), action, data, ws,
                        master=is_master, whitelist=is_whitelist, group_admin=is_group_admin)
+        if learner is not None and addressed:
+            learner.observe_action(data, action)
         return
     if '[BOT_ACTION:' in reply_raw:
         if not is_random_chime:
@@ -2686,6 +2725,9 @@ async def main():
     global features
     global videos
     features = Features(sys.modules[__name__])
+    from active_learning import ActiveLearning
+    global active_learning
+    active_learning = ActiveLearning(data_store)
     global media_separation, open_music
     extensions = Extensions(sys.modules[__name__])
     open_music = OpenMusic(
@@ -2723,6 +2765,21 @@ async def main():
         init_chat_models, init_claude_models, init_deepseek_models, init_mimo_models, init_gpt_models)))
     await prepare_stolen_emoji_store()
     start_food_map(Path(__file__).resolve().parent)
+    from bot_actions import dispatch
+
+    async def dispatch_scheduled(action, event, ws):
+        from types import SimpleNamespace
+        await dispatch(SimpleNamespace(**globals()), action, event, ws)
+
+    async def active_learning_loop():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await active_learning.poll(active_ws, extensions, features, dispatch_scheduled)
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError) as error:
+                print('[Active learning maintenance]:', type(error).__name__)
+
+    extensions.spawn(active_learning_loop())
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
     extensions.spawn(extensions.earthquake_monitor())
 

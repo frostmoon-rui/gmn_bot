@@ -51,6 +51,7 @@ def handler_environment():
         REGIONS_FILE='regions.json', save_json_data=lambda *args: None)
     async def save(*args):
         pass
+    scope['data_store'] = SimpleNamespace(load=lambda name, default: copy.deepcopy(default), save=lambda *args: None)
     scope['save_json_data_async'] = save
     scope['load_json_data'] = lambda name, default: copy.deepcopy(default)
     scope['is_superadmin'] = lambda user: int(user) == scope['MASTER_QQ']
