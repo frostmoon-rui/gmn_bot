@@ -48,3 +48,17 @@ It does not infer relationships between chat members.
 - `interaction learning off` clears the learned records, in-flight results, and pending
   learned check-ins in private, or across all groups when used in a group. Explicitly configured reminders and workflows
   that the user already approved continue to use their existing controls.
+
+## Learning from selected questions
+
+When short and long feedback disagree, the bot prioritizes asking for a reply-length
+label. The label overrides the inferred preference and changes the reply format. Later repeated contradictory feedback can reopen the question after one week.
+New workflow drafts may be checked with the requester in private. A useful label
+marks the draft for review. A skip label dismisses the same draft for 30 days.
+Execution continues to require separate approval.
+
+The bot offers questions after direct conversation, at most once each day in private
+or once each week across groups for the same speaker. It offers each question once.
+`learning questions` lists the current queue. `learning answer ID CHOICE` applies a
+choice. You can also quote the question and send just the choice. Pending questions expire in seven days. This updates the bot's local
+decision rules and uses the existing Gemini conversation model.

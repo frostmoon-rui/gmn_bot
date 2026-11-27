@@ -1985,6 +1985,12 @@ async def handle_message_event(ws, data):
     learner = globals().get('active_learning')
     if learner is not None:
         learner.social.feedback(data, cleaned_msg, addressed)
+        if addressed and (not reply_info or is_reply_to_me):
+            quoted_question = reply_info.get('text') if is_reply_to_me else None
+            learned_answer = learner.social.reply_to_question(data, cleaned_msg, quoted_question)
+            if learned_answer is not None:
+                await extensions.send(ws, msg_type, group_id, user_id, learned_answer)
+                return
         async def run_explicit_block(action):
             from bot_actions import dispatch
             from types import SimpleNamespace
@@ -2578,7 +2584,13 @@ async def handle_message_event(ws, data):
 
     # 6. Bubble counts: 60% one, 30% two, 10% three
     target_splits = 1 if is_random_chime else random.choices([1, 2, 3], weights=[60, 30, 10])[0]
-    if target_splits == 1:
+    confirmed_length = learner.social.confirmed_length(data) if learner is not None and addressed else None
+    if confirmed_length in {'brief', 'balanced', 'detailed'} and not is_random_chime:
+        target_splits = {'brief': 1, 'balanced': 2, 'detailed': 3}[confirmed_length]
+        split_instruct = {'brief': 'Use one concise, complete reply unless the task needs more.',
+                          'balanced': 'Explain when needed, with up to two bubbles separated by [SPLIT].',
+                          'detailed': 'Include a reason or example when helpful, with up to three bubbles separated by [SPLIT].'}[confirmed_length]
+    elif target_splits == 1:
         split_instruct = "Use one casual sentence without any [SPLIT] marker."
     elif target_splits == 2:
         split_instruct = "Use one [SPLIT] marker to send two consecutive sentence bubbles."
@@ -2707,8 +2719,12 @@ async def handle_message_event(ws, data):
             features.mark_passive(group_id, 'random')
         print(f"[Group reply sent]: {log_reply}")
 
-    if learner is not None and addressed and not is_random_chime:
+    if learner is not None and addressed and not is_random_chime and reply_clean:
         learner.social.observe(data, cleaned_msg, reply_clean)
+        if not has_explicit_notebook and (msg_type != 'group' or features.active(group_id)):
+            clarification = learner.social.offer(data, cleaned_msg)
+            if clarification:
+                await extensions.send(ws, msg_type, group_id, user_id, clarification)
 
 async def main():
     global active_ws

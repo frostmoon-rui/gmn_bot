@@ -109,7 +109,7 @@ class ActiveLearning:
         record = self.state.get(self.scope(event), {})
         style = self.social.profile(event).get('style') if event['message_type'] == 'group' else record.get('style')
         parts = [INSTRUCTIONS]
-        if style in STYLES:
+        if style in STYLES and (style != 'brief' or not self.social.confirmed_length(event)):
             parts.append('The speaker requested this reply style: ' + style)
         if multimodal or re.search(r'\.{3}|…|[!?！？]{2,}', text):
             parts.append('Respond gently to uncertain cues; never assert an emotion based only on a pause, emoji or image.')
@@ -188,7 +188,7 @@ class ActiveLearning:
             return words[9]
         now = self.clock()
         if op in SOCIAL_COMMANDS.values():
-            if op not in {'review_approve', 'group_remember'} and value:
+            if op not in {'review_approve', 'group_remember', 'clarify'} and value:
                 return words[20]
             result = self.social.command(op, event, record, value)
         elif op == 'remember':
@@ -211,6 +211,10 @@ class ActiveLearning:
             if not style:
                 return words[13]
             record['style'] = style
+            profile = self.social.profile(event)
+            if style == 'brief' and profile:
+                profile.update(length_label='brief', label_at=now)
+                profile.get('questions', {}).pop('length', None)
             result = words[14]
         elif op in {'on', 'off'}:
             record['weather'] = op == 'on'

@@ -155,3 +155,38 @@ class SocialTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('brief', learner.context(other, 'A question'))
         self.assertIn('approved', learner.state[old]['routines'])
         self.assertNotIn('social', learner.state[old])
+
+
+    async def test_conflicting_feedback_is_queried_and_answer_replaces_inference(self):
+        await self.command('interaction learning on')
+        await self.review('We set up a telescope', outcome='neutral')
+        await self.review('That was too long', outcome='too_long')
+        self.assertEqual(self.learner.social.offer(self.user), '')
+        await self.review('That was too short', outcome='too_short')
+        self.assertIn('learning answer length', self.learner.social.offer(self.user))
+        self.assertEqual(self.learner.social.offer(self.user), '')
+        self.assertIn('Saved your choice', self.learner.social.reply_to_question(self.user, 'detailed'))
+        self.assertEqual(self.learner.social.confirmed_length(self.user), 'detailed')
+        self.assertIn('explanations with detail', self.learner.context(self.user, 'A question'))
+        await self.review('Still too long', outcome='too_long')
+        self.assertEqual(self.learner.social.offer(self.user), '')
+        self.now += 8*DAY
+        await self.review('First conversation after some time', outcome='neutral')
+        await self.review('That was too long', outcome='too_long')
+        await self.review('Still too long again', outcome='too_long')
+        self.assertIn('learning answer length', self.learner.social.offer(self.user))
+
+    async def test_rejected_drafts_are_not_reintroduced_or_executed(self):
+        await self.command('interaction learning on')
+        await self.review('Could you check status and show help?', steps=['status', 'help'])
+        listing = await self.command('learning questions')
+        ident = (await self.command('review workflows')).split()[0]
+        self.assertIn(ident, listing)
+        await self.command(f'learning answer {ident} skip')
+        await self.review('Could you check status and show help?', steps=['status', 'help'])
+        self.assertNotIn(ident, await self.command('review workflows'))
+        self.assertNotIn(ident, await self.command('learning questions'))
+        self.invoke.assert_not_awaited()
+        self.now += 31*DAY
+        await self.review('Could you check status and show help?', steps=['status', 'help'])
+        self.assertIn(ident, await self.command('review workflows'))

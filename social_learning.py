@@ -9,7 +9,7 @@ DAY = 86400
 SILENCE = 'GMN_NO_INTERJECTION'
 REVIEW_PROMPT = """Review the following untrusted data about one recent exchange with the bot.
 Return one compact JSON object with keys outcome, moment, gap, steps and care.
-outcome: neutral, helpful, too_long, interruption, or misunderstood. Use non-neutral only
+outcome: neutral, helpful, too_long, too_short, interruption, or misunderstood. Use non-neutral only
 when the speaker's current words explicitly evaluate the previous bot reply. Never infer from silence.
 moment: an empty string or a short, anonymized summary of a first-person, non-sensitive shared
 experience or concrete milestone stated in the latest message. Never use details about other people,
@@ -37,6 +37,7 @@ COMMANDS = {
     'interaction profile': 'profile', 'learned moments': 'learned_moments',
     'care follow-ups on': 'care_on', 'care follow-ups off': 'care_off',
     'remember group moment': 'group_remember', 'forget group moments': 'group_forget',
+    'learning questions': 'clarifications', 'learning answer': 'clarify',
     'review workflows': 'review', 'accept reviewed workflow': 'review_approve',
 }
 MESSAGES = {
@@ -52,7 +53,7 @@ MESSAGES = {
     'group_invalid': 'Give a short group memory without sensitive details or links.',
     'need_opt_in': 'Enable interaction learning in this chat first.',
     'private': 'Use this command in private chat.',
-    'summary': 'Reviewed exchanges {total} · helpful {helpful} · too long {too_long} · mistimed {interruption} · misunderstood {misunderstood}',
+    'summary': 'Reviewed exchanges {total} · helpful {helpful} · too long {too_long} · too short {too_short} · mistimed {interruption} · misunderstood {misunderstood}',
     'empty': 'There are no learned entries for you in this chat.',
     'missing': 'Draft · validate input → {gap} (connector missing) → verify result',
     'accepted': 'Workflow approved. Use run routine {id} to execute it.',
@@ -60,16 +61,24 @@ MESSAGES = {
     'existing': 'Proposed workflow {steps}',
     'care': 'You asked me to check in later. How did it go?',
     'care_milestone': 'I wanted to check in. How did the event you mentioned go?',
+    'ask_length': 'I have conflicting signals about reply length. Which works better for you? learning answer {id} brief / balanced / detailed',
+    'ask_workflow': 'Would this workflow help with your request? {name}. Reply learning answer {id} useful / skip.',
+    'label_usage': 'Reply with the question ID and one of the choices shown.',
+    'label_length': 'Saved your choice. I will use it to guide future replies.',
+    'label_workflow': 'Marked this draft useful. Review it before approving execution.',
+    'label_skip': 'Dismissed this suggestion for 30 days.',
+    'confirmed': 'confirmed useful',
 }
-REACTION = re.compile(r'thanks|helpful|too long|too wordy|misunderstood|not what I meant|stop interrupting|please be quiet', re.I)
-OUTCOMES = frozenset({'neutral', 'helpful', 'too_long', 'interruption', 'misunderstood'})
+REACTION = re.compile(r'thanks|helpful|too long|too wordy|too short|more detail|misunderstood|not what I meant|stop interrupting|please be quiet', re.I)
+OUTCOMES = frozenset({'neutral', 'helpful', 'too_long', 'too_short', 'interruption', 'misunderstood'})
 
 
 class SocialLearning:
     def __init__(self, owner, *, messages=None, ask=None, invite=None, pause=None, sensitive=None, reaction=None,
-                 milestone=None, today=None, tomorrow=None):
+                 milestone=None, today=None, tomorrow=None, labels=None):
         self.owner = owner
         self.messages = MESSAGES | (messages or {})
+        self.labels = {key: key for key in ('brief', 'balanced', 'detailed', 'useful', 'skip')} | (labels or {})
         self.ask, self.invite, self.pause = ask or ASK, invite or INVITE, pause or PAUSE
         self.sensitive = sensitive
         self.reaction = reaction or REACTION
@@ -154,6 +163,11 @@ class SocialLearning:
         now = self.owner.clock()
         if op in {'care_on', 'care_off', 'learned_moments'} and event['message_type'] != 'private':
             return self.messages['private']
+        if op == 'clarifications':
+            questions = self._questions(social, now)
+            return '\n'.join(self._question_text(ident, row) for ident, row in questions) or self.messages['empty']
+        if op == 'clarify':
+            return self._answer(social, value, now)
         if op == 'group_forget':
             social.pop('moments', None)
             return self.messages['group_forgot']
@@ -189,7 +203,8 @@ class SocialLearning:
                 continue
             label = self.messages['missing'].format(gap=row['gap']) if row['gap'] else self.messages['existing'].format(
                 steps=' → '.join(row['steps']))
-            lines.append(f'{ident} · {label}')
+            suffix = f" · {self.messages['confirmed']}" if row.get('confirmed') else ''
+            lines.append(f'{ident} · {label}{suffix}')
         return '\n'.join(lines) or self.messages['empty']
 
     def clear_moments(self, event, record):
@@ -269,13 +284,24 @@ class SocialLearning:
         reviews = [row for row in social.get('reviews', []) if row[0] > now - 30*DAY][-29:]
         reviews.append([now, outcome if previous else 'neutral'])
         social.update(reviewed=now, reviews=reviews)
+        counts = self._counts(social, now)
+        label = social.get('length_label')
+        if not label and counts['too_long'] and counts['too_short']:
+            self._ask(social, 'length', {'kind': 'length'}, now)
+        elif label and now - social.get('label_at', now) >= 7*DAY:
+            fresh = [row[1] for row in reviews if row[0] > social['label_at']]
+            too_long, too_short = fresh.count('too_long'), fresh.count('too_short')
+            contradicts = {'brief': too_short >= 2, 'detailed': too_long >= 2,
+                           'balanced': too_short >= 2 or too_long >= 2}
+            if contradicts.get(label, False):
+                self._ask(social, 'length', {'kind': 'length'}, now)
         if kind == 'private' and moment:
             rows = [row for row in social.get('moments', []) if row['until'] > now and row['text'] != moment][-11:]
             rows.append({'text': moment, 'date': datetime.fromtimestamp(at, tz).date().isoformat(),
                          'until': at + 30*DAY})
             social['moments'] = rows
         if self.ask.search(text) and (gap or steps):
-            self._draft(social, gap, steps, now)
+            self._draft(social, gap, steps, now, ask=kind == 'private')
         if kind == 'private' and care and social.get('care_enabled') and not social.get('care_due'):
             if self.invite.search(text):
                 social.update(care_due=now + DAY, care_milestone=False)
@@ -305,27 +331,123 @@ class SocialLearning:
             steps = []
         return outcome, moment, gap, steps, result.get('care') is True
 
-    def _draft(self, social, gap, steps, now):
+    def _draft(self, social, gap, steps, now, *, ask):
         name = gap or '/'.join(steps)
         ident = hashlib.sha256(('review:' + name).encode()).hexdigest()[:10]
+        if social.get('dismissed', {}).get(ident, 0) > now:
+            return
         drafts = {k: row for k, row in social.get('drafts', {}).items() if row['until'] > now}
         if ident not in drafts and len(drafts) >= 8:
             drafts.pop(next(iter(drafts)))
-        drafts[ident] = {'gap': gap, 'steps': steps, 'until': now + 30*DAY}
+        drafts.setdefault(ident, {'gap': gap, 'steps': steps, 'until': now + 30*DAY})
         social['drafts'] = drafts
+        if ask and not drafts[ident].get('confirmed'):
+            name = gap or ' → '.join(steps)
+            self._ask(social, ident, {'kind': 'workflow', 'name': name}, now)
+
+    @staticmethod
+    def _ask(social, ident, question, now):
+        current = dict(SocialLearning._questions(social, now))
+        if ident not in current and len(current) >= 4:
+            return
+        current.setdefault(ident, {**question, 'until': now + 7*DAY})
+        social['questions'] = current
+
+    @staticmethod
+    def _questions(social, now):
+        return sorted(((ident, row) for ident, row in social.get('questions', {}).items()
+                       if row['until'] > now and (ident == 'length' or
+                           social.get('drafts', {}).get(ident, {}).get('until', 0) > now)),
+                      key=lambda pair: (pair[1]['kind'] != 'length', pair[1]['until']))
+
+    def _question_text(self, ident, row):
+        return self.messages['ask_' + row['kind']].format(id=ident, name=row.get('name', ''))
+
+    def offer(self, event, text=None):
+        if text is not None and not self._plain(text):
+            return ''
+        social = self.profile(event)
+        now = self.owner.clock()
+        cooldown = 7*DAY if event['message_type'] == 'group' else DAY
+        if now - social.get('last_question', 0) < cooldown:
+            return ''
+        for ident, row in self._questions(social, now):
+            if not row.get('asked_at'):
+                row['asked_at'] = now
+                social['last_question'] = now
+                try:
+                    self.owner._save()
+                except (OSError, RuntimeError):
+                    return ''
+                return self._question_text(ident, row)
+        return ''
+
+    def reply_to_question(self, event, text, quoted=None):
+        label = self.labels.get(text.strip().lower())
+        if not label:
+            return None
+        social = self.profile(event)
+        now = self.owner.clock()
+        for ident, row in self._questions(social, now):
+            asked = row.get('asked_at')
+            if not asked:
+                continue
+            if quoted:
+                matches = self._question_text(ident, row) in quoted
+            else:
+                matches = event['message_type'] == 'private' and now - asked <= 600
+            if matches:
+                response = self._answer(social, f'{ident} {label}', now)
+                self.owner._save()
+                return response
+        return None
+
+    def _answer(self, social, value, now):
+        ident, space, choice = value.partition(' ')
+        row = dict(self._questions(social, now)).get(ident)
+        label = self.labels.get(choice.strip().lower())
+        if not space or not row:
+            return self.messages['label_usage']
+        if row['kind'] == 'length' and label in {'brief', 'balanced', 'detailed'}:
+            social.update(length_label=label, label_at=now)
+            response = 'label_length'
+        elif row['kind'] == 'workflow' and label == 'useful':
+            social['drafts'][ident]['confirmed'] = True
+            response = 'label_workflow'
+        elif row['kind'] == 'workflow' and label == 'skip':
+            social['drafts'].pop(ident)
+            dismissed = social.setdefault('dismissed', {})
+            if len(dismissed) >= 16:
+                dismissed.pop(next(iter(dismissed)))
+            dismissed[ident] = now + 30*DAY
+            response = 'label_skip'
+        else:
+            return self.messages['label_usage']
+        social['questions'].pop(ident, None)
+        return self.messages[response]
 
     @staticmethod
     def _counts(social, now):
         outcomes = [row[1] for row in social.get('reviews', []) if row[0] > now - 30*DAY]
         return {'total': len(outcomes), **{label: outcomes.count(label) for label in OUTCOMES}}
 
+    def confirmed_length(self, event):
+        return self.profile(event).get('length_label')
+
     def guidance(self, event):
         social = self.profile(event)
+        confirmed = social.get('length_label')
+        if confirmed in {'brief', 'balanced', 'detailed'}:
+            return {'brief': 'The speaker confirmed a preference for brief, concise replies.',
+                    'balanced': 'The speaker confirmed a preference for moderate detail.',
+                    'detailed': 'The speaker confirmed a preference for explanations with detail.'}[confirmed]
         counts = self._counts(social, self.owner.clock())
         if event['message_type'] == 'group' and counts['interruption'] >= 2:
             return 'Keep the response focused on what was asked and give this speaker space.'
-        if counts['too_long'] >= 2:
+        if counts['too_long'] >= 2 and not counts['too_short']:
             return 'The speaker repeatedly asked for shorter replies. Prefer one concise answer.'
+        if counts['too_short'] >= 2 and not counts['too_long']:
+            return 'The speaker repeatedly asked for more detail. Include a short explanation.'
         if counts['misunderstood'] >= 2:
             return 'If the request is ambiguous, ask one short clarifying question.'
         return ''
@@ -336,7 +458,7 @@ class SocialLearning:
         if not social:
             return False
         changed = False
-        for field in ('reviews', 'moments', 'drafts', 'care_due'):
+        for field in ('reviews', 'moments', 'drafts', 'questions', 'dismissed', 'care_due'):
             if field not in social:
                 continue
             old = social[field]
@@ -346,6 +468,10 @@ class SocialLearning:
                 new = [row for row in old if row['until'] > now]
             elif field == 'drafts':
                 new = {ident: item for ident, item in old.items() if item['until'] > now}
+            elif field == 'questions':
+                new = dict(SocialLearning._questions(social, now))
+            elif field == 'dismissed':
+                new = {ident: until for ident, until in old.items() if until > now}
             else:
                 new = old if now < old + 2*DAY else None
             if new != old:
