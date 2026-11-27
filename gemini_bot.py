@@ -2458,7 +2458,7 @@ async def handle_message_event(ws, data):
                 return
 
     if greeting or daily_weather:
-        reply = greeting_reply if greeting else ('Weather is temporarily unavailable for your saved area.' if user_reg and user_reg.get("location") else 'Reply to this message with your city to save it and check the weather.')
+        reply = greeting_reply if greeting else ('Weather is temporarily unavailable for your saved area.' if user_reg and user_reg.get("location") else 'Reply to this message with your city to save it and check the weather. You can also use set location:city.')
         await extensions.send(ws, msg_type, group_id, user_id, reply)
         return
 
