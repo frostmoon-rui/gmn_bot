@@ -1,2 +1,2 @@
 # Optional engine for group and private autonomy; the legacy host remains the fallback.
-gmn-autonomy @ git+https://github.com/frostmoon-rui/gmn_bot_autonomy.git@v0.3.1
+gmn-autonomy @ git+https://github.com/frostmoon-rui/gmn_bot_autonomy.git@v0.3.2
