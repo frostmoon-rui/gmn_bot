@@ -846,11 +846,12 @@ class OpenMusic:
         self.spawn(run())
         return None
 
-    async def _from_card(self, key, ws, event, message_id, fallback):
-        from quoted_cards import qq_track_url, quoted_cards, quoted_message
+    async def _from_card(self, key, ws, event, message_id, fallback, original=None):
+        from quoted_cards import netease_track_url, qq_track_url, quoted_message, quoted_music_cards
         _, kind, group, user = key
-        original = await quoted_message(ws, event, message_id)
-        cards = [card for card in quoted_cards(original or {}) if card.kind == 'music']
+        if original is None:
+            original = await quoted_message(ws, event, message_id)
+        cards = quoted_music_cards(original or {})
         if len(cards) > 1:
             await self.send(ws, kind, group, user, self.messages['ambiguous'])
             return
@@ -877,6 +878,14 @@ class OpenMusic:
                 return
             if card.title:
                 fallback = ' - '.join(filter(None, (card.title, card.creator)))
+                if link := netease_track_url(card.url):
+                    release = Release(card.title, card.creator, '', link)
+                    await self._search(key, ws, kind, group, user, fallback,
+                                       locked=recording_key(release) if card.creator else None, card_link=release)
+                    return
+                if card.source == 'netease':
+                    await self._search(key, ws, kind, group, user, fallback, exact_only=True)
+                    return
             elif card.url:
                 await self.send(ws, kind, group, user, card.url)
                 return
@@ -956,7 +965,8 @@ class OpenMusic:
                 return source
         return None
 
-    async def _search(self, key, ws, kind, group, user, query, *, file_only=False, removed=None, tried=None, locked=None):
+    async def _search(self, key, ws, kind, group, user, query, *, file_only=False, removed=None, tried=None,
+                      locked=None, card_link=None, exact_only=False):
         removed = set() if removed is None else removed
         tried = set() if tried is None else tried
         configured = configured_platform_track(self.preview_catalog, query)
@@ -995,7 +1005,7 @@ class OpenMusic:
         else:
             tracks = [track for track in results if _exact_track(track, query)
                       and (locked is None or recording_key(track) == locked)]
-            nearest = _closest_track(results, query) if not tracks and not configured and not locked else None
+            nearest = _closest_track(results, query) if not tracks and not configured and not locked and not card_link and not exact_only else None
             if nearest:
                 tracks = [nearest]
             recordings = group_recordings(tracks)
@@ -1032,6 +1042,8 @@ class OpenMusic:
                     return
             text = self.messages['none']
         links = await self._platform_previews(query)
+        if card_link and not any(entry.source == card_link.source for _, entry in links):
+            links = [('netease', card_link), *links]
         if links or qq_candidates:
             known = {recording_key(entry) for _, entry in links}
             links = list(links)

@@ -17,6 +17,28 @@ EVENT = {'message_type': 'group', 'group_id': 3, 'user_id': 4, 'self_id': 5}
 
 
 class CardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_netease_native_id_and_reply_metadata_preserve_original_link(self):
+        native = {'type': 'music', 'data': {'type': '163', 'id': 42, 'title': 'Example (Live)', 'singerName': 'Artist'}}
+        card, = quoted_cards({'message': [native]})
+        self.assertEqual((card.kind, card.creator, card.url), ('music', 'Artist', 'https://music.163.com/song?id=42'))
+        event = EVENT | {'reply': {'message_id': 123, 'message': '[NetEase Cloud Music] Example'}}
+        ws = SimpleNamespace(send=AsyncMock(return_value=EVENT | {'message': [native]}))
+        worker = OpenMusic.__new__(OpenMusic)
+        worker._search = AsyncMock()
+        await worker._from_card(worker._session_key(EVENT), ws, event, None, '')
+        link = worker._search.await_args.kwargs['card_link']
+        self.assertEqual(link.source, card.url)
+        self.assertEqual(link.title, 'Example (Live)')
+        self.assertEqual(json.loads(ws.send.await_args.args[0])['params'], {'message_id': 123})
+
+    def test_netease_share_metadata_identifies_the_artist_and_canonical_song(self):
+        share = {'type': 'json', 'data': {'data': json.dumps({
+            'app': 'com.tencent.structmsg', 'meta': {'news': {'title': 'Half Moon Serenade',
+                'summary': 'Example artist', 'jumpurl': 'https://y.music.163.com/m/song/42?from=share'}}})}}
+        card, = quoted_cards({'message': [share]})
+        self.assertEqual((card.kind, card.creator, card.url),
+                         ('music', 'Example artist', 'https://music.163.com/song?id=42'))
+
     def test_music_card_uses_original_title_and_safe_song_link(self):
         card, = quoted_cards({'message': [CARD]})
         self.assertEqual((card.kind, card.title, card.creator),

@@ -1782,7 +1782,7 @@ async def handle_message_event(ws, data):
         return
     session_actor.set(user_id)
 
-    from quoted_cards import quoted_cards, quoted_message
+    from quoted_cards import quoted_cards, quoted_message, quoted_music_cards
     card_reply = re.search(r"\[CQ:reply,id=(-?\d+)(?:,[^\]]*)?\]", raw_msg)
     has_card_reply = bool(card_reply or isinstance(data.get('reply'), dict))
     if re.fullmatch(r'/?(?:view card|read card)', cleaned_msg, re.I) and (is_at_me or msg_type == 'private'):
@@ -1834,6 +1834,14 @@ async def handle_message_event(ws, data):
         if reply:
             await extensions.send(ws, msg_type, group_id, user_id, reply)
         return
+
+    if 'open_music' in globals() and has_card_reply and is_at_me and not cleaned_msg:
+        original = await quoted_message(ws, data, card_reply[1] if card_reply else None)
+        if original and quoted_music_cards(original):
+            reply = open_music.start(ws, data, 'card', (None, '', original))
+            if reply:
+                await extensions.send(ws, msg_type, group_id, user_id, reply)
+            return
 
     if 'open_music' in globals() and cleaned_msg and (is_at_me or msg_type == 'private'):
         from bot_features import mention_targets

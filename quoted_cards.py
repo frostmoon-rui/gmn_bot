@@ -5,7 +5,7 @@ import html
 import ipaddress
 import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from xml.etree import ElementTree
 
 from bot_features import reply_belongs_to
@@ -65,6 +65,27 @@ def qq_track_url(url):
     return 'https://i2.y.qq.com/a/song/' + match[1] if match else ''
 
 
+def netease_track_url(url):
+    if not card_url(url):
+        return ''
+    parts = urlsplit(url)
+    if parts.hostname not in {'music.163.com', 'y.music.163.com'}:
+        return ''
+    path, query = parts.path, parts.query
+    if parts.fragment.startswith('/song'):
+        path, _, query = parts.fragment.partition('?')
+    match = re.fullmatch(r'/(?:m/)?song(?:/([0-9]{1,16}))?/?', path)
+    if not match:
+        return ''
+    ids = parse_qs(query).get('id', [])
+    song = match[1] or (ids[0] if len(ids) == 1 else '')
+    return 'https://music.163.com/song?id=' + song if re.fullmatch(r'[0-9]{1,16}', song) else ''
+
+
+def _netease_label(value):
+    return _text(value).casefold() in {'netease', 'netease cloud music', '\u7f51\u6613\u4e91\u97f3\u4e50'}
+
+
 def _segments(message):
     value = message.get('message')
     if isinstance(value, list):
@@ -80,20 +101,29 @@ def _segments(message):
 
 
 def _fields(kind, node):
-    url = next((url for key in ('jumpUrl', 'jump_url', 'qqdocurl', 'url', 'webUrl', 'pageUrl', 'targetUrl')
+    url = next((url for key in ('jumpUrl', 'jump_url', 'qqdocurl', 'url', 'webUrl', 'pageUrl', 'targetUrl', 'jumpurl', 'detailUrl', 'shareUrl')
                 if (url := card_url(node.get(key)))), '')
     title = next((value for key in ('title', 'name', 'songName') if (value := _text(node.get(key)))), '')
-    creator = next((value for key in ('artist', 'singer', 'author', 'desc', 'content')
+    creator = next((value for key in ('artist', 'singer', 'singerName', 'artistName', 'author', 'summary', 'desc', 'content')
                     if (value := _text(node.get(key)))), '') if kind == 'music' else ''
-    native_id = node.get('id')
+    native_id = node.get('id') or node.get('songId') or node.get('musicId')
+    provider = str(node.get('type') or '').lower()
+    netease = netease_track_url(url)
+    if netease or provider in {'163', 'netease'} or _netease_label(node.get('source')) or _netease_label(node.get('tag')):
+        kind = 'music'
+        if not netease and re.fullmatch(r'[0-9]{1,16}', str(native_id)):
+            netease = 'https://music.163.com/song?id=' + str(native_id)
+        url = netease or url
+
     if not url and kind == 'music' and node.get('type') == 'qq' and isinstance(native_id, str):
         if re.fullmatch(r'(?=.*[A-Za-z])[A-Za-z0-9]{10,32}', native_id):
             url = 'https://i2.y.qq.com/a/song/' + native_id
     host = urlsplit(url).hostname if url else ''
-    if qq_track_url(url) or (host in {'c.y.qq.com', 'i.y.qq.com'} and title) or re.match(r'https?://music\.163\.com/(?:#/)?song(?:[?/]|$)', url, re.I):
+    if kind == 'music' or qq_track_url(url) or (host in {'c.y.qq.com', 'i.y.qq.com'} and title) or re.match(r'https?://music\.163\.com/(?:#/)?song(?:[?/]|$)', url, re.I):
         kind = 'music'
         if not creator:
-            creator = _text(node.get('desc') or node.get('content'))
+            creator = next((text for key in ('artist', 'singer', 'singerName', 'artistName', 'author', 'summary', 'desc', 'content')
+                            if (text := _text(node.get(key)))), '')
     return Card(kind, title, creator, url, _text(node.get('source')))
 
 
@@ -111,7 +141,7 @@ def _json_cards(value):
     if app == 'com.tencent.map':
         return
     names = {'music': 'music', 'audio': 'audio', 'video': 'video', 'news': 'link', 'detail_1': 'miniapp',
-             'detail': 'miniapp', 'web': 'link', 'share': 'link', 'contact': 'contact'}
+             'detail': 'miniapp', 'web': 'link', 'share': 'link', 'contact': 'contact', 'song': 'music', 'musicdetail': 'music'}
     for key, node in list(value['meta'].items())[:20]:
         if key.casefold() in names and isinstance(node, dict):
             kind = 'music' if app in {'com.tencent.qqmusic', 'com.tencent.music'} else names[key.casefold()]
@@ -166,6 +196,8 @@ async def quoted_message(ws, event, message_id=None):
             fallback = embedded
             if quoted_cards(embedded):
                 return embedded
+    if message_id is None and isinstance(embedded, dict):
+        message_id = embedded.get('message_id') or embedded.get('id')
     if message_id is None:
         return fallback
     try:
@@ -174,6 +206,20 @@ async def quoted_message(ws, event, message_id=None):
     except (ValueError, OSError, TimeoutError, RuntimeError):
         return fallback
     return result if reply_belongs_to(result, event) else fallback
+
+
+def quoted_music_cards(message):
+    cards = quoted_cards(message)
+    music = [card for card in cards if card.kind == 'music']
+    if music or cards:
+        return music
+    # Some adapters expose a share as a provider-prefixed quote preview only.
+    text = message.get('raw_message') or message.get('message')
+    if isinstance(text, str):
+        match = re.fullmatch(r'\[(?:\u7f51\u6613\u4e91\u97f3\u4e50|NetEase Cloud Music)\]\s*([^\[\]\r\n]{1,150})', text.strip(), re.I)
+        if match and (title := _text(match[1])) and '://' not in title:
+            return [Card('music', title, source='netease')]
+    return []
 
 
 def media_card_url(message):

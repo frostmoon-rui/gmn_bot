@@ -310,6 +310,16 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             'group_id': 20, 'message_id': 1, 'sender': {'nickname': 'test'},
             'raw_message': ('[CQ:at,qq=999] ' if mention else '') + text}
 
+    async def test_mention_only_on_a_quoted_music_card_starts_the_music_worker(self):
+        worker = Mock()
+        worker.start.return_value = None
+        self.scope['open_music'] = worker
+        original = {'message': [{'type': 'music', 'data': {'type': '163', 'id': 42, 'title': 'Example'}}]}
+        event = self.event('', True) | {'reply': original}
+        await self.scope['handle_message_event'](self.ws, event)
+        worker.start.assert_called_once_with(self.ws, event, 'card', (None, '', original))
+        self.assertEqual(self.sent, [])
+
     async def test_normal_discussion_of_manual_stays_silent(self):
         self.scope['features'].prefs['groups']['20'] = {'mode': 'quiet'}
         await self.scope['handle_message_event'](self.ws, self.event('manual'))
