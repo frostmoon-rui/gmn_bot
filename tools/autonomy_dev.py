@@ -21,7 +21,9 @@ HOST = Path(__file__).resolve().parents[1]
 LOCAL = Path(os.environ["LOCALAPPDATA"])
 DATA = LOCAL / "GMN" / "autonomy_dev_logs"
 AGY = LOCAL / "Microsoft/WinGet/Links/agy.exe"
-MODEL = "gemini-4-hydrogen-high"
+HYDROGEN = "gemini-4-hydrogen-high"
+OPUS = "claude-opus-5-5-high"
+MODEL_GROUPS = {OPUS: "Claude and GPT models", HYDROGEN: "Gemini Models"}
 REMOTE = "https://github.com/frostmoon-rui/gmn_bot_autonomy.git"
 FLOOR = 30
 
@@ -68,39 +70,118 @@ def single_flight(path):
 
 
 def quota_snapshot(output):
-    rows = {}
-    for bucket, remaining, reset in re.findall(
-        r"^Gemini Models\t(Five Hour|Weekly) Limit Remaining\t(\d{1,3})%\t([^\r\n\t]+)$",
+    groups = {name: {} for name in MODEL_GROUPS.values()}
+    for group, bucket, remaining, reset in re.findall(
+        r"^(Gemini Models|Claude and GPT models)\t(Five Hour|Weekly) Limit Remaining\t(\d{1,3})%\t([^\r\n\t]+)$",
         output, re.MULTILINE,
     ):
+        rows = groups[group]
         if bucket in rows or int(remaining) > 100:
-            raise Halt("Ambiguous Gemini quota response.")
+            raise Halt("Ambiguous Antigravity quota response.")
         rows[bucket] = {"remaining_percent": int(remaining), "reset": reset}
-    if set(rows) != {"Five Hour", "Weekly"}:
-        raise Halt("Gemini quota response is missing a required row.")
-    return rows
+    if any(set(rows) != {"Five Hour", "Weekly"} for rows in groups.values()):
+        raise Halt("Antigravity quota response is missing a required row.")
+    return groups
 
 
-def gate(label, cwd, archive, snapshots):
+def quota_report(archive, snapshots):
+    groups = {}
+    for model, group in MODEL_GROUPS.items():
+        values = [row["groups"][group]["Five Hour"] for row in snapshots if "groups" in row]
+        groups[group] = {
+            "requested_model": model,
+            "initial": values[0] if values else None,
+            "final": values[-1] if values else None,
+            "net_change_points": values[-1]["remaining_percent"] - values[0]["remaining_percent"]
+            if len(values) >= 2 and values[-1]["reset"] == values[0]["reset"] else None,
+        }
+    save(archive / "usage_report.json", {
+        "gemini_floor_percent": FLOOR,
+        "snapshots": snapshots,
+        "groups": groups,
+        "models_attempted": list(dict.fromkeys(row["model"] for row in snapshots if row.get("model"))),
+        "models_used": list(dict.fromkeys(row["model"] for row in snapshots if row.get("outcome") == "success")),
+    })
+
+
+def gate(label, cwd, archive, snapshots, *, model=None):
     row = {"phase": label, "queried_at": datetime.now(timezone.utc).isoformat()}
+    if model:
+        row["model"] = model
     snapshots.append(row)
     try:
         result = command([AGY, "-p", "/usage", "--print-timeout", "20s"], cwd, timeout=45)
         if result.returncode:
             raise Halt(f"Quota query exited with code {result.returncode}.")
-        row.update(quota_snapshot(result.stdout))
-        print(f"Gemini quota {label}: {row['Five Hour']['remaining_percent']}%", flush=True)
-        if min(row[bucket]["remaining_percent"] for bucket in ("Five Hour", "Weekly")) < FLOOR:
-            raise Halt("Gemini quota is below the 30% stop threshold.")
+        groups = quota_snapshot(result.stdout)
+        row["groups"] = groups
+        row.update(groups["Gemini Models"])
+        print(f"Antigravity quota {label}: Claude/GPT {groups[MODEL_GROUPS[OPUS]]['Five Hour']['remaining_percent']}%, "
+              f"Gemini {groups[MODEL_GROUPS[HYDROGEN]]['Five Hour']['remaining_percent']}%", flush=True)
+        return row
     except (Halt, OSError, subprocess.TimeoutExpired) as error:
         row["error"] = str(error)
         raise Halt(f"{label}: {error}") from error
     finally:
-        values = [row["Five Hour"]["remaining_percent"] for row in snapshots if "Five Hour" in row]
-        save(archive / "usage_report.json", {
-            "stop_below_percent": FLOOR, "snapshots": snapshots,
-            "five_hour_net_change_points": values[-1] - values[0] if len(values) >= 2 else None,
-        })
+        quota_report(archive, snapshots)
+
+
+def remaining(row, model):
+    return min(value["remaining_percent"] for value in row["groups"][MODEL_GROUPS[model]].values())
+
+
+def rate_limited(result, response):
+    diagnostic = str(response.get("error") or response.get("error_code") or "")
+    if result.returncode:
+        diagnostic += "\n" + result.stderr
+    return bool(re.search(r"\b429\b|resource[_ -]exhausted|rate[_ -]limit|"
+                          r"quota.{0,24}(?:exceeded|exhausted|insufficient|insufficien|reached)|"
+                          r"insufficient.{0,16}quota", diagnostic, re.I))
+
+
+def run_model(model_dir, archive, snapshots, attempt, frame, contract, settings):
+    report = archive.parent
+    row = gate(f"{attempt}_before", model_dir, report, snapshots)
+    model = OPUS if remaining(row, OPUS) > 0 else HYDROGEN
+    for call in range(2):
+        if model == HYDROGEN and remaining(row, HYDROGEN) < FLOOR:
+            row["error"] = "Gemini quota is below the 30% stop threshold."
+            quota_report(report, snapshots)
+            raise Halt(row["error"])
+        row["model"] = model
+        quota_report(report, snapshots)
+        try:
+            result = command(
+                [AGY, "--model", model, "--settings", settings, "--disable-slash-commands",
+                 "--print-timeout", "210s", "--input-format", "stream-json", "--output-format", "stream-json",
+                 "--json-schema", json.dumps(contract, separators=(",", ":"))],
+                model_dir, payload=json.dumps(frame) + "\n", timeout=240,
+            )
+            write(archive / f"agy_{call + 1}_events.jsonl", result.stdout)
+            write(archive / f"agy_{call + 1}.log", result.stderr)
+        finally:
+            after = gate(f"{attempt}_after_{call + 1}", model_dir, report, snapshots, model=model)
+        events = [json.loads(line) for line in result.stdout.splitlines() if line.strip().startswith("{")]
+        if any(event.get("step_update", {}).get("tool_name") for event in events):
+            raise Halt("Antigravity attempted a tool call during the source-only run.")
+        response = next((event["result"] for event in reversed(events) if event.get("event") == "result"), {})
+        success = not result.returncode and response.get("status") == "SUCCESS"
+        limited = not success and rate_limited(result, response)
+        after["outcome"] = "success" if success else "rate_limited" if limited else "error"
+        quota_report(report, snapshots)
+        if model == HYDROGEN and remaining(after, HYDROGEN) < FLOOR:
+            after["error"] = "Gemini quota is below the 30% stop threshold."
+            quota_report(report, snapshots)
+            raise Halt(after["error"])
+        if success:
+            return response, model
+        if model == OPUS and (limited or remaining(after, OPUS) == 0):
+            model = HYDROGEN
+            row = gate(f"{attempt}_fallback_before", model_dir, report, snapshots)
+            continue
+        raise Halt(f"Antigravity {model} did not return a successful result (exit {result.returncode}).")
+    raise Halt("Antigravity model routing exhausted its fallback.")
+
 
 
 def schema(**fields):
@@ -211,26 +292,7 @@ def gemini(model_dir, archive, snapshots, source, summary_language, *,
     frame = {"event": "user", "message": {"content": prompt}}
     contract = REVIEW_SCHEMA if audit else PROPOSAL_SCHEMA
     archive.mkdir(parents=True, exist_ok=True)
-    gate(f"{attempt}_before_gemini", model_dir, archive.parent, snapshots)
-    try:
-        result = command(
-            [AGY, "--model", MODEL, "--settings", settings, "--disable-slash-commands",
-             "--print-timeout", "210s", "--input-format", "stream-json", "--output-format", "stream-json",
-             "--json-schema", json.dumps(contract, separators=(",", ":"))],
-            model_dir, payload=json.dumps(frame) + "\n", timeout=240,
-        )
-        write(archive / "gemini_events.jsonl", result.stdout)
-        write(archive / "gemini_cli.log", result.stderr)
-    finally:
-        gate(f"{attempt}_after_gemini", model_dir, archive.parent, snapshots)
-    if result.returncode:
-        raise Halt(f"Antigravity exited with code {result.returncode}.")
-    events = [json.loads(line) for line in result.stdout.splitlines() if line.strip().startswith("{")]
-    if any(event.get("step_update", {}).get("tool_name") for event in events):
-        raise Halt("Antigravity attempted a tool call during the source-only run.")
-    response = next((event["result"] for event in reversed(events) if event.get("event") == "result"), {})
-    if response.get("status") != "SUCCESS":
-        raise Halt("Antigravity did not return a successful result.")
+    response, model = run_model(model_dir, archive, snapshots, attempt, frame, contract, settings)
     proposal = response.get("structured_output")
     if not isinstance(proposal, dict):
         content = response["response"].strip()
@@ -241,12 +303,12 @@ def gemini(model_dir, archive, snapshots, source, summary_language, *,
     if audit:
         if proposal.get("decision") not in {"approve", "reject"} or not isinstance(proposal.get("findings"), str):
             raise Halt("Invalid Antigravity audit output.")
-        save(archive / "audit.json", {"conversation": response.get("conversation_id"), **proposal})
+        save(archive / "audit.json", {"conversation": response.get("conversation_id"), "model": model, **proposal})
         return proposal
     write(archive / "proposal.md",
           f"# {proposal['title']}\n\n{proposal['rationale']}\n\n## Acceptance\n\n{proposal['acceptance']}\n")
     write(archive / "gemini_self_review.md",
-          f"# {MODEL}\n\nConversation: {response.get('conversation_id', 'unknown')}\n\n{proposal['self_review']}\n")
+          f"# {model}\n\nConversation: {response.get('conversation_id', 'unknown')}\n\n{proposal['self_review']}\n")
     save(archive / "selection.json", {"key": proposal.get("desire_key", ""),
                                        "summary": str(proposal["qq_summary"]).strip()[:220]})
     return proposal
@@ -575,8 +637,16 @@ def run(args, archive, notice):
                 message = recorded["summary"] or message
             outcome = notice["stopped"].format(stage=stage)
             print(str(error), flush=True)
-        values = [row.get("Five Hour", {}).get("remaining_percent") for row in snapshots]
-        usage = " → ".join(notice["unknown"] if value is None else f"{value}%" for value in values)
+        report = json.loads((archive / "usage_report.json").read_text(encoding="utf-8")) if snapshots else {}
+        def summarize(model):
+            label = MODEL_GROUPS[model]
+            group = report.get("groups", {}).get(label, {})
+            values = [group.get(key) for key in ("initial", "final")]
+            if not all(values):
+                return notice["unknown"]
+            return " → ".join(f"{value['remaining_percent']}%" for value in values)
+        names = ", ".join(report.get("models_used") or report.get("models_attempted") or []) or notice["unknown"]
+        usage = f"{names} | Opus (Claude/GPT): {summarize(OPUS)} | Gemini: {summarize(HYDROGEN)}"
         audits = sorted(archive.glob("*/audit.json"), key=lambda path: path.stat().st_mtime_ns)
         reviews = list(archive.glob("codex_*/codex_timing.json"))
         state = json.loads(audits[-1].read_text(encoding="utf-8"))["decision"] if audits else "pending"

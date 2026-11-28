@@ -12,35 +12,84 @@ if os.name != 'nt':
 from tools import autonomy_dev
 
 
-def quota(five_hour, weekly=90):
+def quota(five_hour, weekly=90, *, opus=55, opus_weekly=80):
     return (
         f"Gemini Models\tWeekly Limit Remaining\t{weekly}%\tweekly-reset\n"
         f"Gemini Models\tFive Hour Limit Remaining\t{five_hour}%\twindow-reset\n"
-        "Claude and GPT models\tFive Hour Limit Remaining\t100%\tnot-a-gemini-row\n"
+        f"Claude and GPT models\tWeekly Limit Remaining\t{opus_weekly}%\tweekly-reset\n"
+        f"Claude and GPT models\tFive Hour Limit Remaining\t{opus}%\twindow-reset\n"
     )
 
 
+def result(stdout="", *, stderr="", code=0):
+    return subprocess.CompletedProcess([], code, stdout=stdout, stderr=stderr)
+
+
+MODEL_OK = result('{"event":"result","result":{"status":"SUCCESS"}}\n')
+
+
 class AutonomyDevelopmentTests(unittest.TestCase):
-    def test_quota_uses_only_gemini_and_rejects_missing_or_duplicate_rows(self):
-        self.assertEqual(autonomy_dev.quota_snapshot(quota(42))["Five Hour"]["remaining_percent"], 42)
-        for invalid in ("", quota(101), quota(50) + quota(50)):
+    def test_quota_reads_both_groups_and_rejects_missing_or_duplicate_rows(self):
+        groups = autonomy_dev.quota_snapshot(quota(42))
+        self.assertEqual(groups["Gemini Models"]["Five Hour"]["remaining_percent"], 42)
+        self.assertEqual(groups["Claude and GPT models"]["Five Hour"]["remaining_percent"], 55)
+        for invalid in ("", quota(101), quota(50) + quota(50), quota(50).splitlines()[0]):
             with self.subTest(invalid=invalid), self.assertRaises(autonomy_dev.Halt):
                 autonomy_dev.quota_snapshot(invalid)
 
-    def test_postflight_below_threshold_records_actual_change_and_stops(self):
-        def output(remaining):
-            return subprocess.CompletedProcess([], 0, stdout=quota(remaining), stderr="")
-
+    def test_opus_is_preferred_even_when_gemini_hits_the_floor(self):
         with tempfile.TemporaryDirectory() as temp:
-            archive = Path(temp)
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
             snapshots = []
-            with patch.object(autonomy_dev, "command", side_effect=[output(35), output(29)]):
-                autonomy_dev.gate("before_gemini", archive, archive, snapshots)
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(28)), MODEL_OK, result(quota(26, opus=53)),
+            ]) as cli:
+                _, model = autonomy_dev.run_model(root, run, snapshots, "repair", {}, {}, root / "settings")
+            self.assertEqual(model, autonomy_dev.OPUS)
+            self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.OPUS)
+            report = json.loads((root / "usage_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["groups"]["Claude and GPT models"]["net_change_points"], -2)
+
+    def test_opus_rate_limit_rechecks_quota_before_hydrogen_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(35)), result(code=1, stderr="HTTP 429 RESOURCE_EXHAUSTED"),
+                result(quota(35)), result(quota(35)), MODEL_OK, result(quota(34)),
+            ]) as cli:
+                _, model = autonomy_dev.run_model(root, run, [], "repair", {}, {}, root / "settings")
+            self.assertEqual(model, autonomy_dev.HYDROGEN)
+            self.assertEqual(cli.call_args_list[4].args[0][2], autonomy_dev.HYDROGEN)
+
+    def test_hydrogen_stops_on_postflight_floor_breach(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(35, opus=0)), MODEL_OK, result(quota(29, opus=0)),
+            ]):
                 with self.assertRaisesRegex(autonomy_dev.Halt, "below the 30%"):
-                    autonomy_dev.gate("after_gemini", archive, archive, snapshots)
-            report = json.loads((archive / "usage_report.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["five_hour_net_change_points"], -6)
-            self.assertIn("error", report["snapshots"][1])
+                    autonomy_dev.run_model(root, run, [], "repair", {}, {}, root / "settings")
+            report = json.loads((root / "usage_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["groups"]["Gemini Models"]["net_change_points"], -6)
+            self.assertIn("error", report["snapshots"][-1])
+
+    def test_other_opus_errors_do_not_spend_gemini_quota(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(35)), result(code=1, stderr="Authentication failed"), result(quota(35)),
+            ]) as cli:
+                with self.assertRaises(autonomy_dev.Halt):
+                    autonomy_dev.run_model(root, run, [], "repair", {}, {}, root / "settings")
+            self.assertEqual(cli.call_count, 3)
 
     def test_second_lock_is_rejected_and_released(self):
         with tempfile.TemporaryDirectory() as temp:

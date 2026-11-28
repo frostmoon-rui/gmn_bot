@@ -159,7 +159,7 @@ quota response or a five-hour or weekly reading below 30%. The Windows process
 lock prevents overlapping jobs from this account. Quota readings are observations
 and can include activity outside the job.
 
-Hydrogen receives tracked public Python source, tests and package documentation.
+Antigravity receives tracked public Python source, tests and package documentation.
 It returns scoped replacements and a self-review. The runner executes the fixed
 package and host test commands in disposable checkouts with the candidate on the
 import path. Only an approved, tested patch can be committed and pushed with its
@@ -193,3 +193,7 @@ same version on the same autonomy base resumes the latest stopped checkpoint
 and locks its selected topic. Start with `--fresh` to choose a new topic, or use
 `--resume-from-patch PATH` to select a particular checkpoint directory or patch.
 The pipeline reruns all checks on the resumed candidate.
+
+Opus availability is measured through the shared Claude/GPT quota group. The
+report records both groups, attempted models and successful model calls. It
+shows quota changes only within the same refresh window.
