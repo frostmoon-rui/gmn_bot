@@ -1,4 +1,4 @@
-"""Isolated paid-key access for explicit research planning and Argon questions."""
+"""Isolated paid Gemini requests with a shared daily attempt limit."""
 import asyncio
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -7,7 +7,10 @@ import sqlite3
 
 from local_settings import setting
 
+PAID_DRAWING_MODEL = 'gemini-3.1-flash-lite-image'
+
 PAID_MODELS = {
+    'drawing': (PAID_DRAWING_MODEL,),
     'research-plan': ('gemini-4-argon', 'gemini-3.8-flash'),
     'argon-answer': ('gemini-4-argon',),
     'carbon-answer': ('gemini-4-carbon',),
@@ -49,8 +52,9 @@ async def generate_paid(bot, model, prompt, config, purpose):
         from google import genai
         client = genai.Client(api_key=key)
         bot._paid_research_client = client
+    timeout = 60 if purpose == 'drawing' else 600
     options = dict(config, tools=[], max_output_tokens=min(config.get('max_output_tokens', 4096), 4096),
-                   http_options={'timeout': 600000, 'retry_options': {'attempts': 1}})
+                   http_options={'timeout': timeout * 1000, 'retry_options': {'attempts': 1}})
     print('[Paid Gemini]: Reserved one daily attempt;', purpose, model)
     return await asyncio.wait_for(client.aio.models.generate_content(
-        model=model, contents=prompt[:24000], config=bot.gemini_content_config(**options)), timeout=600)
+        model=model, contents=prompt[:24000], config=bot.gemini_content_config(**options)), timeout=timeout)

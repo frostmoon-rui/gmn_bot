@@ -3,7 +3,7 @@ if __name__ == '__main__':
     _instance_lock = require_instance(__file__)
 
 from local_settings import setting
-from drawing_provider import fetch_pollinations_image
+from drawing_provider import generate_drawing
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
 from open_music import OfficialMusic, OpenMusic, netease_search_url
 from model_proxy import select_model_proxy
@@ -1148,9 +1148,11 @@ Output only the English prompt. Preserve requested text to appear in the image e
             (1152, 768) if re.search(r'landscape format|horizontal|16[:：]9', raw_prompt, re.I) else (1024, 1024))
 
         try:
-            image = await asyncio.to_thread(
-                fetch_pollinations_image, final_en_prompt, width, height,
+            requested_ratio = re.search(r"(?<!\d)(9[:：]16|16[:：]9)(?!\d)", raw_prompt)
+            image = await generate_drawing(
+                sys.modules[__name__], final_en_prompt, width, height,
                 proxy=TARGET_PROXY, api_key=setting('POLLINATIONS_API_KEY', ''),
+                aspect_ratio=requested_ratio[0].replace("：", ":") if requested_ratio else None,
             )
             b64_data = base64.b64encode(image).decode("utf-8")
             print(f"[Image generated] Base64 length: {len(b64_data)}")
