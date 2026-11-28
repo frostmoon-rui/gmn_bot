@@ -200,13 +200,12 @@ Opus availability is measured through the shared Claude/GPT quota group. The
 report records both groups, attempted models and successful model calls. It
 shows quota changes only within the same refresh window.
 
-The bot can start one automatic check during 04:00–04:15 Beijing time. Set
-`ENABLE_AUTO_EVOLUTION` locally to enable it. A compatible checkpoint or a desire
-score of at least 3.0 is required, along with a free pipeline lock, usable quota
-and 24 hours since the last automatic run. Skips are recorded locally only.
-Successful starts and their eventual outcome use the existing owner-only QQ notice.
-Run `python tools/autonomy_dev.py --dry-run --runtime PATH` to inspect the gates
-and quota without acquiring an evolution slot, notifying the owner or releasing.
+On the first identified NapCat connection after startup, the bot checks for an
+interrupted development job from a previous Windows boot. It can resume one
+matching checkpoint or rerun the unfinished stage. A confirmed remote tag is
+never pushed again. A QQ send with uncertain delivery is held for manual
+verification. The persistent lock records its owning process and can be reclaimed
+after that process exits. This recovery uses no scheduled task.
 
 The exact owner can use `pause automatic evolution` and `resume automatic evolution`
 in private chat. A running task observes pause before its next model or

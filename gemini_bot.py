@@ -2833,17 +2833,6 @@ async def main():
     videos = VideoSummaries(sys.modules[__name__])
     # Resolve locations lazily when their weather or map information is requested.
     extensions.spawn(extensions.nightly())
-    if auto_evolution.enabled(setting('ENABLE_AUTO_EVOLUTION', False)):
-        runtime_path = Path(__file__).resolve().parent
-        local_runner = runtime_path / 'tools' / 'autonomy_dev.py'
-        default_runner = local_runner if local_runner.is_file() else (
-            runtime_path.with_name('gmn_bot_git') / 'tools' / 'autonomy_dev.py')
-        runner_path = Path(setting('AUTO_EVOLUTION_RUNNER') or default_runner).resolve()
-        notice_path = setting('AUTO_EVOLUTION_NOTICE_CONFIG')
-        if runner_path.is_file():
-            extensions.spawn(auto_evolution.supervise(runtime_path, runner_path, lambda: active_ws,
-                                                       notice=notice_path, codex=setting('AUTO_EVOLUTION_CODEX_EXE')))
-            print('[Auto evolution]: enabled, 04:00 Beijing check')
     extensions.spawn(features.reminder_loop())
     from runtime_maintenance import maintenance_loop
     extensions.spawn(maintenance_loop(sys.modules[__name__],Path(__file__).resolve().parent))
@@ -2973,6 +2962,7 @@ async def main():
     extensions.spawn(background_periodic_monitor(lambda: active_ws))
     extensions.spawn(extensions.earthquake_monitor())
 
+    recovery_checked = False
     event_deduplicator = EventDeduplicator()
     while True:
         dispatcher = SessionDispatcher()
@@ -3010,6 +3000,13 @@ async def main():
                         continue
                     if data.get('self_id') is not None:
                         ws.self_id = data['self_id']
+                        if ws.self_id and not recovery_checked:
+                            recovery_checked = True
+                            extensions.spawn(auto_evolution.recover_at_startup(
+                                Path(__file__).resolve().parent, ws.self_id,
+                                launcher=setting('AUTO_EVOLUTION_RUNNER') or None,
+                                notice=setting('AUTO_EVOLUTION_NOTICE_CONFIG'),
+                                codex=setting('AUTO_EVOLUTION_CODEX_EXE')))
                     if data.get('post_type') == 'meta_event' or not ws.allows_event(data):
                         continue
                     if event_deduplicator.is_duplicate(data):

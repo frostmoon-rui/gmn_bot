@@ -4,6 +4,7 @@ import argparse
 import asyncio
 from contextlib import closing, contextmanager, nullcontext
 from datetime import datetime, timezone
+import ctypes
 import hashlib
 import json
 import msvcrt
@@ -60,19 +61,89 @@ def save(path, value):
     write(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
+def boot_time():
+    kernel = ctypes.WinDLL("kernel32")
+    kernel.GetTickCount64.restype = ctypes.c_ulonglong
+    return time.time() - kernel.GetTickCount64() / 1000
+
+
+def pid_alive(pid):
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+    handle = kernel.OpenProcess(0x00100000, False, pid)
+    if not handle:
+        return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such process
+    try:
+        return kernel.WaitForSingleObject(handle, 0) != 0
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def read_record(path):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def durable_record(path, data):
+    pending = path.with_suffix(".tmp")
+    with pending.open("w", encoding="utf-8") as stream:
+        json.dump(data, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    pending.replace(path)
+
+
 @contextmanager
 def single_flight(path):
-    with path.open("a+b") as lock:
-        lock.seek(0)
+    # Keep the file in place: unlinking it can split locks between two workers.
+    with os.fdopen(os.open(path, os.O_CREAT | os.O_RDWR | os.O_BINARY), "r+b", buffering=0) as lock:
         try:
             msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as error:
             raise Halt("Another development job is running.") from error
+        claimed = False
         try:
+            lock.seek(1)
+            try:
+                previous = json.loads(lock.read() or b"{}")
+            except ValueError:
+                previous = {}
+            boot = boot_time()
+            if (isinstance(previous, dict) and type(previous.get("pid")) is int
+                    and isinstance(previous.get("boot"), (int, float)) and abs(previous["boot"] - boot) < 5
+                    and pid_alive(previous["pid"])):
+                raise Halt("Another development worker owns the lock.")
+            lock.seek(0)
+            lock.write(b" " + json.dumps({"pid": os.getpid(), "boot": boot}).encode())
+            lock.truncate()
+            claimed = True
             yield
         finally:
             lock.seek(0)
+            if claimed:
+                lock.truncate(1)
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def track_run(args, archive):
+    path = archive / "run_state.json"
+    record = {"state": "running", "pid": os.getpid(), "boot": boot_time(),
+              "runtime": str(args.runtime.resolve()), "version": args.version,
+              "started_at": time.time(),
+              "account": args.bot_account, "hold_release": args.hold_release,
+              "resume_from_patch": args.resume_from_patch,
+              "bootstrap_patch": str(args.bootstrap_patch.resolve()) if args.bootstrap_patch else None}
+    durable_record(path, record)
+    try:
+        yield
+    finally:
+        durable_record(path, record | {"state": "finished"})
 
 
 def quota_snapshot(output):
@@ -510,7 +581,7 @@ def clone(source, target):
     git(target, "remote", "remove", "origin")
 
 
-def release(repo, base, version, changed, patch, *, active=lambda: None):
+def release(repo, base, version, changed, patch, *, active=lambda: None, intent=None):
     refs = git(repo, "ls-remote", REMOTE, "refs/heads/main", f"refs/tags/v{version}").splitlines()
     if refs != [f"{base}\trefs/heads/main"]:
         raise Halt("Remote main advanced or the release tag already exists.")
@@ -524,6 +595,8 @@ def release(repo, base, version, changed, patch, *, active=lambda: None):
     commit = git(repo, "rev-parse", "HEAD").strip()
     git(repo, "tag", f"v{version}")
     active()
+    if intent is not None:
+        durable_record(intent, {"commit": commit, "tag": f"v{version}"})
     git(repo, "push", "--atomic", REMOTE, "HEAD:refs/heads/main", f"refs/tags/v{version}")
     refs = git(repo, "ls-remote", REMOTE, "refs/heads/main", f"refs/tags/v{version}").splitlines()
     if set(refs) != {f"{commit}\trefs/heads/main", f"{commit}\trefs/tags/v{version}"}:
@@ -639,6 +712,8 @@ def run(args, archive, notice, *, lock_held=False, snapshots=None):
     snapshots = [] if snapshots is None else snapshots
 
     def active():
+        if getattr(args, "resume_interrupted", False) and auto_evolution.state(args.runtime)[0]:
+            raise Halt("Startup recovery is paused.")
         if getattr(args, "auto", False):
             if not auto_evolution.configured(args.runtime) or auto_evolution.state(args.runtime)[0]:
                 raise Halt("Automatic evolution was paused before the next stage.")
@@ -646,7 +721,7 @@ def run(args, archive, notice, *, lock_held=False, snapshots=None):
     message = notice["no_proposal"]
     stage = "preflight"
     succeeded = False
-    with (nullcontext() if lock_held else single_flight(DATA / "pipeline.lock")):
+    with (nullcontext() if lock_held else single_flight(DATA / "pipeline.lock")), track_run(args, archive):
         try:
             active()
             with tempfile.TemporaryDirectory(prefix="gmn-autonomy-dev-") as tmp:
@@ -698,7 +773,8 @@ def run(args, archive, notice, *, lock_held=False, snapshots=None):
                 write(archive / "changes.patch", patch)
                 stage = "publication"
                 active()
-                commit = release(repo, base, args.version, changed, patch, active=active)
+                commit = release(repo, base, args.version, changed, patch, active=active,
+                                 intent=archive / "publish_intent.json")
                 save(archive / "release.json", {"commit": commit, "tag": f"v{args.version}"})
                 desire_outcome(database, account, topic, "released")
                 outcome = notice["released"].format(version=args.version, commit=commit[:12])
@@ -733,14 +809,107 @@ def run(args, archive, notice, *, lock_held=False, snapshots=None):
         update = notice["format"].format(summary=message, outcome=outcome + "\n" + result_summary,
                                          usage=usage or notice["unknown"], archive=archive)
         write(archive / "qq_update.txt", update)
-        try:
-            receipt = asyncio.run(notify(args.runtime, update))
-        except Exception as error:
-            receipt = {"status": "unconfirmed", "error": str(error)}
+        receipt = send_once(args.runtime, archive, update)
+        if receipt["status"] != "ok":
             succeeded = False
-        save(archive / "qq_receipt.json", receipt)
         print(f"QQ notification: {receipt['status']}", flush=True)
     return 0 if succeeded else 1
+
+
+def send_once(runtime, archive, message):
+    receipt_path = archive / "qq_receipt.json"
+    intent = archive / "qq_send_intent.json"
+    if receipt_path.exists():
+        return read_record(receipt_path) or {"status": "unconfirmed"}
+    if intent.exists():
+        # A lost acknowledgment cannot distinguish accepted from unsent.
+        return {"status": "unconfirmed"}
+    durable_record(intent, {"state": "submitting"})
+    try:
+        receipt = asyncio.run(notify(runtime, message))
+    except Exception as error:
+        receipt = {"status": "unconfirmed", "error": type(error).__name__}
+    durable_record(receipt_path, receipt)
+    return receipt
+
+
+def last_shutdown():
+    """Read Windows' shutdown marker when Fast Startup preserved kernel uptime."""
+    script = ("$event = Get-WinEvent -FilterHashtable @{LogName='System'; "
+              "ProviderName='Microsoft-Windows-Kernel-General'; Id=13} "
+              "-MaxEvents 1 -ErrorAction SilentlyContinue; "
+              "if ($event) { ([DateTimeOffset]$event.TimeCreated).ToUnixTimeSeconds() }")
+    try:
+        result = command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], HOST, timeout=8)
+        return float(result.stdout.strip()) if result.returncode == 0 else 0
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 0
+
+
+def interrupted_jobs(root, runtime, current_boot):
+    shutdown = None
+    for folder in sorted((p for p in root.iterdir() if p.is_dir()), reverse=True):
+        entry = read_record(folder / "run_state.json")
+        if (entry.get("state") != "running" or entry.get("runtime") != str(runtime.resolve())
+                or type(entry.get("pid")) is not int or not isinstance(entry.get("boot"), (int, float))):
+            continue
+        if entry["boot"] < current_boot - 5:
+            yield folder, entry
+        elif isinstance(entry.get("started_at"), (int, float)) and not pid_alive(entry["pid"]):
+            if shutdown is None:
+                shutdown = last_shutdown()
+            if shutdown > entry["started_at"]:
+                yield folder, entry
+
+
+def recover_interrupted(args, notice):
+    try:
+        with single_flight(DATA / "pipeline.lock"):
+            if auto_evolution.state(args.runtime)[0]:
+                return 0
+            for folder, entry in interrupted_jobs(DATA, args.runtime, boot_time()):
+                version = entry.get("version")
+                if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+                    continue
+                if entry.get("account") is not None and entry["account"] != args.bot_account:
+                    continue
+                tag = f"v{version}"
+                published = read_record(folder / "release.json") or read_record(folder / "publish_intent.json")
+                rows = git(args.repo, "ls-remote", REMOTE, "refs/heads/main", f"refs/tags/{tag}").splitlines()
+                refs = {name: commit for commit, name in (row.split("\t") for row in rows)}
+                remote_tag = refs.get(f"refs/tags/{tag}")
+                receipt = folder / "qq_receipt.json"
+                sent_or_uncertain = receipt.exists() or (folder / "qq_send_intent.json").exists()
+                if remote_tag:
+                    if published.get("commit") == remote_tag and published.get("tag") == tag:
+                        durable_record(folder / "release.json", {"commit": remote_tag, "tag": tag})
+                        if not sent_or_uncertain:
+                            send_once(args.runtime, folder, notice["released"].format(
+                                version=version, commit=remote_tag[:12]))
+                    durable_record(folder / "run_state.json", entry | {"state": "finished"})
+                    return 0
+                if sent_or_uncertain or (folder / "stopped.json").exists() or (folder / "release.json").exists():
+                    durable_record(folder / "run_state.json", entry | {"state": "finished"})
+                    continue
+                base = read_record(folder / "inputs.json").get("autonomy")
+                local_base = git(args.repo, "rev-parse", "main").strip()
+                if refs.get("refs/heads/main") != local_base or (base and base != local_base):
+                    continue
+                args.version = version
+                args.hold_release = bool(entry["hold_release"])
+                if (folder / "resume.json").exists():
+                    if not load_resume(folder, local_base, version):
+                        continue
+                    args.resume_from_patch = str(folder)
+                    args.bootstrap_patch = None
+                else:
+                    args.resume_from_patch = entry.get("resume_from_patch")
+                    args.bootstrap_patch = Path(entry["bootstrap_patch"]) if entry.get("bootstrap_patch") else None
+                durable_record(folder / "startup_recovery.json", {"previous_pid": entry["pid"], "boot": boot_time()})
+                return run(args, folder, notice, lock_held=True)
+    except (Halt, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+        print(f"Startup recovery skipped ({type(error).__name__}).", flush=True)
+    return 0
 
 
 DEFAULT_NOTICE = {
@@ -836,13 +1005,14 @@ def main():
     parser.add_argument("--version")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--auto", action="store_true", help="Check daily automatic evolution gates")
+    mode.add_argument("--resume-interrupted", action="store_true", help="Recover one interrupted job after startup")
     mode.add_argument("--dry-run", action="store_true", help="Inspect automatic gates without starting development")
     parser.add_argument("--hold-release", action="store_true")
     parser.add_argument("--notice-config", type=Path)
     args = parser.parse_args()
     if args.fresh or args.bootstrap_patch:
         args.resume_from_patch = None
-    if not (args.auto or args.dry_run) and not re.fullmatch(r"\d+\.\d+\.\d+", args.version or ""):
+    if not (args.auto or args.dry_run or args.resume_interrupted) and not re.fullmatch(r"\d+\.\d+\.\d+", args.version or ""):
         parser.error("--version must be MAJOR.MINOR.PATCH")
     if (args.auto or args.dry_run) and (args.version or args.bootstrap_patch or args.fresh or args.resume_from_patch != "auto"):
         parser.error("Automatic checks select the next published patch version and its checkpoint.")
@@ -853,6 +1023,9 @@ def main():
                                                  for key, text in settings.items()):
             parser.error("The notice configuration must contain supported string keys.")
         notice.update(settings)
+    DATA.mkdir(parents=True, exist_ok=True)
+    if args.resume_interrupted:
+        return recover_interrupted(args, notice)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     archive = DATA / f"{stamp}_{uuid.uuid4().hex[:8]}"
     archive.mkdir(parents=True)

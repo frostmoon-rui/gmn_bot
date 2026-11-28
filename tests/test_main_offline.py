@@ -693,12 +693,16 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         if configured is not None:
             settings['ENABLE_AUTONOMY'] = configured
         scope['setting'] = lambda name, default='': settings.get(name, default)
+        recovery = AsyncMock()
+        scope["auto_evolution"] = SimpleNamespace(recover_at_startup=recovery, command_action=auto_evolution.command_action)
         main = asyncio.create_task(scope['main']())
         try:
             async with asyncio.timeout(2):
                 while scope['self_last_message_ids'].get('group_20') != [333] or scope['self_last_message_ids'].get('group_21') != [333]:
                     await asyncio.sleep(0)
             self.assertIn('test-model', transmitted[0]['params']['message'][0]['data']['text'])
+            recovery.assert_awaited_once()
+            self.assertEqual(recovery.call_args.args[1], 999)
             self.assertEqual(scope['msg_cache'][333]['user_id'], 999)
             self.assertEqual({request['params']['group_id'] for request in transmitted}, {20, 21})
             self.assertEqual(scope.get('autonomy_bridge') is not None, enabled(switch))

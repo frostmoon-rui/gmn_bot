@@ -282,3 +282,91 @@ class AutonomyDevelopmentTests(unittest.TestCase):
                                                   role="native")
             self.assertEqual(model, autonomy_dev.NEON_ORCHESTRATOR)
             self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.NEON_ORCHESTRATOR)
+
+
+    def test_dead_pid_residue_does_not_block_kernel_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "pipeline.lock"
+            path.write_bytes(b' {"pid": 999, "boot": 1000}')
+            with patch.object(autonomy_dev, "boot_time", return_value=1000), \
+                    patch.object(autonomy_dev, "pid_alive", return_value=False) as alive:
+                with autonomy_dev.single_flight(path):
+                    with path.open("rb") as stream:
+                        stream.seek(1)
+                        self.assertEqual(json.loads(stream.read())["pid"], os.getpid())
+                alive.assert_called_once_with(999)
+            self.assertEqual(path.read_bytes(), b" ")
+
+    def test_startup_only_resumes_previous_boot_with_matching_base_and_checkpoint(self):
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = SimpleNamespace(runtime=root, repo=root, bot_account=7)
+            eligible = root / "first"
+            eligible.mkdir()
+            metadata = {"pid": 51, "runtime": str(root), "version": "0.3.3",
+                        "account": 7, "hold_release": False, "state": "running"}
+            autonomy_dev.save(eligible / "run_state.json", metadata | {"boot": 100})
+            autonomy_dev.save(eligible / "inputs.json", {"autonomy": "base", "version": "0.3.3"})
+            autonomy_dev.checkpoint(eligible, "patch", {"desire_key": "memory_precision"}, "Finish tests")
+            same_boot = root / "second"
+            same_boot.mkdir()
+            autonomy_dev.save(same_boot / "run_state.json", metadata | {"boot": 200})
+            normal_exit = root / "third"
+            normal_exit.mkdir()
+            autonomy_dev.save(normal_exit / "run_state.json", metadata | {"boot": 100, "state": "finished"})
+            with (
+                patch.object(autonomy_dev, "DATA", root),
+                patch.object(autonomy_dev, "boot_time", return_value=200),
+                patch.object(autonomy_dev, "git", side_effect=["base\trefs/heads/main\n", "base\n"]),
+                patch.object(autonomy_dev, "run", return_value=0) as run,
+            ):
+                self.assertEqual(autonomy_dev.recover_interrupted(args, {}), 0)
+            self.assertEqual(args.resume_from_patch, str(eligible))
+            self.assertEqual(run.call_args.args[1], eligible)
+            self.assertTrue(run.call_args.kwargs["lock_held"])
+
+    def test_startup_recognizes_published_tag_and_never_resends_uncertain_notice(self):
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = SimpleNamespace(runtime=root, repo=root, bot_account=7)
+            job = root / "job"
+            job.mkdir()
+            autonomy_dev.save(job / "run_state.json", {
+                "state": "running", "runtime": str(root), "boot": 100,
+                "version": "0.3.3", "pid": 55,
+            })
+            autonomy_dev.save(job / "publish_intent.json", {"tag": "v0.3.3", "commit": "published"})
+            autonomy_dev.save(job / "qq_send_intent.json", {"state": "submitting"})
+            with (
+                patch.object(autonomy_dev, "DATA", root),
+                patch.object(autonomy_dev, "boot_time", return_value=200),
+                patch.object(autonomy_dev, "git", return_value="published\trefs/tags/v0.3.3\n"),
+                patch.object(autonomy_dev, "run") as run,
+                patch.object(autonomy_dev, "notify") as notify,
+            ):
+                self.assertEqual(autonomy_dev.recover_interrupted(args, {}), 0)
+            run.assert_not_called()
+            notify.assert_not_called()
+            self.assertEqual(autonomy_dev.read_record(job / "release.json")["commit"], "published")
+            self.assertEqual(autonomy_dev.read_record(job / "run_state.json")["state"], "finished")
+
+
+    def test_fast_startup_requires_shutdown_after_dead_worker_started(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, started in (("after", 240), ("before", 210)):
+                job = root / name
+                job.mkdir()
+                autonomy_dev.save(job / "run_state.json", {
+                    "state": "running", "runtime": str(root), "boot": 200,
+                    "started_at": started, "pid": 52,
+                })
+            with patch.object(autonomy_dev, "pid_alive", return_value=False), \
+                    patch.object(autonomy_dev, "last_shutdown", return_value=220) as marker:
+                entries = list(autonomy_dev.interrupted_jobs(root, root, 200))
+            self.assertEqual([folder.name for folder, _ in entries], ["before"])
+            marker.assert_called_once()

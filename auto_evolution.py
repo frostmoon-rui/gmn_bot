@@ -85,37 +85,34 @@ def command_action(message_type, actor, owner, text, aliases=()):
     return names.get(text.strip().rstrip(".!。！").strip().casefold())
 
 
-async def supervise(runtime, launcher, websocket, notice=None, codex=None):
-    """Start at most one check per low-traffic window; the pipeline owns all gates."""
-    while True:
-        try:
-            _, checked, _ = await asyncio.to_thread(state, runtime)
-            now = datetime.now(BEIJING)
-            ws = websocket()
-            account = getattr(ws, "self_id", None)
-            if within_window(now) and checked != now.date().isoformat() and account:
-                args = [sys.executable, str(launcher), "--auto", "--runtime", str(runtime),
-                        "--bot-account", str(account)]
-                if notice:
-                    args += ["--notice-config", str(notice)]
-                env = {key: value for key, value in os.environ.items()
-                       if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
-                                          "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
-                                          "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-                                          "ENABLE_AUTO_EVOLUTION"}}
-                if codex:
-                    env["AUTO_EVOLUTION_CODEX_EXE"] = str(codex)
-                child = await asyncio.create_subprocess_exec(
-                    *args, cwd=str(launcher.parent.parent), env=env,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                await child.wait()
-                # Even an operational failure is one scheduler check per day.
-                await asyncio.to_thread(update, runtime, checked_day=now.date().isoformat())
-            delay = max(1, (next_check(now, checked) - now).total_seconds())
-        except (OSError, sqlite3.Error, ValueError) as error:
-            LOG.warning("Automatic evolution check unavailable (%s)", type(error).__name__)
-            delay = 60
-        await asyncio.sleep(min(60, delay) if delay > 1 else 60)
+async def recover_at_startup(runtime, account, launcher=None, notice=None, codex=None):
+    """Run one recovery scan after an authenticated account arrives from NapCat."""
+    if not account or os.name != "nt":
+        return
+    if launcher is None:
+        launcher = runtime / "tools" / "autonomy_dev.py"
+        if not launcher.is_file():
+            launcher = runtime.with_name("gmn_bot_git") / "tools" / "autonomy_dev.py"
+    launcher = Path(launcher).resolve()
+    if not launcher.is_file():
+        return
+    args = [sys.executable, str(launcher), "--resume-interrupted", "--runtime", str(runtime),
+            "--bot-account", str(account)]
+    if notice:
+        args += ["--notice-config", str(notice)]
+    env = {key: value for key, value in os.environ.items()
+           if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
+                              "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+                              "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}}
+    if codex:
+        env["AUTO_EVOLUTION_CODEX_EXE"] = str(codex)
+    try:
+        child = await asyncio.create_subprocess_exec(
+            *args, cwd=str(launcher.parent.parent), env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        await child.wait()
+    except OSError as error:
+        LOG.warning("Startup recovery could not run (%s)", type(error).__name__)
 
 
 def configured(runtime):
