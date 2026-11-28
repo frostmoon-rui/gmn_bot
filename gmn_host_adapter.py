@@ -27,7 +27,7 @@ class AutonomyBridge:
         self.speech_retry_at = 0.0
 
     @classmethod
-    async def open(cls, switch, database, model, *, normalize=None, **options):
+    async def open(cls, switch, database, model, *, normalize=None, owner=0, **options):
         if not enabled(switch):
             return None
         try:
@@ -35,6 +35,8 @@ class AutonomyBridge:
             from gmn_autonomy.adapters.gmn_host_adapter import GmnHostAdapter
 
             runtime = await ActiveLearningRuntime.open(database, model, **options)
+            if hasattr(runtime.social, 'owner'):
+                runtime.social.owner = owner
             return cls(GmnHostAdapter(runtime), normalize=normalize)
         except Exception as error:
             LOG.warning("Autonomy unavailable at startup (%s); continuing with the host", type(error).__name__)

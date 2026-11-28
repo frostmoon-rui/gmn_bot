@@ -160,10 +160,10 @@ lock prevents overlapping jobs from this account. Quota readings are observation
 and can include activity outside the job.
 
 Hydrogen receives tracked public Python source, tests and package documentation.
-It returns scoped replacements and a self-review. Codex independently reviews the
-patch before it can execute. The helper then runs the package pytest suite and the
-host unittest suite with the candidate on the import path. An approved, tested
-patch can be committed and pushed with its tag in one Git operation. Use
+It returns scoped replacements and a self-review. The runner executes the fixed
+package and host test commands in disposable checkouts with the candidate on the
+import path. Only an approved, tested patch can be committed and pushed with its
+tag in one Git operation. Use
 `--hold-release` to archive a reviewed candidate without pushing.
 
 This command uses the authenticated Antigravity and Codex CLIs, Git credentials,
