@@ -54,6 +54,28 @@ class QQMusicPlayerTests(unittest.TestCase):
 
 
 class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
+    def test_qq_query_variants_keep_japanese_middle_dot_and_strip_annotations(self):
+        from open_music import _qq_search_queries, _title_matches
+
+        query = 'Half・Moon Serenade (Alternate title) - Example artist'
+        self.assertEqual(_query_parts(query), ('Half・Moon Serenade (Alternate title)', 'Example artist'))
+        self.assertEqual(_qq_search_queries(query), [query, 'Half・Moon Serenade (Alternate title)', 'Half・Moon Serenade'])
+        self.assertTrue(_title_matches(Release('Half・Moon Serenade', 'Example artist', '', ''),
+                                       'Half・Moon Serenade (Alternate title)'))
+        self.assertFalse(_title_matches(Release('Half・Moon Serenade (Live)', 'Example artist', '', ''),
+                                        'Half・Moon Serenade (Alternate title)'))
+
+    def test_song_link_without_duration_requires_an_explicit_download(self):
+        from open_music import prepare_platform
+
+        release = Release('Sample', 'Artist', '', 'https://music.163.com/song?id=42')
+        workspace = Path('workspace')
+        with patch('open_music.normalize_link_audio', return_value=('song.wav', 170)) as download, \
+                patch('open_music._encode_track'):
+            prepare_platform(release, 'ffmpeg', workspace)
+        download.assert_called_once_with('ffmpeg', release.source, workspace,
+                                         expected_duration=0, explicit_download=True)
+
     def setUp(self):
         platform = patch('open_music._platform_response', return_value={})
         platform.start()

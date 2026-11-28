@@ -63,6 +63,7 @@ class AudioLinkParser(HTMLParser):
         self.json_ld = None
         self.embedded = []
         self.links = []
+        self.downloads = []
 
     def handle_starttag(self, tag, attrs):
         fields = dict(attrs)
@@ -87,6 +88,8 @@ class AudioLinkParser(HTMLParser):
             href = fields.get('href')
             if href and (mime.startswith('audio/') or mime in HLS_TYPES or _suffix(href) in AUDIO_EXTENSIONS | {'.m3u8'}):
                 self.links.append(href)
+                if tag == "a" and "download" in fields:
+                    self.downloads.append(href)
 
     def handle_data(self, data):
         if self.json_ld is not None:
@@ -160,7 +163,7 @@ def _save_playlist(response, final_url, target, mime):
     return False
 
 
-def fetch_linked_audio(url, target):
+def fetch_linked_audio(url, target, *, explicit_download=False):
     """Download a direct file or return candidate media URLs from one public page."""
     if is_search_page(url):
         raise MediaError('search_page')
@@ -181,7 +184,7 @@ def fetch_linked_audio(url, target):
             return []
         data = _read_document(response)
         if mime in FEED_TYPES:
-            links = _feed_links(data)
+            links = [] if explicit_download else _feed_links(data)
         else:
             parser = AudioLinkParser()
             charset = response.headers.get_content_charset() or 'utf-8'
@@ -190,7 +193,7 @@ def fetch_linked_audio(url, target):
             except (LookupError, UnicodeError):
                 text = data.decode('utf-8', errors='replace')
             parser.feed(text)
-            links = parser.embedded + parser.links
+            links = parser.downloads if explicit_download else parser.embedded + parser.links
     candidates = _candidates(links, final_url)
     if not candidates:
         raise MediaError('page')
@@ -211,7 +214,7 @@ def fetch_candidate(url, target):
         save_media_response(response, target)
 
 
-def normalize_link_audio(ffmpeg, url, workspace, silk_module=None, *, expected_duration=0):
+def normalize_link_audio(ffmpeg, url, workspace, silk_module=None, *, expected_duration=0, explicit_download=False):
     def normalize_candidate(incoming, folder):
         result = normalize_audio(ffmpeg, incoming, folder, silk_module)
         if expected_duration and abs(result[1] - expected_duration) > 3:
@@ -219,7 +222,8 @@ def normalize_link_audio(ffmpeg, url, workspace, silk_module=None, *, expected_d
         return result
 
     incoming = workspace / 'music.media'
-    candidates = fetch_linked_audio(url, incoming)
+    candidates = (fetch_linked_audio(url, incoming, explicit_download=True)
+                  if explicit_download else fetch_linked_audio(url, incoming))
     if not candidates:
         return normalize_candidate(incoming, workspace)
     first_error = None

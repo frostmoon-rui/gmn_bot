@@ -258,13 +258,20 @@ def _query_parts(query):
         title, artist = wrapped.groups()
         artist = artist.lstrip(' -–—·・/|')
     else:
-        fields = re.split(r'\s+[-/|]\s+|\s*[–—·・]\s*|\s+(?=(?:歌手|artist)\s*:)', value, maxsplit=1, flags=re.I)
+        fields = re.split(r'\s+[-/|]\s+|\s*[–—·]\s*|\s+・\s+|\s+(?=(?:歌手|artist)\s*:)', value, maxsplit=1, flags=re.I)
         title, artist = fields[0], fields[1] if len(fields) > 1 else ''
     artist = re.sub(r'^(?:歌手|artist)\s*(?::|是)\s*', '', artist, flags=re.I).strip()
     title = _clean_title(title)
     # Incomplete closing punctuation is common when copying a version label from chat.
     title = re.sub(r'\{\s*(explicit|clean)(?:\s*\})?$', r'(\1)', title, flags=re.I)
     return title or query, artist
+
+
+def _qq_search_queries(query):
+    title, artist = _query_parts(query)
+    bare = re.sub(r'\s*\([^()]*\)', '', title).strip()
+    short = bare[:32].rsplit(' ', 1)[0] if len(bare) > 32 and ' ' in bare[:32] else bare[:32]
+    return list(dict.fromkeys(value for value in (query, title, bare, short) if value))
 
 
 def _key(text):
@@ -312,7 +319,8 @@ def _title_matches(track, title):
     if _key(candidate) == _key(title):
         return True
     base = re.sub(r'\s*\([^()]+\)\s*$', '', candidate)
-    return _key(base) == _key(title) and _version_tags(candidate) == _version_tags(title)
+    title_base = re.sub(r'\s*\([^()]+\)\s*$', '', _clean_title(title))
+    return bool(_key(base)) and _key(base) == _key(title_base) and _version_tags(candidate) == _version_tags(title)
 
 
 def _same_artist(track, artist):
@@ -697,18 +705,17 @@ def _encode_track(ffmpeg, normalized, duration, workspace, *, voice_preview=Fals
 
 
 def platform_downloadable(release):
-    if not release.duration:
-        return False
     return bool(re.fullmatch(
         r'https://(?:music\.163\.com/song\?id=[0-9]{1,16}|'
-        r'www\.kugou\.com/song/#hash=[0-9a-fA-F]{32}&album_id=[0-9]{1,16})', release.source,
+        r'www\.kugou\.com/(?:song/#hash=[0-9a-fA-F]{32}&album_id=[0-9]{1,16}|mixsong/[A-Za-z0-9]{1,32}\.html)(?:\?share=1)?)', release.source,
     ))
 
 
 def prepare_platform(release, ffmpeg, workspace, *, file_only=False):
     if not platform_downloadable(release):
         raise MediaError('source')
-    recording = normalize_link_audio(ffmpeg, release.source, workspace, expected_duration=release.duration)
+    recording = normalize_link_audio(ffmpeg, release.source, workspace, expected_duration=release.duration,
+                                     explicit_download=not release.duration)
     return _encode_track(ffmpeg, *recording, workspace, voice_preview=True, file_only=file_only)
 
 
@@ -973,16 +980,29 @@ class OpenMusic:
         if configured:
             track = configured[1]
             query = f'{track.title} - {track.creator}'
+        if card_link and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
+            winner = await self._deliver_group(ws, kind, group, user, [card_link], file_only=file_only,
+                                               show_get_hint=True, tried=tried, removed=removed)
+            if winner:
+                self._remember_results(key, [[winner]])
+                return
+            # A richer catalog entry for this exact URL can still validate a playable recording by duration.
+            if not card_link.duration:
+                tried.discard(card_link.source)
         qq_candidates = []
         if (self.qqmusic_browser and self.official and self.official.qq_key
                 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file()):
-            try:
-                candidates = await asyncio.to_thread(self.official.search, 'qqmusic', query)
-            except CATALOG_ERRORS:
-                candidates = []
             title, artist = _query_parts(query)
-            qq_candidates = [entry for entry in candidates if _title_matches(entry, title)
-                             and (not artist or _same_artist(entry, artist))]
+            for search_query in _qq_search_queries(query):
+                try:
+                    candidates = await asyncio.to_thread(self.official.search, 'qqmusic', search_query)
+                except CATALOG_ERRORS:
+                    continue
+                qq_candidates = [entry for entry in candidates if _title_matches(entry, title)
+                                 and (not artist or _same_artist(entry, artist))
+                                 and (locked is None or recording_key(entry) == locked)]
+                if qq_candidates:
+                    break
             exact = [entry for entry in qq_candidates if _exact_track(entry, query)]
             options = {entry.source: entry for entry in exact or qq_candidates if entry.source not in removed
                        and (locked is None or recording_key(entry) == locked)}
