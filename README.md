@@ -187,3 +187,9 @@ Codex decision. Each Antigravity call uses the same quota checks. Pass
 `--bot-account` to select which local account contributes signals when the
 database has multiple accounts. `--bootstrap-patch` starts from an inspected
 local patch for a controlled rehearsal.
+
+Unpublished candidates are checkpointed before verification. Re-running the
+same version on the same autonomy base resumes the latest stopped checkpoint
+and locks its selected topic. Start with `--fresh` to choose a new topic, or use
+`--resume-from-patch PATH` to select a particular checkpoint directory or patch.
+The pipeline reruns all checks on the resumed candidate.

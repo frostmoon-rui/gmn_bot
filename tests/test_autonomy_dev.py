@@ -85,3 +85,45 @@ class AutonomyDevelopmentTests(unittest.TestCase):
             self.assertEqual(model.call_args_list[-1].kwargs["feedback"], "both green")
             self.assertTrue(model.call_args_list[-1].kwargs["audit"])
             self.assertEqual(result[1:], ("exact patch", {"src/a.py", "tests/test_a.py"}, "both green"))
+
+
+    def test_auto_resume_uses_latest_matching_unpublished_checkpoint(self):
+        candidate = "diff --git a/src/example.py b/src/example.py\n"
+        proposal = {"desire_key": "memory_precision", "qq_summary": "Keep the confirmed fix"}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, base in (("001_valid", "base"), ("002_tampered", "base"),
+                               ("003_wrong_base", "other"), ("004_released", "base")):
+                folder = root / name
+                folder.mkdir()
+                autonomy_dev.save(folder / "inputs.json", {"autonomy": base, "version": "0.3.2"})
+                autonomy_dev.save(folder / "stopped.json", {"stage": "tests"})
+                autonomy_dev.checkpoint(folder, candidate, proposal, "Two failing assertions")
+            autonomy_dev.write(root / "002_tampered/resume.patch", "changed")
+            autonomy_dev.save(root / "004_released/release.json", {"tag": "v0.3.2"})
+            match = autonomy_dev.find_resume("auto", "base", "0.3.2", root / "005_current")
+            self.assertEqual(match[0], root / "001_valid/resume.patch")
+            self.assertEqual(match[1]["topic"], "memory_precision")
+            self.assertEqual(match[1]["feedback"], "Two failing assertions")
+            self.assertIsNone(autonomy_dev.find_resume(None, "base", "0.3.2", root / "005_current"))
+            self.assertIsNone(autonomy_dev.find_resume("auto", "base", "0.4.0", root / "005_current"))
+
+    def test_resume_passes_archived_feedback_and_locks_topic(self):
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            saved = root / "previous.patch"
+            autonomy_dev.write(saved, "diff")
+            state = {"topic": "memory_precision", "summary": "Repair memory", "feedback": "Keep the passing tests"}
+            scope = SimpleNamespace(bootstrap_patch=None, version="0.3.2")
+            with (
+                patch.object(autonomy_dev, "git", side_effect=["", "src/a.py\ntests/test_a.py\n", "patched"]),
+                patch.object(autonomy_dev, "snapshot", return_value={}),
+                patch.object(autonomy_dev, "gemini", return_value={"desire_key": "unrelated"}) as model,
+            ):
+                with self.assertRaisesRegex(autonomy_dev.Halt, "change the selected topic"):
+                    autonomy_dev.develop(root, root, root, root, [], scope, {"language": "English"},
+                                         [], "base", resume=(saved, state))
+            self.assertEqual(model.call_args.kwargs["fixed_topic"], "memory_precision")
+            self.assertEqual(model.call_args.kwargs["feedback"], "Keep the passing tests")

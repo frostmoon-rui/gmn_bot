@@ -4,6 +4,7 @@ import argparse
 import asyncio
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import msvcrt
 import os
@@ -144,9 +145,12 @@ def desire_outcome(database, bot, topic, outcome):
     if bot is None or not topic:
         return
     try:
+        from gmn_autonomy.infra.desires import record_outcome
+    except ImportError:
+        return
+    try:
         with closing(sqlite3.connect(database, timeout=15)) as db, db:
-            db.execute("INSERT OR IGNORE INTO autonomy_desire_outcomes VALUES(?,?,?,?)",
-                       (bot, topic, time.time(), outcome))
+            record_outcome(db, bot, topic, time.time(), outcome)
     except sqlite3.Error as error:
         print(f"Could not record desire outcome ({type(error).__name__}).", file=sys.stderr)
 
@@ -166,7 +170,8 @@ def snapshot(repo):
 
 
 def gemini(model_dir, archive, snapshots, source, summary_language, *,
-           desires=(), feedback="", audit=False, attempt="development", existing_patch=""):
+           desires=(), feedback="", audit=False, attempt="development", existing_patch="",
+           fixed_topic=None):
     settings = model_dir / "agy-settings.json"
     save(settings, {
         "toolPermission": "strict", "allowNonWorkspaceAccess": False, "useG1Credits": False,
@@ -175,13 +180,17 @@ def gemini(model_dir, archive, snapshots, source, summary_language, *,
             "read_url(*)", "execute_url(*)", "mcp(*)",
         ]},
     })
-    prompt = (
+    goal = (
+        f"Resume this existing candidate, with desire_key exactly {json.dumps(fixed_topic)}. "
+        "Do not select a new topic. Resolve only the supplied feedback; retain passing work. "
+        if fixed_topic is not None else
         "Choose one worthwhile, narrow non-security improvement to this public Python library. "
+        "Select a desire by key or leave desire_key empty to choose a different intrinsic goal. "
+    )
+    prompt = (
+        goal +
         "Preserve public APIs, persistence compatibility and privacy. No new dependencies. "
-        "Select a desire by key or leave desire_key empty to veto the suggestions and choose an intrinsic goal. "
         "Write a first-person QQ summary of at most 100 characters, name relevant relationship tiers, never people. "
-        "For a seeded operator rehearsal, select the memory_precision desire, adopt the candidate already supplied "
-        "and keep its integration work in scope. Otherwise you may choose or veto ranked suggestions. "
         "Use only the supplied source, not tools. Return a JSON object with title, rationale, acceptance, "
         "self_review, qq_summary and edits. Each edit has path, old and new. Replace an exact, unique existing "
         "text block in a tracked src/ or tests/ Python file. Use actual newlines in the strings and keep "
@@ -393,23 +402,82 @@ def release(repo, base, version, changed, patch):
     return commit
 
 
+def checkpoint(archive, patch, proposal, feedback):
+    candidate = archive / "resume.patch"
+    pending = archive / "resume.patch.tmp"
+    write(pending, patch)
+    pending.replace(candidate)
+    pending = archive / "resume.json.tmp"
+    save(pending, {"topic": proposal.get("desire_key", ""), "summary": proposal.get("qq_summary", ""),
+                   "feedback": feedback, "sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest()})
+    pending.replace(archive / "resume.json")
+
+
+def load_resume(folder, base, version):
+    if (folder / "release.json").exists():
+        return None
+    inputs = json.loads((folder / "inputs.json").read_text(encoding="utf-8"))
+    if inputs["autonomy"] != base or inputs["version"] != version:
+        return None
+    patch = folder / "resume.patch"
+    state = json.loads((folder / "resume.json").read_text(encoding="utf-8"))
+    if hashlib.sha256(patch.read_bytes()).hexdigest() != state["sha256"]:
+        return None
+    if any(not isinstance(state[key], str) for key in ("topic", "summary", "feedback")):
+        return None
+    return patch, state
+
+
+def find_resume(option, base, version, archive):
+    if option is None:
+        return None
+    root = archive.parent
+    if option != "auto":
+        candidate = Path(option).resolve()
+        if candidate.is_dir():
+            try:
+                result = load_resume(candidate, base, version)
+            except (OSError, KeyError, ValueError, TypeError) as error:
+                raise Halt("The specified checkpoint could not be read.") from error
+        else:
+            result = (candidate, {"topic": "", "summary": "", "feedback": ""}) if candidate.is_file() else None
+        if result is None:
+            raise Halt("The specified checkpoint is unavailable or does not match the base and version.")
+        return result
+    folders = (path for path in root.iterdir() if path.is_dir() and path != archive
+               and (path / "resume.json").is_file())
+    for folder in sorted(folders, key=lambda path: path.name, reverse=True):
+        try:
+            result = load_resume(folder, base, version)
+        except (OSError, KeyError, ValueError, TypeError):
+            continue
+        if result is not None:
+            return result
+    return None
+
+
 def develop(repo, host, model_dir, archive, snapshots, args, notice, desires, base, *,
-            proposal=None, feedback="", cycle="initial"):
+            proposal=None, feedback="", cycle="initial", resume=None):
     def diff():
         return git(repo, "diff", "--no-ext-diff", "--no-textconv", base, "--")
 
-    if cycle == "initial" and args.bootstrap_patch:
-        git(repo, "apply", "--index", "--", args.bootstrap_patch.resolve())
+    bootstrap = resume[0] if resume else args.bootstrap_patch
+    if cycle == "initial" and bootstrap:
+        git(repo, "apply", "--index", "--", bootstrap.resolve())
         allowed = git(repo, "diff", "--name-only", base, "--").splitlines()
         if any(name != "pyproject.toml" and not name.startswith(("src/", "tests/")) for name in allowed):
             raise Halt("The operator-supplied patch touched an unsupported path.")
+    if resume:
+        feedback = resume[1]["feedback"]
+        proposal = {"desire_key": resume[1]["topic"], "qq_summary": resume[1]["summary"]}
     original_topic = proposal.get("desire_key") if proposal else None
     for attempt in range(3 if cycle == "initial" else 1):
         phase = f"{cycle}_{attempt + 1}"
         candidate = diff()
         proposal = gemini(model_dir, archive / f"{phase}_development", snapshots, snapshot(repo),
                           notice["language"], desires=desires, feedback=feedback,
-                          attempt=f"{phase}_development", existing_patch=candidate)
+                          attempt=f"{phase}_development", existing_patch=candidate,
+                          fixed_topic=original_topic)
         if original_topic is not None and proposal.get("desire_key") != original_topic:
             raise Halt("A revision attempted to change the selected topic.")
         original_topic = proposal.get("desire_key", "")
@@ -419,10 +487,14 @@ def develop(repo, host, model_dir, archive, snapshots, args, notice, desires, ba
         if not any(name.startswith("src/") for name in changes) or not any(name.startswith("tests/") for name in changes):
             raise Halt("An exact candidate must contain source and regression tests.")
         write(archive / f"{phase}_development" / "changes.patch", candidate)
+        checkpoint(archive, candidate, proposal, "Resume this patch and finish verification.")
         evidence, feedback = verify(repo, host, archive / f"{phase}_tests")
         if diff() != candidate:
             raise Halt("The tested tree changed during verification.")
         if feedback:
+            for path in (Path.home(), repo, host):
+                feedback = feedback.replace(str(path), "<local path>").replace(path.as_posix(), "<local path>")
+            checkpoint(archive, candidate, proposal, feedback)
             continue
         audit = gemini(model_dir, archive / f"{phase}_audit", snapshots, snapshot(repo),
                        notice["language"], desires=desires, feedback=evidence,
@@ -430,6 +502,7 @@ def develop(repo, host, model_dir, archive, snapshots, args, notice, desires, ba
         if audit["decision"] == "approve":
             return proposal, candidate, changes, evidence
         feedback = audit["findings"] or "Resolve the independent Antigravity audit findings."
+        checkpoint(archive, candidate, proposal, feedback)
     raise Halt("Antigravity could not pass tests and its independent audit within the correction limit.")
 
 
@@ -458,13 +531,17 @@ def run(args, archive, notice):
                 stage = "development"
                 if args.bootstrap_patch is not None and not args.bootstrap_patch.is_file():
                     raise Halt("Operator-supplied patch is unavailable.")
+                resume = find_resume(args.resume_from_patch, base, args.version, archive)
+                if resume:
+                    save(archive / "resumed_from.json", {"patch": str(resume[0])})
                 proposal, patch, changed, evidence = develop(
                     repo, host, model_dir, archive, snapshots, args, notice,
-                    desires, base)
+                    desires, base, resume=resume)
                 message = str(proposal["qq_summary"]).strip()[:220]
                 topic = proposal.get("desire_key", "")
                 allowed_topics = {row["key"] for row in desires}
-                if topic and topic not in allowed_topics:
+                resumed_topic = resume[1]["topic"] if resume else ""
+                if topic and topic != resumed_topic and topic not in allowed_topics:
                     raise Halt("Gemini selected an unknown desire key.")
                 stage = "terminal_review"
                 for attempt in (1, 2):
@@ -473,6 +550,7 @@ def run(args, archive, notice):
                         codex_review(model_dir, final_dir, patch, proposal, evidence=evidence)
                         break
                     except Rejected as error:
+                        checkpoint(archive, patch, proposal, str(error))
                         desire_outcome(database, account, topic, "rejected")
                         if attempt == 2:
                             raise
@@ -529,8 +607,12 @@ DEFAULT_NOTICE = {
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bootstrap-patch", type=Path,
-                        help="Apply a locally prepared and inspected starting patch before model development")
+    start = parser.add_mutually_exclusive_group()
+    start.add_argument("--bootstrap-patch", type=Path,
+                       help="Apply a locally prepared and inspected starting patch before model development")
+    start.add_argument("--resume-from-patch", nargs="?", const="auto", default="auto", metavar="PATH",
+                       help="Resume a compatible checkpoint by default, or specify a checkpoint folder or patch")
+    start.add_argument("--fresh", action="store_true", help="Ignore checkpoints and run topic selection")
     parser.add_argument("--bot-account", type=int)
     parser.add_argument("--repo", type=Path, default=HOST.with_name("gmn_bot_autonomy"))
     parser.add_argument("--runtime", type=Path, default=HOST.with_name("gmn_bot"))
@@ -538,6 +620,8 @@ def main():
     parser.add_argument("--hold-release", action="store_true")
     parser.add_argument("--notice-config", type=Path)
     args = parser.parse_args()
+    if args.fresh or args.bootstrap_patch:
+        args.resume_from_patch = None
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
         parser.error("--version must be MAJOR.MINOR.PATCH")
     notice = DEFAULT_NOTICE.copy()
