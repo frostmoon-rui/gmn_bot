@@ -149,3 +149,27 @@ Use `heatmap china/world` after mentioning the bot in a group, or directly in a 
 `help` opens eight visual categories; `help CATEGORY` stays on one category page, and `help text CATEGORY` keeps commands copyable. Existing topic aliases remain. Official CENC bulletins refresh every 30 minutes; warning/subscription channels remain separate. See [map rules and source details](COMMUNITY_MAPS.md).
 
 Celestial weather: `Sun weather`, `Moon weather`, `celestial weather:M78`, or `celestial weather:Land of Light`. See the [user guide](EXTENSIONS.md) for scientific versus fictional modes and album video backup. [Current model information](MODEL_UPDATES.md) documents the explicit catalog refresh and generation-access limits.
+
+## On-demand autonomy development
+
+From this checkout on Windows, run `python tools/autonomy_dev.py --version X.Y.Z`.
+The helper creates clean copies of the public autonomy and host repositories, reads
+the Gemini quota before and after one Hydrogen High call, and stops on an invalid
+quota response or a five-hour or weekly reading below 30%. The Windows process
+lock prevents overlapping jobs from this account. Quota readings are observations
+and can include activity outside the job.
+
+Hydrogen receives tracked public Python source, tests and package documentation.
+It returns scoped replacements and a self-review. Codex independently reviews the
+patch before it can execute. The helper then runs the package pytest suite and the
+host unittest suite with the candidate on the import path. An approved, tested
+patch can be committed and pushed with its tag in one Git operation. Use
+`--hold-release` to archive a reviewed candidate without pushing.
+
+This command uses the authenticated Antigravity and Codex CLIs, Git credentials,
+Python test dependencies, and a running local NapCat connection to send an owner
+update. Set `--runtime` if the private runtime is outside the usual sibling folder.
+The optional `--notice-config` reads a local JSON file with the `language`,
+`no_proposal`, `released`, `stopped`, `unknown` and `format` string keys from
+`DEFAULT_NOTICE`. Run records and QQ receipts are stored under
+`%LOCALAPPDATA%/GMN/autonomy_dev_logs`. The command runs once and exits.
