@@ -3,6 +3,8 @@ if __name__ == '__main__':
     _instance_lock = require_instance(__file__)
 
 from local_settings import setting
+import auto_evolution
+import sqlite3
 from drawing_provider import generate_drawing
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
 from open_music import OfficialMusic, OpenMusic, netease_search_url
@@ -1959,6 +1961,15 @@ async def handle_message_event(ws, data):
                 return
         if group_declined:
             return
+    action = auto_evolution.command_action(msg_type, user_id, MASTER_QQ, cleaned_msg)
+    if action is not None:
+        try:
+            await asyncio.to_thread(auto_evolution.update, Path(__file__).resolve().parent, paused=action)
+            reply = 'Automatic evolution paused. Active jobs stop before the next stage.' if action else 'Automatic evolution resumed. The daily window and gates still apply.'
+        except (OSError, sqlite3.Error):
+            reply = 'Could not save the automatic evolution setting. Try again shortly.'
+        await extensions.send(ws, msg_type, group_id, user_id, reply)
+        return
     if 'videos' in globals():
         videos.observe(data)
         video_reply = await videos.command(data, cleaned_msg, addressed, ws)
@@ -2822,6 +2833,17 @@ async def main():
     videos = VideoSummaries(sys.modules[__name__])
     # Resolve locations lazily when their weather or map information is requested.
     extensions.spawn(extensions.nightly())
+    if auto_evolution.enabled(setting('ENABLE_AUTO_EVOLUTION', False)):
+        runtime_path = Path(__file__).resolve().parent
+        local_runner = runtime_path / 'tools' / 'autonomy_dev.py'
+        default_runner = local_runner if local_runner.is_file() else (
+            runtime_path.with_name('gmn_bot_git') / 'tools' / 'autonomy_dev.py')
+        runner_path = Path(setting('AUTO_EVOLUTION_RUNNER') or default_runner).resolve()
+        notice_path = setting('AUTO_EVOLUTION_NOTICE_CONFIG')
+        if runner_path.is_file():
+            extensions.spawn(auto_evolution.supervise(runtime_path, runner_path, lambda: active_ws,
+                                                       notice=notice_path, codex=setting('AUTO_EVOLUTION_CODEX_EXE')))
+            print('[Auto evolution]: enabled, 04:00 Beijing check')
     extensions.spawn(features.reminder_loop())
     from runtime_maintenance import maintenance_loop
     extensions.spawn(maintenance_loop(sys.modules[__name__],Path(__file__).resolve().parent))

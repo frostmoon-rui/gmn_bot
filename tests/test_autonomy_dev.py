@@ -194,3 +194,91 @@ class AutonomyDevelopmentTests(unittest.TestCase):
                 _, model = autonomy_dev.run_model(root, run, snapshots, "audit", {}, {}, root / "settings")
             self.assertEqual(model, autonomy_dev.HYDROGEN)
             self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.HYDROGEN)
+
+
+    def test_automatic_insufficient_score_skips_model_and_notification(self):
+        from datetime import datetime
+        from types import SimpleNamespace
+        import auto_evolution
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "check"
+            archive.mkdir()
+            now = datetime(2026, 11, 29, 4, tzinfo=auto_evolution.BEIJING)
+            args = SimpleNamespace(dry_run=False, runtime=root, repo=root, bot_account=None,
+                                   resume_from_patch="auto")
+            with (
+                patch.object(autonomy_dev, "DATA", root),
+                patch.object(autonomy_dev, "datetime", wraps=datetime) as clock,
+                patch.object(auto_evolution, "configured", return_value=True),
+                patch.object(autonomy_dev, "desire_snapshot", return_value=([{"score": 2.9}], 1)),
+                patch.object(autonomy_dev, "clone"),
+                patch.object(autonomy_dev, "git", side_effect=["", "", "base", 'version = "0.3.2"']),
+                patch.object(autonomy_dev, "find_resume", return_value=None),
+                patch.object(autonomy_dev, "gate") as quota_check,
+                patch.object(autonomy_dev, "run") as run,
+                patch.object(autonomy_dev, "notify") as notify,
+            ):
+                clock.now.return_value = now
+                self.assertEqual(autonomy_dev.automatic_check(args, archive, {}), 0)
+            quota_check.assert_not_called()
+            run.assert_not_called()
+            notify.assert_not_called()
+            self.assertEqual(json.loads((archive / "automatic_check.json").read_text(encoding="utf-8"))["reason"],
+                             "insufficient_motivation")
+            self.assertIsNone(auto_evolution.state(root)[2])
+
+    def test_opus_planner_needs_hydrogen_quota_and_executor_never_uses_opus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
+            with patch.object(autonomy_dev, "command", side_effect=[result(quota(29))]) as cli:
+                with self.assertRaisesRegex(autonomy_dev.Halt, "Hydrogen executor"):
+                    autonomy_dev.run_model(root, run, [], "planner", {}, {}, root / "settings", role="planner")
+                self.assertEqual(cli.call_count, 1)
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(35)), MODEL_OK, result(quota(34)),
+            ]) as cli:
+                _, model = autonomy_dev.run_model(root, run, [], "executor", {}, {}, root / "settings", role="executor")
+                self.assertEqual(model, autonomy_dev.HYDROGEN)
+                self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.HYDROGEN)
+        self.assertEqual(autonomy_dev.OPUS, "claude-opus-5-5-medium")
+
+
+
+    def test_failed_opus_plan_uses_native_neon_orchestrator(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = {"src/example.py": "VALUE = 1"}
+            ready = {"structured_output": {"title": "Example", "rationale": "Fix", "acceptance": "Test",
+                                           "self_review": "Checked", "desire_key": "", "qq_summary": "Updated"}}
+            with patch.object(autonomy_dev, "run_model", side_effect=[
+                (None, None), (ready, autonomy_dev.NEON_ORCHESTRATOR),
+            ]) as models:
+                proposal = autonomy_dev.gemini(root, root / "development", [], source, "English")
+            self.assertEqual(proposal["title"], "Example")
+            self.assertEqual([call.kwargs["role"] for call in models.call_args_list], ["planner", "native"])
+            report = (root / "development/gemini_self_review.md").read_text(encoding="utf-8")
+            self.assertIn("gemini-pro-orchestrator-neon", report)
+
+    def test_provider_error_without_a_plan_returns_native_fallback_to_caller(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(45)), result(code=1, stderr="HTTP 503 unavailable"), result(quota(45)),
+            ]) as cli:
+                model_result = autonomy_dev.run_model(root, run, [], "planner", {}, {}, root / "settings",
+                                                      role="planner")
+            self.assertEqual(model_result, (None, None))
+            self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.OPUS)
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(45)), MODEL_OK, result(quota(44)),
+            ]) as cli:
+                _, model = autonomy_dev.run_model(root, run, [], "native", {}, {}, root / "settings",
+                                                  role="native")
+            self.assertEqual(model, autonomy_dev.NEON_ORCHESTRATOR)
+            self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.NEON_ORCHESTRATOR)

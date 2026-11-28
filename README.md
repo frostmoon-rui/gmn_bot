@@ -154,11 +154,12 @@ Celestial weather: `Sun weather`, `Moon weather`, `celestial weather:M78`, or `c
 
 From this checkout on Windows, run `python tools/autonomy_dev.py --version X.Y.Z`.
 The helper creates clean copies of the public autonomy and host repositories. It
-reads both quota groups before and after each Antigravity call. Claude Opus 5.5 High
-takes priority until its group runs out or the provider rate-limits the current
-window. Gemini 4 Hydrogen High is the fallback and must meet the 30% quota floor.
-An invalid quota report stops the task. The Windows process lock prevents
-overlapping jobs from this account. Quota readings can include outside activity.
+reads both quota groups before and after each Antigravity call. Claude Opus 5.5
+Medium writes the plan, and Gemini 4 Hydrogen High implements it. If Opus cannot
+produce a plan, development uses Antigravity's native Orchestrator (Neon with
+Hydrogen). Any Gemini execution requires the 30% quota floor. An invalid quota
+report stops the task. The Windows process lock prevents overlapping jobs from
+this account. Quota readings can include outside activity.
 
 Antigravity receives tracked public Python source, tests and package documentation.
 It returns scoped replacements and a self-review. The runner executes the fixed
@@ -198,3 +199,17 @@ The pipeline reruns all checks on the resumed candidate.
 Opus availability is measured through the shared Claude/GPT quota group. The
 report records both groups, attempted models and successful model calls. It
 shows quota changes only within the same refresh window.
+
+The bot can start one automatic check during 04:00–04:15 Beijing time. Set
+`ENABLE_AUTO_EVOLUTION` locally to enable it. A compatible checkpoint or a desire
+score of at least 3.0 is required, along with a free pipeline lock, usable quota
+and 24 hours since the last automatic run. Skips are recorded locally only.
+Successful starts and their eventual outcome use the existing owner-only QQ notice.
+Run `python tools/autonomy_dev.py --dry-run --runtime PATH` to inspect the gates
+and quota without acquiring an evolution slot, notifying the owner or releasing.
+
+The exact owner can use `pause automatic evolution` and `resume automatic evolution`
+in private chat. A running task observes pause before its next model or
+publication step. Optional local settings are `AUTO_EVOLUTION_RUNNER`,
+`AUTO_EVOLUTION_CODEX_EXE` and `AUTO_EVOLUTION_NOTICE_CONFIG` for explicit launcher,
+Codex and notification configuration paths.

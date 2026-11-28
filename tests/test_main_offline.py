@@ -7,6 +7,8 @@ import hashlib
 import html
 import json
 import random
+import sqlite3
+import tempfile
 import re
 import sys
 import time
@@ -17,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+import auto_evolution
 from bot_extensions import Extensions, province_capital
 from bot_features import Features, HELP, event_text, message_text, safe_segments, reply_belongs_to
 from bot_care import care_reply
@@ -319,6 +322,15 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         await self.scope['handle_message_event'](self.ws, event)
         worker.start.assert_called_once_with(self.ws, event, 'card', (None, '', original))
         self.assertEqual(self.sent, [])
+
+    async def test_owner_private_evolution_command_writes_persistent_pause(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.scope["__file__"] = str(root / "gemini_bot.py")
+            event = self.event("pause automatic evolution") | {"message_type": "private", "user_id": 10001}
+            await self.scope["handle_message_event"](self.ws, event)
+            self.assertEqual(auto_evolution.state(root), (1, "", None))
+            self.assertIn("Automatic evolution paused", self.sent[-1]["text"])
 
     async def test_normal_discussion_of_manual_stays_silent(self):
         self.scope['features'].prefs['groups']['20'] = {'mode': 'quiet'}
