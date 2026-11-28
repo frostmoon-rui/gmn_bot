@@ -62,3 +62,26 @@ class AutonomyDevelopmentTests(unittest.TestCase):
             with self.assertRaises(autonomy_dev.Halt):
                 autonomy_dev.apply_edits(archive, proposal, source, "1.2.3")
             self.assertEqual(list(archive.iterdir()), [])
+
+
+    def test_green_tests_precede_antigravity_audit(self):
+        from types import SimpleNamespace
+
+        proposal = {"desire_key": "memory_precision", "qq_summary": "I will fix recall"}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = SimpleNamespace(bootstrap_patch=None, version="0.3.2")
+            prefix = root / "initial_1_development"
+            prefix.mkdir()
+            with (
+                patch.object(autonomy_dev, "git", side_effect=["", "exact patch", "src/a.py\ntests/test_a.py\n", "exact patch"]),
+                patch.object(autonomy_dev, "snapshot", return_value={}),
+                patch.object(autonomy_dev, "apply_edits"),
+                patch.object(autonomy_dev, "gemini", side_effect=[proposal, {"decision": "approve"}]) as model,
+                patch.object(autonomy_dev, "verify", return_value=("both green", "")) as verify,
+            ):
+                result = autonomy_dev.develop(root, root, root, root, [], args, {"language": "English"}, [], "base")
+            verify.assert_called_once()
+            self.assertEqual(model.call_args_list[-1].kwargs["feedback"], "both green")
+            self.assertTrue(model.call_args_list[-1].kwargs["audit"])
+            self.assertEqual(result[1:], ("exact patch", {"src/a.py", "tests/test_a.py"}, "both green"))

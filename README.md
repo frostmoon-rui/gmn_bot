@@ -173,3 +173,17 @@ The optional `--notice-config` reads a local JSON file with the `language`,
 `no_proposal`, `released`, `stopped`, `unknown` and `format` string keys from
 `DEFAULT_NOTICE`. Run records and QQ receipts are stored under
 `%LOCALAPPDATA%/GMN/autonomy_dev_logs`. The command runs once and exits.
+
+The social reviewer may add catalog-only signals to the local SQLite desire pool.
+Each external person contributes at most one vote per topic per day. Development
+receives aggregate counts and relationship tiers. The model may decline the
+ranked ideas and choose an intrinsic goal.
+
+Development runs both suites in clean checkouts before a separate Antigravity
+boundary audit. It may correct the candidate twice before that audit passes.
+Codex receives only the approved diff, brief motivation and test summary. An
+explicit Codex rejection allows one additional Antigravity repair and a second
+Codex decision. Each Antigravity call uses the same quota checks. Pass
+`--bot-account` to select which local account contributes signals when the
+database has multiple accounts. `--bootstrap-patch` starts from an inspected
+local patch for a controlled rehearsal.

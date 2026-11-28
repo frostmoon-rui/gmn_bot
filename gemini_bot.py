@@ -2913,6 +2913,7 @@ async def main():
         setting('ENABLE_AUTONOMY', True),
         Path(__file__).resolve().parent / 'autonomy.local.sqlite3', generate_autonomy,
         review_caller=review_autonomy,
+        owner=MASTER_QQ,
         language=lambda: getattr(features, "language", "en"))
     def outreach_allowed(ws, candidate):
         if candidate.kind == 'private':
