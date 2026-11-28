@@ -267,6 +267,19 @@ def _query_parts(query):
     return title or query, artist
 
 
+def _possessive_queries(query):
+    title, artist = _query_parts(query)
+    if artist or title != normalize('NFKC', query).strip() or title.startswith('《'):
+        return
+    for match in reversed(list(re.finditer('的', title))):
+        who, song = title[:match.start()].strip(), title[match.end():].strip()
+        if not (1 <= len(who) <= 16 and 2 <= len(song) <= 64):
+            continue
+        if not any(char.isalpha() for char in who) or any(char in who for char in '/|《》:'):
+            continue
+        yield f'{song} - {who}'
+
+
 def _qq_search_queries(query):
     title, artist = _query_parts(query)
     bare = re.sub(r'\s*\([^()]*\)', '', title).strip()
@@ -990,6 +1003,7 @@ class OpenMusic:
             if not card_link.duration:
                 tried.discard(card_link.source)
         qq_candidates = []
+        literal_match = False
         if (self.qqmusic_browser and self.official and self.official.qq_key
                 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file()):
             title, artist = _query_parts(query)
@@ -1004,6 +1018,7 @@ class OpenMusic:
                 if qq_candidates:
                     break
             exact = [entry for entry in qq_candidates if _exact_track(entry, query)]
+            literal_match = bool(qq_candidates)
             options = {entry.source: entry for entry in exact or qq_candidates if entry.source not in removed
                        and (locked is None or recording_key(entry) == locked)}
             if len({recording_key(entry) for entry in options.values()}) == 1:
@@ -1025,6 +1040,7 @@ class OpenMusic:
         else:
             tracks = [track for track in results if _exact_track(track, query)
                       and (locked is None or recording_key(track) == locked)]
+            literal_match = literal_match or bool(tracks)
             nearest = _closest_track(results, query) if not tracks and not configured and not locked and not card_link and not exact_only else None
             if nearest:
                 tracks = [nearest]
@@ -1064,6 +1080,16 @@ class OpenMusic:
         links = await self._platform_previews(query)
         if card_link and not any(entry.source == card_link.source for _, entry in links):
             links = [('netease', card_link), *links]
+        if not (literal_match or exact_only or locked or card_link or configured):
+            if not any(_exact_track(entry, query) for _, entry in links):
+                for index, alternative in enumerate(_possessive_queries(query)):
+                    if index >= 3:
+                        break
+                    candidates = await self._platform_previews(alternative)
+                    if any(_exact_track(entry, alternative) for _, entry in candidates):
+                        await self._search(key, ws, kind, group, user, alternative, file_only=file_only,
+                                           removed=removed, tried=tried, exact_only=True)
+                        return
         if links or qq_candidates:
             known = {recording_key(entry) for _, entry in links}
             links = list(links)

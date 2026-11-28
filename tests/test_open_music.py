@@ -674,3 +674,25 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages), 3)
         for text in messages[1:]:
             self.assertIn('https://creativecommons.org/licenses/by/4.0/', text)
+
+
+
+    async def test_possessive_search_uses_confirmed_artist_and_title_only(self):
+        target = Release('平凡之路', '朴树', '', 'https://i2.y.qq.com/a/song/Example')
+        other = Release('平凡之路', 'Other', '', 'https://i2.y.qq.com/a/song/Other')
+        preview = AsyncMock(side_effect=[[], [('qqmusic', other), ('qqmusic', target)],
+                                        [('qqmusic', other), ('qqmusic', target)]])
+        job = OpenMusic(None, None, AsyncMock())
+        with patch('open_music.search_tracks', return_value=[]), patch.object(job, '_platform_previews', preview):
+            await job._search('one', 'ws', 'private', 0, 1, '朴树的平凡之路')
+        self.assertEqual(preview.call_args_list[1].args[0], '平凡之路 - 朴树')
+        self.assertIn('平凡之路 · 朴树', job.send.await_args.args[-1])
+
+    async def test_exact_title_containing_possessive_is_preserved(self):
+        target = Release('你的名字', 'Performer', '', 'https://i2.y.qq.com/a/song/Example')
+        job = OpenMusic(None, None, AsyncMock())
+        preview = AsyncMock(return_value=[('qqmusic', target)])
+        with patch('open_music.search_tracks', return_value=[]), patch.object(job, '_platform_previews', preview):
+            await job._search('two', 'ws', 'private', 0, 1, '你的名字')
+        preview.assert_awaited_once_with('你的名字')
+        self.assertIn('你的名字 · Performer', job.send.await_args.args[-1])
