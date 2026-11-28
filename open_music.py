@@ -54,6 +54,7 @@ MESSAGES = {
     'qqmusic_trial': 'QQ Music · VIP track, {seconds}s preview',
     'qqmusic_full': 'QQ Music · full track',
     'kugou': 'Kugou',
+    'apple_music': 'Apple Music',
     'release_page': 'This Apple Music release page does not provide a full downloadable audio file.',
     'expired': 'Search for a track first, then use /get track with a number from the results.',
     'busy': 'The music worker is busy. Please try again shortly.',
@@ -826,12 +827,6 @@ class OpenMusic:
         if key in self.active or len(self.active) >= 3:
             return self.messages['busy']
         pending = self._pending(key)
-        if operation in {'download', 'download_file'} and key not in self.results and pending:
-            if not 1 <= value <= len(pending.choices):
-                return self.messages['expired']
-            track = pending.choices[value - 1]
-            value = f'{track.title} - {track.creator}'
-            operation = 'search_file' if operation == 'download_file' else 'search'
         if operation == 'card':
             self.results.pop(key, None)
             self.pending.pop(key, None)
@@ -843,11 +838,20 @@ class OpenMusic:
         else:
             sources = ()
             if operation in {'download', 'download_file'}:
-                entry = self.results.get(key)
-                if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
-                    return self.messages['expired']
-                sources = entry[1][value - 1]
+                if pending:
+                    if not 1 <= value <= len(pending.choices):
+                        return self.messages['expired']
+                    sources = [pending.choices[value - 1]]
+                else:
+                    entry = self.results.get(key)
+                    if not entry or time.monotonic() >= entry[0] or not 1 <= value <= len(entry[1]):
+                        return self.messages['expired']
+                    sources = entry[1][value - 1]
             if not self.ffmpeg or not self.ffmpeg.is_absolute() or not self.ffmpeg.is_file():
+                if sources and isinstance(sources[0], Release):
+                    choice = sources[0]
+                    self.spawn(self.send(ws, kind, group, user, f"{self.messages['platform_only']}\n{choice.source}"))
+                    return None
                 return self.messages['disabled']
             if operation == 'attachment':
                 job = self._deliver(ws, kind, group, user, None, None, attachment=(event, value))
@@ -961,7 +965,8 @@ class OpenMusic:
                                          tried=tried, removed=removed):
             original = sources[0]
             await self._search(key, ws, kind, group, user, f'{original.title} - {original.creator}',
-                               file_only=file_only, removed=removed, tried=tried, locked=recording_key(original))
+                               file_only=file_only, removed=removed, tried=tried, locked=recording_key(original),
+                               selected=original)
 
     async def _deliver_group(self, ws, kind, group, user, sources, *, requested=None, file_only=False,
                              show_get_hint=False, tried=None, removed=None):
@@ -986,7 +991,7 @@ class OpenMusic:
         return None
 
     async def _search(self, key, ws, kind, group, user, query, *, file_only=False, removed=None, tried=None,
-                      locked=None, card_link=None, exact_only=False):
+                      locked=None, card_link=None, exact_only=False, selected=None):
         removed = set() if removed is None else removed
         tried = set() if tried is None else tried
         configured = configured_platform_track(self.preview_catalog, query)
@@ -995,13 +1000,14 @@ class OpenMusic:
             query = f'{track.title} - {track.creator}'
         if card_link and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
             winner = await self._deliver_group(ws, kind, group, user, [card_link], file_only=file_only,
-                                               show_get_hint=True, tried=tried, removed=removed)
+                                               show_get_hint=show_get_hint, tried=tried, removed=removed)
             if winner:
                 self._remember_results(key, [[winner]])
                 return
             # A richer catalog entry for this exact URL can still validate a playable recording by duration.
             if not card_link.duration:
                 tried.discard(card_link.source)
+        show_get_hint = self._pending(key) is None
         qq_candidates = []
         literal_match = False
         if (self.qqmusic_browser and self.official and self.official.qq_key
@@ -1028,7 +1034,7 @@ class OpenMusic:
                     query = f'{original.title} - {original.creator}'
                 locked = recording_key(sources[0])
                 winner = await self._deliver_group(ws, kind, group, user, sources, file_only=file_only,
-                                                   show_get_hint=True, tried=tried, removed=removed)
+                                                   show_get_hint=show_get_hint, tried=tried, removed=removed)
                 if winner:
                     self._remember_results(key, [[winner, *(source for source in sources
                                                            if source != winner and source.source not in tried)]])
@@ -1044,7 +1050,9 @@ class OpenMusic:
             nearest = _closest_track(results, query) if not tracks and not configured and not locked and not card_link and not exact_only else None
             if nearest:
                 tracks = [nearest]
-            recordings = group_recordings(tracks)
+            if selected is not None and selected.duration:
+                tracks = [track for track in tracks if not track.duration or abs(track.duration - selected.duration) <= 6]
+            recordings = [tracks] if selected is not None and tracks else group_recordings(tracks)
             if len(recordings) == 1 and not _query_parts(query)[1]:
                 platform_links = await self._platform_previews(query)
                 releases = [entry for _, entry in platform_links]
@@ -1064,7 +1072,7 @@ class OpenMusic:
                 self._remember_results(key, recordings)
                 if len(recordings) == 1 and self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file():
                     winner = await self._deliver_group(ws, kind, group, user, recordings[0], requested=query,
-                                                       file_only=file_only, show_get_hint=True, tried=tried, removed=removed)
+                                                       file_only=file_only, show_get_hint=show_get_hint, tried=tried, removed=removed)
                     if winner:
                         self._remember_results(key, [[winner, *(track for track in recordings[0]
                                                                if track != winner and track.url not in tried)]])
@@ -1086,10 +1094,21 @@ class OpenMusic:
                     if index >= 3:
                         break
                     candidates = await self._platform_previews(alternative)
-                    if any(_exact_track(entry, alternative) for _, entry in candidates):
+                    confirmed = [entry for _, entry in candidates if _exact_track(entry, alternative)]
+                    if confirmed:
                         await self._search(key, ws, kind, group, user, alternative, file_only=file_only,
-                                           removed=removed, tried=tried, exact_only=True)
+                                           removed=removed, tried=tried, exact_only=True,
+                                           locked=recording_key(confirmed[0]), selected=confirmed[0])
                         return
+        if isinstance(selected, Release) and not any(entry.source == selected.source for _, entry in links):
+            host = urlsplit(selected.source).hostname
+            selected_platform = {
+                'music.163.com': 'netease',
+                'music.apple.com': 'apple_music',
+            }.get(host, 'qqmusic' if qqmusic_track_id(selected.source) else 'kugou')
+            links = [(selected_platform, selected), *links]
+        if locked and (selected is not None or not removed):
+            links = [(platform, entry) for platform, entry in links if recording_key(entry) == locked]
         if links or qq_candidates:
             known = {recording_key(entry) for _, entry in links}
             links = list(links)
@@ -1106,7 +1125,7 @@ class OpenMusic:
                 if (self.ffmpeg and self.ffmpeg.is_absolute() and self.ffmpeg.is_file()
                         and len({recording_key(entry) for entry in matches}) == 1):
                     winner = await self._deliver_group(ws, kind, group, user, matches, file_only=file_only,
-                                                       show_get_hint=True, tried=tried, removed=removed)
+                                                       show_get_hint=show_get_hint, tried=tried, removed=removed)
                     if winner:
                         self._remember_results(key, [[winner, *(entry for entry in matches
                                                                if entry != winner and entry.source not in tried)]])
@@ -1146,7 +1165,8 @@ class OpenMusic:
         refinements = [track for _, track in options]
         if len(options) == 1 and matches and related:
             refinements.append(related[0][1])
-        self._remember_choices(key, title, refinements)
+        if (len(options) > 1 and matches) or self._pending(key) is None:
+            self._remember_choices(key, title, refinements)
         await self.send(ws, kind, group, user, '\n'.join(lines))
 
     async def _prepare_attachment(self, ws, workspace, event, message_id):

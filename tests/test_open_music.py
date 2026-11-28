@@ -189,19 +189,35 @@ class OpenMusicTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(worker.followup(event, 'Example Band'))
             self.assertEqual(worker.start('ws', event, 'download', 1), MESSAGES['expired'])
 
-    async def test_numbered_platform_choice_restarts_the_search_in_file_mode(self):
+    async def test_numbered_platform_choice_pins_original_recording_and_file_mode(self):
         event = {'self_id': 9, 'message_type': 'private', 'user_id': 30}
         tasks = []
-        worker = OpenMusic(None, lambda coro: tasks.append(asyncio.create_task(coro)), AsyncMock())
+        worker = OpenMusic(Path(__file__).resolve(), lambda coro: tasks.append(asyncio.create_task(coro)), AsyncMock())
         key = worker._session_key(event)
-        worker._remember_choices(key, 'Signal', [
-            Release('Signal', 'Band One', '', 'https://i2.y.qq.com/a/song/One'),
-            Release('Signal', 'Band Two', '', 'https://i2.y.qq.com/a/song/Two'),
-        ])
-        with patch.object(worker, '_search', AsyncMock()) as search:
+        one = Release('Signal', 'Band One', '', 'https://i2.y.qq.com/a/song/One')
+        two = Release('Signal', 'Band Two', '', 'https://i2.y.qq.com/a/song/Two')
+        worker._remember_results(key, [[one]])
+        worker._remember_choices(key, 'Signal', [one, two])
+        with patch.object(worker, '_retry_selection', AsyncMock()) as deliver:
             self.assertIsNone(worker.start('ws', event, 'download_file', 2))
             await tasks[-1]
-        search.assert_awaited_once_with(key, 'ws', 'private', 0, 30, 'Signal - Band Two', file_only=True)
+        deliver.assert_awaited_once_with(key, 'ws', 'private', 0, 30, [two], file_only=True)
+
+    async def test_failed_download_keeps_selected_link_and_original_menu(self):
+        original = Release('Signal', 'Performer', '', 'https://i2.y.qq.com/a/song/One')
+        alternate = Release('Signal (3D Surround)', 'Performer', '', 'https://i2.y.qq.com/a/song/Two')
+        worker = OpenMusic(Path(__file__).resolve(), None, AsyncMock())
+        worker._remember_choices('key', 'Signal', [original, alternate])
+        with patch('open_music.search_tracks', return_value=[]), \
+             patch.object(worker, '_platform_previews', AsyncMock(return_value=[
+                 ('qqmusic', original), ('qqmusic', alternate),
+             ])), patch.object(worker, '_deliver_group', AsyncMock(return_value=None)):
+            await worker._retry_selection('key', 'ws', 'private', 0, 30, [original], file_only=False)
+        reply = worker.send.await_args.args[-1]
+        self.assertIn(original.source, reply)
+        self.assertNotIn(alternate.source, reply)
+        self.assertNotIn(MESSAGES['ambiguous'], reply)
+        self.assertEqual(worker.pending['key'].choices, (original, alternate))
 
     def test_official_qq_search_posts_only_the_keyword_and_checks_the_recording(self):
         with patch('open_music.build_opener') as opener:
