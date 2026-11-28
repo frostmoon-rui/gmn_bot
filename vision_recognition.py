@@ -1,5 +1,7 @@
 """Time-limited, sticker recognition with model fallback; no tool calls or unconfigured anonymous fallback endpoints."""
 import asyncio
+
+from model_catalogs import GEMINI_LIGHT_DEFAULT, GEMINI_RETIRED
 import copy
 import hashlib
 import io
@@ -100,8 +102,9 @@ class VisionRecognizer:
         # The successful model queue is persisted independently; Chat model reprioritization does not affect vision priorities.
         models = list(dict.fromkeys(self.priority + [name for name in self.models()
             if isinstance(name, str) and self.is_vision_model(name)]))
+        models = [name for name in models if name not in GEMINI_RETIRED]
         if not models:
-            models = ['gemini-2.5-flash']
+            models = [GEMINI_LIGHT_DEFAULT]
         if self.last_good in models:
             models.remove(self.last_good)
             models.insert(0, self.last_good)

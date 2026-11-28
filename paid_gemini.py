@@ -52,7 +52,7 @@ async def generate_paid(bot, model, prompt, config, purpose):
         from google import genai
         client = genai.Client(api_key=key)
         bot._paid_research_client = client
-    timeout = 60 if purpose == 'drawing' else 600
+    timeout = {'drawing': 60, 'research-plan': 45}.get(purpose, 600)
     options = dict(config, tools=[], max_output_tokens=min(config.get('max_output_tokens', 4096), 4096),
                    http_options={'timeout': timeout * 1000, 'retry_options': {'attempts': 1}})
     print('[Paid Gemini]: Reserved one daily attempt;', purpose, model)

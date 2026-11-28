@@ -25,6 +25,14 @@ class RankingTests(unittest.TestCase):
     def test_stable_variant_precedes_preview_at_same_version(self):
         self.assertEqual(rank_research_models(['gemini-3.1-pro-preview', 'gemini-3.1-pro'])[0], 'gemini-3.1-pro')
 
+    def test_current_catalog_drops_aliases_and_prioritizes_light_background_tasks(self):
+        from model_catalogs import eligible, light_gemini_models
+        self.assertIsNone(eligible('gemini', {'name': 'models/gemini-3.7-flash'}))
+        self.assertIsNone(eligible('gemini', {'name': 'models/gemini-2.5-flash'}))
+        self.assertEqual(light_gemini_models(['gemini-4-hydrogen', 'gemini-3.8-flash',
+                                              'gemini-3.5-flash-lite', 'gemini-2.5-flash']),
+                         ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-4-hydrogen'])
+
     def test_catalog_startup_discovers_argon_without_putting_it_in_flash_chat(self):
         path = Path(__file__).resolve().parents[1] / 'gemini_bot.py'
         tree = ast.parse(path.read_text(encoding='utf-8-sig'))
@@ -77,6 +85,15 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(before, research_model_queue(bot))
         self.assertEqual([call.kwargs['model'] for call in bot.client.aio.models.generate_content.call_args_list],
                          ['gemini-4-argon', 'gemini-3.8-flash'])
+
+    async def test_planner_uses_discovered_flash_fallbacks_with_shorter_timeout(self):
+        bot = self.bot([TimeoutError(), TimeoutError(), SimpleNamespace(text='Plan')])
+        bot.AVAILABLE_RESEARCH_MODELS = ['gemini-3.5-flash-lite']
+        self.assertEqual(await generate_research(bot, 'Question', purpose='research-plan'), 'Plan')
+        calls = bot.client.aio.models.generate_content.call_args_list
+        self.assertEqual([call.kwargs['model'] for call in calls],
+                         ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'])
+        self.assertTrue(all(call.kwargs['config']['http_options']['timeout'] == 20000 for call in calls))
 
     async def test_empty_and_timeout_answers_try_next_candidate_once(self):
         for error in (TimeoutError(), None):

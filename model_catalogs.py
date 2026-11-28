@@ -16,6 +16,26 @@ OPENAI_RETIRED = re.compile(r'^(?:gpt-3\.5(?:-|$)|gpt-4(?:-|$)|gpt-4\.1-nano(?:-
                            r'o1(?:-|$)|o3-mini(?:-|$)|o4-mini(?:-|$)|gpt-5(?:\.[123])?-chat(?:-|$)|chatgpt-4o(?:-|$))')
 
 
+GEMINI_RETIRED = frozenset({
+    'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.0-pro-preview', 'gemini-3.7-flash',
+})
+GEMINI_CHAT_DEFAULTS = (
+    'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.6-flash',
+    'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite',
+)
+GEMINI_ORGANIZER_DEFAULTS = (
+    'gemini-4-neon', 'gemini-4-argon', 'gemini-4-carbon', 'gemini-3.1-pro-preview',
+)
+GEMINI_PLANNER_FALLBACKS = ('gemini-3.6-flash', 'gemini-3.5-flash-lite')
+GEMINI_LIGHT_DEFAULT = 'gemini-3.5-flash-lite'
+
+
+def light_gemini_models(models):
+    available = list(dict.fromkeys(name for name in models if name not in GEMINI_RETIRED))
+    return sorted(available, key=lambda name: ('flash' not in name, 'lite' not in name, 'preview' in name))
+
+
+
 def account_blocked(status, detail):
     return status in {401, 402} or (status == 429 and any(word in detail.lower() for word in
         ('credit_balance_exhausted', 'insufficient_quota', 'no credits remaining')))
@@ -31,7 +51,8 @@ def eligible(provider, item, official=True):
                 'claude': r'^claude-', 'deepseek': r'^deepseek-', 'mimo': r'^mimo-'}
     if not re.search(patterns[provider], name):
         return None
-    if provider == 'gemini' and 'generateContent' not in item.get('supportedGenerationMethods', ['generateContent']):
+    if provider == 'gemini' and (name in GEMINI_RETIRED or
+            'generateContent' not in item.get('supportedGenerationMethods', ['generateContent'])):
         return None
     if provider == 'openai' and official and OPENAI_RETIRED.match(name):
         return None

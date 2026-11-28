@@ -8,6 +8,7 @@ from paid_gemini import PAID_MODELS
 RESEARCH_MODE = 'gemini-research'
 DIRECT_ARGON_MODE = 'gemini-argon-direct'
 MODEL_TIMEOUT = 600
+PLANNING_FREE_TIMEOUT = 20
 EXCLUDE = ('image', 'audio', 'tts', 'transcribe', 'live', 'embedding', 'robotics',
            'omni', 'customtools', 'deep-research', 'antigravity')
 
@@ -47,10 +48,16 @@ def failure_code(error):
 async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answer', validator=None, json_mode=False):
     if purpose not in PAID_MODELS:
         raise ValueError('Unsupported Gemini fallback purpose')
-    models = PAID_MODELS[purpose]
+    paid_models = PAID_MODELS[purpose]
+    free_models = paid_models
+    if purpose == 'research-plan':
+        from model_catalogs import GEMINI_PLANNER_FALLBACKS
+        catalog = set(getattr(bot, 'AVAILABLE_RESEARCH_MODELS', ()))
+        free_models += tuple(name for name in GEMINI_PLANNER_FALLBACKS if name in catalog)
+    timeout = PLANNING_FREE_TIMEOUT if purpose == 'research-plan' else MODEL_TIMEOUT
     tiers = ('paid',) if purpose == 'carbon-answer' else ('free', 'paid')
     config = {'temperature': 0.1 if json_mode else 0.3, 'max_output_tokens': max_tokens, 'tools': [],
-              'http_options': {'timeout': MODEL_TIMEOUT * 1000, 'retry_options': {'attempts': 1}}}
+              'http_options': {'timeout': timeout * 1000, 'retry_options': {'attempts': 1}}}
     if json_mode:
         config['response_mime_type'] = 'application/json'
     failures = []
@@ -60,7 +67,7 @@ async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answ
     for tier in tiers:
         if tier == 'paid' and not getattr(bot, 'RESEARCH_PAID_ENABLED', False):
             break
-        for model in models:
+        for model in (free_models if tier == 'free' else paid_models):
             if cooldowns.get((tier, model), 0) > time.monotonic():
                 failures.append(tier + '/' + model + ':quota-cooldown')
                 continue
@@ -68,7 +75,7 @@ async def generate_research(bot, prompt, max_tokens=8192, *, purpose='argon-answ
             try:
                 if tier == 'free':
                     response = await asyncio.wait_for(bot.client.aio.models.generate_content(
-                        model=model, contents=prompt, config=bot.gemini_content_config(**config)), timeout=MODEL_TIMEOUT)
+                        model=model, contents=prompt, config=bot.gemini_content_config(**config)), timeout=timeout)
                 else:
                     from paid_gemini import generate_paid
                     response = await generate_paid(bot, model, prompt, config, purpose)
