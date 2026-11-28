@@ -238,6 +238,8 @@ def gemini(model_dir, archive, snapshots, source, summary_language, *,
           f"# {proposal['title']}\n\n{proposal['rationale']}\n\n## Acceptance\n\n{proposal['acceptance']}\n")
     write(archive / "gemini_self_review.md",
           f"# {MODEL}\n\nConversation: {response.get('conversation_id', 'unknown')}\n\n{proposal['self_review']}\n")
+    save(archive / "selection.json", {"key": proposal.get("desire_key", ""),
+                                       "summary": str(proposal["qq_summary"]).strip()[:220]})
     return proposal
 
 
@@ -488,6 +490,11 @@ def run(args, archive, notice):
         except (Halt, OSError, ValueError, KeyError, TypeError, SyntaxError, sqlite3.Error,
                 subprocess.TimeoutExpired) as error:
             save(archive / "stopped.json", {"stage": stage, "reason": str(error)})
+            selections = list(archive.glob("*/selection.json"))
+            if selections:
+                latest = max(selections, key=lambda path: path.stat().st_mtime_ns)
+                recorded = json.loads(latest.read_text(encoding="utf-8"))
+                message = recorded["summary"] or message
             outcome = notice["stopped"].format(stage=stage)
             print(str(error), flush=True)
         values = [row.get("Five Hour", {}).get("remaining_percent") for row in snapshots]
