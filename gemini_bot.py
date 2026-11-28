@@ -3,6 +3,7 @@ if __name__ == '__main__':
     _instance_lock = require_instance(__file__)
 
 from local_settings import setting
+from drawing_provider import fetch_pollinations_image
 from media_separation import MediaSeparation, kugou_search_url, parse_command as parse_media_command
 from open_music import OfficialMusic, OpenMusic, netease_search_url
 from model_proxy import select_model_proxy
@@ -1143,26 +1144,15 @@ Output only the English prompt. Preserve requested text to appear in the image e
 
         print(f"[Image generation] Final prompt: {final_en_prompt}")
 
-        def _fetch_flux_image():
-            encoded = urllib.parse.quote(final_en_prompt)
-            width, height = (768, 1152) if re.search(r'portrait format|vertical|9[:：]16', raw_prompt, re.I) else (
-                (1152, 768) if re.search(r'landscape format|horizontal|16[:：]9', raw_prompt, re.I) else (1024, 1024))
-            seed = random.SystemRandom().randrange(1, 2147483647)
-            url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&nologo=true&model=flux&seed={seed}"
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            proxy_handler = urllib.request.ProxyHandler({'http': TARGET_PROXY, 'https': TARGET_PROXY})
-            opener = urllib.request.build_opener(proxy_handler)
-            with opener.open(req, timeout=45) as resp:
-                if not resp.headers.get('Content-Type', '').lower().startswith('image/'):
-                    raise RuntimeError('Image service did not return an image')
-                img_bytes = resp.read()
-                if not img_bytes or not (img_bytes.startswith((b'\xff\xd8\xff', b'\x89PNG', b'GIF8')) or
-                    (img_bytes[:4] == b'RIFF' and img_bytes[8:12] == b'WEBP')):
-                    raise RuntimeError('Image service returned invalid image data; send cancelled')
-                return base64.b64encode(img_bytes).decode("utf-8")
+        width, height = (768, 1152) if re.search(r'portrait format|vertical|9[:：]16', raw_prompt, re.I) else (
+            (1152, 768) if re.search(r'landscape format|horizontal|16[:：]9', raw_prompt, re.I) else (1024, 1024))
 
         try:
-            b64_data = await asyncio.to_thread(_fetch_flux_image)
+            image = await asyncio.to_thread(
+                fetch_pollinations_image, final_en_prompt, width, height,
+                proxy=TARGET_PROXY, api_key=setting('POLLINATIONS_API_KEY', ''),
+            )
+            b64_data = base64.b64encode(image).decode("utf-8")
             print(f"[Image generated] Base64 length: {len(b64_data)}")
             return f"[CQ:image,file=base64://{b64_data}]"
         except Exception as e:
