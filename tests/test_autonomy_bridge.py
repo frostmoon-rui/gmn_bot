@@ -3,8 +3,9 @@ import builtins
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from gmn_host_adapter import AutonomyBridge
 
@@ -113,3 +114,21 @@ class OptionalAutonomyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(bridge.bubbles("hello"))
         render.assert_called_once()
         self.assertEqual(bridge.speech_failures, 1)
+
+class DesireNoticeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_and_repeated_rankings_are_quiet(self):
+        before = [{"key": "memory_precision", "title": "Memory", "score": 2.0}]
+        after = [{"key": "memory_precision", "title": "Memory", "score": 3.0}]
+        store = SimpleNamespace(ranked=Mock(side_effect=[before, before, after, after, []]))
+        social = SimpleNamespace(storage=SimpleNamespace(desires=store))
+        bridge = AutonomyBridge(SimpleNamespace(runtime=SimpleNamespace(social=social), refresh_review=AsyncMock()))
+        notify = AsyncMock()
+        await bridge.review_once(7, notify)
+        notify.assert_not_awaited()
+        await bridge.review_once(7, notify)
+        notify.assert_awaited_once_with(7, after[0])
+        await bridge.review_once(7, notify)
+        self.assertEqual(notify.await_count, 1)
+        await bridge.review_once(7, notify)
+        self.assertEqual(notify.await_count, 2)
+        self.assertEqual(notify.await_args.args, (7, None))

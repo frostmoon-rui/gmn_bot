@@ -2956,7 +2956,16 @@ async def main():
     if autonomy_bridge is not None:
         await autonomy_bridge.import_legacy_care(active_learning.state)
         extensions.spawn(autonomy_bridge.heartbeat())
-        extensions.spawn(autonomy_bridge.review_loop())
+        async def notice_desire_change(account, top):
+            ws = active_ws
+            if not ws or ws.self_id != account or not MASTER_QQ or account == MASTER_QQ:
+                return
+            text = (f"Desire pool updated. Highest priority: {top['title']} ({top['score']:g})."
+                    if top else "Desire pool updated. There are no pending ideas.")
+            await extensions.send(ws, 'private', None, MASTER_QQ, text)
+
+        extensions.spawn(autonomy_bridge.review_loop(
+            lambda: getattr(active_ws, 'self_id', None), notice_desire_change))
         extensions.spawn(autonomy_bridge.outreach_loop(lambda: active_ws, outreach_allowed, deliver_outreach))
 
     extensions.spawn(background_periodic_monitor(lambda: active_ws))

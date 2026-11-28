@@ -18,6 +18,7 @@ def enabled(value):
 class AutonomyBridge:
     def __init__(self, adapter, *, normalize=None, clock=time.monotonic):
         self.adapter = adapter
+        self.desire_baseline = {}
         self.normalize = normalize or (lambda text: text)
         self.clock = clock
         self.failures = 0
@@ -159,13 +160,30 @@ class AutonomyBridge:
         except Exception as error:
             LOG.warning("Autonomy privacy change could not complete (%s)", type(error).__name__)
 
-    async def review_loop(self):
+    async def review_once(self, account=None, on_desire_change=None):
+        if self.suspended:
+            return
+        if not account or on_desire_change is None:
+            await self.adapter.refresh_review()
+            return
+        store = getattr(self.adapter.runtime.social.storage, 'desires', None)
+        if store is None:
+            await self.adapter.refresh_review()
+            return
+        if account not in self.desire_baseline:
+            self.desire_baseline[account] = await asyncio.to_thread(store.ranked, account, time.time())
+        await self.adapter.refresh_review()
+        ranked = await asyncio.to_thread(store.ranked, account, time.time())
+        previous = self.desire_baseline[account]
+        self.desire_baseline[account] = ranked
+        if ranked != previous:
+            await on_desire_change(account, ranked[0] if ranked else None)
+
+    async def review_loop(self, account=lambda: None, on_desire_change=None):
         while True:
             await asyncio.sleep(15)
-            if self.suspended:
-                continue
             try:
-                await self.adapter.refresh_review()
+                await self.review_once(account(), on_desire_change)
             except Exception as error:
                 LOG.warning("Autonomy conversation review failed (%s)", type(error).__name__)
 
