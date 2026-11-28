@@ -176,3 +176,21 @@ class AutonomyDevelopmentTests(unittest.TestCase):
                                          [], "base", resume=(saved, state))
             self.assertEqual(model.call_args.kwargs["fixed_topic"], "memory_precision")
             self.assertEqual(model.call_args.kwargs["feedback"], "Keep the passing tests")
+
+
+    def test_opus_limit_is_respected_for_followup_calls_in_same_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            run.mkdir()
+            snapshots = [{
+                "model": autonomy_dev.OPUS,
+                "groups": autonomy_dev.quota_snapshot(quota(35)),
+                "outcome": "rate_limited",
+            }]
+            with patch.object(autonomy_dev, "command", side_effect=[
+                result(quota(35)), MODEL_OK, result(quota(34)),
+            ]) as cli:
+                _, model = autonomy_dev.run_model(root, run, snapshots, "audit", {}, {}, root / "settings")
+            self.assertEqual(model, autonomy_dev.HYDROGEN)
+            self.assertEqual(cli.call_args_list[1].args[0][2], autonomy_dev.HYDROGEN)

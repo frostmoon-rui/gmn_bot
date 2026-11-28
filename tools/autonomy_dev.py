@@ -142,7 +142,14 @@ def rate_limited(result, response):
 def run_model(model_dir, archive, snapshots, attempt, frame, contract, settings):
     report = archive.parent
     row = gate(f"{attempt}_before", model_dir, report, snapshots)
-    model = OPUS if remaining(row, OPUS) > 0 else HYDROGEN
+    previous_limit = next((item for item in reversed(snapshots)
+                           if item.get("model") == OPUS and item.get("outcome") == "rate_limited"), None)
+    opus_group = MODEL_GROUPS[OPUS]
+    still_limited = previous_limit is not None and all(
+        previous_limit["groups"][opus_group][bucket]["reset"] == value["reset"]
+        for bucket, value in row["groups"][opus_group].items()
+    )
+    model = OPUS if remaining(row, OPUS) > 0 and not still_limited else HYDROGEN
     for call in range(2):
         if model == HYDROGEN and remaining(row, HYDROGEN) < FLOOR:
             row["error"] = "Gemini quota is below the 30% stop threshold."

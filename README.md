@@ -153,11 +153,12 @@ Celestial weather: `Sun weather`, `Moon weather`, `celestial weather:M78`, or `c
 ## On-demand autonomy development
 
 From this checkout on Windows, run `python tools/autonomy_dev.py --version X.Y.Z`.
-The helper creates clean copies of the public autonomy and host repositories, reads
-the Gemini quota before and after one Hydrogen High call, and stops on an invalid
-quota response or a five-hour or weekly reading below 30%. The Windows process
-lock prevents overlapping jobs from this account. Quota readings are observations
-and can include activity outside the job.
+The helper creates clean copies of the public autonomy and host repositories. It
+reads both quota groups before and after each Antigravity call. Claude Opus 5.5 High
+takes priority until its group runs out or the provider rate-limits the current
+window. Gemini 4 Hydrogen High is the fallback and must meet the 30% quota floor.
+An invalid quota report stops the task. The Windows process lock prevents
+overlapping jobs from this account. Quota readings can include outside activity.
 
 Antigravity receives tracked public Python source, tests and package documentation.
 It returns scoped replacements and a self-review. The runner executes the fixed
